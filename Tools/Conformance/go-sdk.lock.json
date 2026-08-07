@@ -1,0 +1,18 @@
+{
+  "schema": "bsv-conformance/1",
+  "repository": "https://github.com/bsv-blockchain/go-sdk",
+  "module": "github.com/bsv-blockchain/go-sdk",
+  "tag": "v1.3.3",
+  "commit": "de26fdec57a945ddc06de5d5617f6c32374f3929",
+  "goVersion": "go1.25.0",
+  "dependencyGraphAlgorithm": "sha256(go.mod || NUL || go.sum)",
+  "dependencyGraphSHA256": "7059259c4651297d37c4ee0949576b2e8d792b9b7efd1a9c4678f26ee2efed40",
+  "treeAlgorithm": "sha256(sorted(sha256(content) SP SP slash-relative-path LF)); excludes .git; rejects symlinks/non-regular entries",
+  "archiveTreeSHA256": "09f05c13ee9286d5f5d6ed8724625a28edcd923b5b3d961a277cfd16347e4337",
+  "gitTreeSHA256": "2d2b2012877f208b46a295dbc1cada9fabcb8416a85bcf35ad3c55afeb3ce367",
+  "hashes": {
+    "license": "d869a62568556cc7f61304b768074b40d7511ddb414f4e546101f860ee0ea853",
+    "goMod": "7dd043b15ec0f317eeb6aa2bbc336eed940c127343d613129c0f176153f9d8c5",
+    "goSum": "3ae1f83b189e48db4a8577a10fc74e1d04ab83b8998852526040d509066e177d"
+  }
+}

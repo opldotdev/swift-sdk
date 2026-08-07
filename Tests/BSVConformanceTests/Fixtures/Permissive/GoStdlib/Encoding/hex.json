@@ -1,0 +1,10 @@
+[
+  {"encoded":"","bytes":""},
+  {"encoded":"0001020304050607","bytes":"0001020304050607"},
+  {"encoded":"08090a0b0c0d0e0f","bytes":"08090a0b0c0d0e0f"},
+  {"encoded":"f0f1f2f3f4f5f6f7","bytes":"f0f1f2f3f4f5f6f7"},
+  {"encoded":"f8f9fafbfcfdfeff","bytes":"f8f9fafbfcfdfeff"},
+  {"encoded":"67","bytes":"67"},
+  {"encoded":"e3a1","bytes":"e3a1"},
+  {"encoded":"F8F9FAFBFCFDFEFF","bytes":"f8f9fafbfcfdfeff"}
+]

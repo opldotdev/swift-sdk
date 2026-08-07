@@ -1,0 +1,22 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "bsvutil-base58-1d77cf353ea9",
+  "source": {
+    "url": "https://github.com/bitcoinsv/bsvutil",
+    "revision": "v0.0.0-20181216182056-1d77cf353ea9"
+  },
+  "license": {
+    "identifier": "ISC",
+    "file": "Licenses/bsvutil-isc.txt",
+    "sha256": "e1c5f3cd7e6fc7534021fe569150f46b2f63f172ff658aef4b9d81e438e38f47"
+  },
+  "notes": "Selected raw Bitcoin Base58 cases from the permissively licensed bsvutil module in the local Go module cache; no Open BSV SDK source, fixture, or oracle output is included.",
+  "files": [
+    {
+      "originalPath": "base58/base58_test.go",
+      "localPath": "Permissive/BSVUtil/Base58/base58.json",
+      "sha256": "ad33cc45d0386301cf76bf8e9a66e5bf2801bc9779cc971ff4f108d921bfc71d",
+      "transformation": "The complete neutral hexTests table is translated to JSON by renaming in to bytes and out to encoded; hexadecimal and Base58 string values are copied verbatim."
+    }
+  ]
+}

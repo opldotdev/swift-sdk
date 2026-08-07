@@ -1,0 +1,28 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "go-stdlib-encoding-go1.24.3",
+  "source": {
+    "url": "https://go.googlesource.com/go",
+    "revision": "go1.24.3"
+  },
+  "license": {
+    "identifier": "BSD-3-Clause",
+    "file": "Licenses/go-stdlib-bsd.txt",
+    "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+  },
+  "notes": "Selected neutral encoding cases from the Go 1.24.3 standard library distribution; no Open BSV SDK source, fixture, or oracle output is included.",
+  "files": [
+    {
+      "originalPath": "src/encoding/hex/hex_test.go",
+      "localPath": "Permissive/GoStdlib/Encoding/hex.json",
+      "sha256": "3b3b16793c476069e05ba0458252df1fa4d813d4a75a404df380272a5949d158",
+      "transformation": "Selected encDecTests rows and the uppercase TestDecode row translated to JSON; Go byte literals are represented as lowercase hexadecimal and encoded strings are copied verbatim."
+    },
+    {
+      "originalPath": "src/encoding/base64/base64_test.go",
+      "localPath": "Permissive/GoStdlib/Encoding/base64.json",
+      "sha256": "20e601fdd99a9251ad23bb16e00168bc67d944c552f6089ff6389354dc12b83b",
+      "transformation": "Selected pairs rows translated to JSON; decoded Go strings are represented as lowercase hexadecimal, standard encodings are copied verbatim, and URL-safe/raw fields apply the source test's urlRef and rawRef transformations exactly."
+    }
+  ]
+}

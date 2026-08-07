@@ -1,0 +1,5 @@
+go 1.25.0
+
+use ./oracle
+
+replace github.com/bsv-blockchain/go-sdk => @SOURCE@

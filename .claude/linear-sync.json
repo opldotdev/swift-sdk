@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/b-open-io/linear-sync/main/schema/linear-sync.json",
+  "_warning": "Auto-managed by linear-sync. Update through the setup workflow.",
+  "workspace": "openprotocollabs",
+  "project": "Swift-SDK",
+  "team": "OPL",
+  "team_id": "d7a8e5a8-67a8-4325-915a-5ec21357c5ca",
+  "label": "repo:swift-sdk",
+  "github_org": "opldotdev"
+}

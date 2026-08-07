@@ -1,0 +1,23 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "compactsize-btcd-v0.24.2",
+  "source": {
+    "url": "https://github.com/btcsuite/btcd",
+    "revision": "v0.24.2"
+  },
+  "license": {
+    "identifier": "ISC",
+    "file": "Licenses/btcd-isc.txt",
+    "sha256": "73b368e7df1c52ce72711298096da6dd1509a9e261b53f864d721992b3da3eb7"
+  },
+  "notes": "Permissive CompactSize and VarBytes vectors selected from the pinned BTCD wire tests; the Go test implementation and outputs are not copied.",
+  "files": [
+    {
+      "originalPath": "wire/common_test.go",
+      "localPath": "Permissive/BTCD/CompactSize/compactsize.json",
+      "sha256": "a556d0a2e279ce82e0e755051d8a8f347e1774fcecf725ee22c0dbb384d8382a",
+      "transformation": "Selected neutral TestVarIntWire, TestVarIntNonCanonical, and TestVarBytesWire value/byte pairs; represented uint64 values as decimal strings and byte arrays as lowercase hexadecimal JSON strings; omitted Go names, protocol versions, test logic, errors, and generated outputs.",
+      "notes": "Canonical cases retain BTCD's boundary coverage; noncanonical cases retain each wider prefix class; VarBytes retains the empty and one-byte cases."
+    }
+  ]
+}
