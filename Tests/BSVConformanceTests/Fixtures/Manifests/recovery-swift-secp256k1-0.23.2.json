@@ -1,0 +1,23 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "swift-secp256k1-recovery-e70a10e0",
+  "source": {
+    "url": "https://github.com/21-DOT-DEV/swift-secp256k1",
+    "revision": "e70a10e036a55fffea31568f0af92d69b6d449cd"
+  },
+  "license": {
+    "identifier": "MIT",
+    "file": "Licenses/swift-secp256k1-recovery-mit.txt",
+    "sha256": "3f662f0afc2c5a0702de996e3b89dd43d66e5d22c6dade94010f99afbce09486"
+  },
+  "notes": "Direct permissive recoverable ECDSA known answer from the pinned P256K dependency. No Open BSV Go SDK source, fixture, or oracle output is included.",
+  "files": [
+    {
+      "originalPath": "Tests/ZKPTests/RecoveryTests.swift",
+      "localPath": "Permissive/SwiftSecp256k1/Recovery/recoverable-signature-vectors.json",
+      "sha256": "1ea9437b5de9025ddc54b9fa4d815c5572b9da5813eb1c15a7d7a84a0062f171",
+      "transformation": "Selected the recoverySigningTest vector. Preserved its private key and UTF-8 message; SHA-256 hashed that message once; decoded the expected DER into fixed-width r||s; and recorded recovery ID 1 from the final byte of the expected 65-byte recoverable signature representation. Converted bytes to lowercase hexadecimal JSON strings.",
+      "notes": "The SDK API receives the recorded digest and therefore must not hash it again."
+    }
+  ]
+}

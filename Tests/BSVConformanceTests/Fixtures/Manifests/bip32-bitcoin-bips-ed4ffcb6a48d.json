@@ -1,0 +1,22 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "bitcoin-bips-bip32-ed4ffcb6a48d",
+  "source": {
+    "url": "https://github.com/bitcoin/bips",
+    "revision": "ed4ffcb6a48d4dc4fdfc11cdba783c233db8c66e"
+  },
+  "license": {
+    "identifier": "BSD-2-Clause",
+    "file": "Licenses/bitcoin-bips-bip32-bsd-2-clause.txt",
+    "sha256": "c273c350d049f840b77c01c3deeca21f4558ebb53003f249408b595f792a4c2e"
+  },
+  "notes": "All five official BIP-0032 test-vector sections were sourced directly from bip-0032.mediawiki at the pinned bitcoin/bips revision (upstream SHA-256 e5e00a8289db2f681052cf24a745320afc225e66b25d1e489a7c884d2fc7f11f). The BIP declares BSD-2-Clause licensing. No Open BSV Go SDK artifact or oracle output is included.",
+  "files": [
+    {
+      "originalPath": "bip-0032.mediawiki",
+      "localPath": "Permissive/BitcoinBIPs/BIP32/bip-0032-vectors.json",
+      "sha256": "b4fd21d4a99420ba90e10e3d74e7250f31dde275807036f9ddad478753a07fcb",
+      "transformation": "Translated every ext pub/ext prv entry from official valid test vectors 1 through 4 and every invalid serialization from test vector 5 into strict JSON. Replaced mediawiki hardened <sub>H</sub> notation with the canonical apostrophe suffix; key and seed strings are otherwise verbatim."
+    }
+  ]
+}

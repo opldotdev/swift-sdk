@@ -1,0 +1,23 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "bitcoin-core-secp256k1-recovery-1a53f496",
+  "source": {
+    "url": "https://github.com/bitcoin-core/secp256k1",
+    "revision": "1a53f4961f337b4d166c25fce72ef0dc88806618"
+  },
+  "license": {
+    "identifier": "MIT",
+    "file": "Licenses/bitcoin-core-secp256k1-recovery-mit.txt",
+    "sha256": "a735999c7e5649df6fcda6fb06ab97435851c392b1b93494ae8725f37441632f"
+  },
+  "notes": "Direct permissive libsecp256k1 recovery edge vector from the exact subtree revision vendored by swift-secp256k1 0.23.2. It proves compact parsing success does not imply public-key recovery success. No Open BSV Go SDK source, fixture, or oracle output is included.",
+  "files": [
+    {
+      "originalPath": "src/modules/recovery/tests_impl.h",
+      "localPath": "Permissive/BitcoinCoreSecp256k1/Recovery/recovery-edge-vectors.json",
+      "sha256": "455a33a42a49b63878a532762d5c268760a9e96a6b1a00cc4141e5a79ebf0b50",
+      "transformation": "Selected test_ecdsa_recovery_edge_cases msg32, sig64, and sigb64 verbatim; converted bytes to lowercase hexadecimal; recorded sig64's asserted successful recovery ID 1 and failed IDs 0, 2, and 3; and recorded sigb64's success for all four IDs.",
+      "notes": "Every r and s is nonzero and below the group order, so all RecoverableSignature initializers accept the compact bytes. The failed cases must remain typed and nontrapping; the (4,4) cases exercise both ordinary and r+n recovery-point branches."
+    }
+  ]
+}

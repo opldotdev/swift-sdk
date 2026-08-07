@@ -1,1 +1,2 @@
-// BSVKeys implementations are organized under Encoding and Secp256k1.
+// BSVKeys implementations are organized under Encoding, Formats, HD,
+// Mnemonic, Secp256k1, and Signatures.

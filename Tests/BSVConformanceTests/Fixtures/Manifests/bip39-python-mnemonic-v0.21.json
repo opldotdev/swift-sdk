@@ -1,0 +1,28 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "bip39-python-mnemonic-v0.21",
+  "source": {
+    "url": "https://github.com/trezor/python-mnemonic",
+    "revision": "d4b106cdec196202d44628026fcb8fedc8ea50c1"
+  },
+  "license": {
+    "identifier": "MIT",
+    "file": "Licenses/python-mnemonic-mit.txt",
+    "sha256": "d5e3c7c62a84e80073201e2f6e5130e9e6804fa05f8ac4f8b26a13c7d3969697"
+  },
+  "notes": "Official Trezor python-mnemonic v0.21 material pinned by exact commit. Upstream SHA-256 values are 8c3ab1d246ee95f5885751622fbfbc75ddb419a401335ff11300ee027b45b08e for vectors.json, 2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda for src/mnemonic/wordlist/english.txt, and d5e3c7c62a84e80073201e2f6e5130e9e6804fa05f8ac4f8b26a13c7d3969697 for LICENSE. No Go SDK artifact or oracle output is included.",
+  "files": [
+    {
+      "originalPath": "vectors.json",
+      "localPath": "Permissive/PythonMnemonic/BIP39/english-vectors.json",
+      "sha256": "df5c245323b332f7c2d43434e779a4a4f1fca892bb48b1d8f1636015bc3f9ae7",
+      "transformation": "Selected the complete top-level English array with jq 1.8.2 using `{english: .english}`; retained all 24 arrays and every entropy, mnemonic, seed, and extended-private-key string verbatim; emitted jq's default two-space pretty JSON with a trailing newline."
+    },
+    {
+      "originalPath": "src/mnemonic/wordlist/english.txt",
+      "localPath": "Permissive/PythonMnemonic/BIP39/english.txt",
+      "sha256": "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda",
+      "transformation": "Copied byte-for-byte, preserving all 2,048 lowercase English words, stable line order, LF separators, and the final LF."
+    }
+  ]
+}

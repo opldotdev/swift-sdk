@@ -1,7 +1,7 @@
 # Delivery roadmap
 
-Status: P0 complete; foundational P1/P2 crypto and initial P3 key-format
-packets accepted after Fable review.
+Status: P0 complete; foundational P1/P2 crypto and BIP-32/BIP-39 plus legacy
+P3 key-format packets accepted after independent and Fable review.
 
 Each milestone ends with passing conformance tests, an updated compatibility
 matrix, and an advisor review at architectural or security-sensitive boundaries.
@@ -40,8 +40,8 @@ by nearly every later feature.
 
 Accepted checkpoint: AES-CBC/PKCS#7, AES-GCM, HMAC-DRBG, secp256k1 private and
 public key parsing/serialization, deterministic digest-level ECDSA with strict
-DER and compact forms, raw-point ECDH, and additive/multiplicative key tweaks.
-Compact recovery, derivation, and key-sharing work remains open.
+DER and compact/recoverable forms, raw-point ECDH, and additive/multiplicative
+key tweaks. BRC-42 derivation and key-sharing work remains open.
 
 - AES block/CBC/GCM and PKCS#7 behavior.
 - HMAC-DRBG.
@@ -56,10 +56,11 @@ Compact recovery, derivation, and key-sharing work remains open.
 ## Phase 3: Key compatibility formats
 
 Accepted checkpoint: bounded WIF and legacy P2PKH addresses for mainnet and
-testnet.
+testnet, BIP-32 hierarchical deterministic keys, and English BIP-39 mnemonics
+with the fixed standard PBKDF2 profile.
 
 - WIF and legacy addresses. (Accepted)
-- BIP-32 and BIP-39.
+- BIP-32 and BIP-39. (Accepted)
 - Bitcoin Signed Message.
 - Electrum- and Bitcore-compatible ECIES.
 

@@ -31,7 +31,7 @@ Dependency pins:
 | AES block | Go stdlib `crypto/aes/aes_test.go` / FIPS 197 | BSD-3-Clause / public standard | P2; AES-128/192/256 KATs. |
 | AES-CBC/PKCS#7 | Swift Crypto CryptoExtras tests and Wycheproof CBC JSON | Apache-2.0 | P2; invalid padding is mandatory. |
 | AES-GCM | Swift Crypto Wycheproof `aes_gcm_test.json` | Apache-2.0 | P2; 316 valid/invalid cases; hash `f7d77a3a059f30c80b05376a44286f79c50150537b9588e74d87158c2c64de80`. |
-| PBKDF2 | Swift Crypto RFC-6070 SHA-1 fixture and CryptoExtras tests | Apache-2.0 | Later keys packet. A clearly licensed PBKDF2-HMAC-SHA512/BIP-39 KAT is still required. |
+| PBKDF2/BIP-39 | `trezor/python-mnemonic` v0.21 English vectors and wordlist, plus fixed PBKDF2-HMAC-SHA512 known answers | MIT / independently authored | P3; exact SHA-512, 2,048-round, 64-byte profile and all 24 official English vectors are committed with strict provenance. |
 | secp key parsing | Decred secp256k1 v4.4.0 tests | ISC | P2; compressed/uncompressed/hybrid, prefix/length/range/off-curve failures. |
 | ECDH | swift-secp256k1 tests plus vendored Wycheproof ECDH JSON | MIT / Apache-2.0 | P2; 752 cases. Explicitly distinguish compressed, uncompressed, and x-only output. |
 | ECDSA verify | vendored Wycheproof Bitcoin/secp256k1 JSON | Apache-2.0 | P2; 463 valid/invalid cases; hash `1be8742064fec73d670339f0036dec56b21baa94cb2d8e0fbbb6fb480f733869`. |
@@ -63,7 +63,10 @@ Important gaps:
 - HMAC-DRBG appears NIST-derived but has no independent in-tree provenance;
   re-source it directly from NIST before committing a static corpus.
 - The Go symmetric envelope vectors are SDK-specific and remain oracle-only.
-- No clearly licensed local PBKDF2-HMAC-SHA512/BIP-39 KAT was located.
+- The PBKDF2-HMAC-SHA512/BIP-39 gap is closed by direct
+  `trezor/python-mnemonic` v0.21 vectors at revision
+  `d4b106cdec196202d44628026fcb8fedc8ea50c1`, with the exact English wordlist
+  and MIT license recorded by the fixture manifest.
 - Go has no dedicated raw ECDH KAT; point/X serialization must be tested from
   permissive dependency sources plus composed BRC-42 differential cases.
 - P256K does not expose an obvious hybrid-key parser; hybrid acceptance versus

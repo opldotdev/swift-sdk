@@ -16,7 +16,7 @@
 
 Swift BSV SDK provides idiomatic, memory-safe Swift APIs for Bitcoin data,
 wire encodings, hashing, symmetric cryptography, secp256k1 keys, signatures,
-and legacy key formats. It is
+hierarchical deterministic keys, mnemonics, and legacy key formats. It is
 designed for behavioral and wire-format compatibility with the BSV SDK family
 while embracing Swift value semantics, explicit resource bounds, and
 structured errors.
@@ -80,8 +80,24 @@ let checked = Base58Check.encode(digest.bytes)
 print(checked)
 ```
 
-All public decoders require an explicit maximum output size, making resource
-limits visible at the call site.
+Low-level decoders that can expand input require an explicit maximum output
+size. Higher-level formats apply protocol-specific limits internally.
+
+Derive standard BIP-39 and BIP-32 keys without exposing configurable legacy
+KDF parameters:
+
+```swift
+import BSV
+
+let mnemonic = try Mnemonic(
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+)
+let seed = try mnemonic.seed(passphrase: "TREZOR")
+let master = try ExtendedPrivateKey(seed: seed.bytes, network: .mainnet)
+let account = try master.derived(path: "m/44'/236'/0'")
+
+print(account.neutered.serialized)
+```
 
 ## Capabilities
 
@@ -95,8 +111,15 @@ limits visible at the call site.
 - Validated secp256k1 private keys and compressed, uncompressed, or hybrid
   public-key parsing backed by libsecp256k1
 - Deterministic digest-level ECDSA with strict DER and compact signatures
+- Deterministic recoverable ECDSA with typed, nontrapping recovery failures
 - Raw-point ECDH plus additive and multiplicative secp256k1 key tweaks
 - Wallet Import Format and legacy P2PKH addresses on mainnet and testnet
+- English BIP-39 mnemonics with NFKD normalization and fixed
+  PBKDF2-HMAC-SHA512 seed derivation
+- BIP-32 extended private and public keys, child derivation, canonical paths,
+  and xprv/xpub/tprv/tpub serialization
+- Redacted default descriptions for mnemonics and extended private keys, with
+  explicitly named properties for intentional secret export
 - Swift 6 value semantics, structured errors, and `Sendable` public values
 - Unified `BSV` import plus focused core, cryptography, and key libraries
 
