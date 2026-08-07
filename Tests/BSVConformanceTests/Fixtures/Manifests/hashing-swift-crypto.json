@@ -1,0 +1,28 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "swift-crypto-hashing-4.5.1",
+  "source": {
+    "url": "https://github.com/apple/swift-crypto",
+    "revision": "47d3869a7291f085c1fb9fb1e6d3b97a793f45c6"
+  },
+  "license": {
+    "identifier": "Apache-2.0",
+    "file": "Licenses/swift-crypto-apache2.txt",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  "notes": "Selected SHA-2 and RFC 4231 HMAC values from Swift Crypto 4.5.1 at the exact Package.resolved revision; no Open BSV SDK fixture or oracle output is included.",
+  "files": [
+    {
+      "originalPath": "Tests/CryptoTests/Digests/DigestsTests.swift",
+      "localPath": "Permissive/SwiftCrypto/Hashing/sha2.json",
+      "sha256": "5faaccd8509832a70611c22d2fa6e4386cbee59382f9b76038ba057f8ec590b0",
+      "transformation": "Selected the empty and multi-block SHA-256/SHA-512 input and expected digest strings; represented each source UTF-8 message and lowercase digest verbatim in JSON."
+    },
+    {
+      "originalPath": "Tests/CryptoTests/MAC/HMACTests.swift",
+      "localPath": "Permissive/SwiftCrypto/Hashing/hmac-rfc4231.json",
+      "sha256": "4fac5be0b3c0e9789c42a86f2adaeb09d36e1fe1ba8b4ad9ecfedd17a07a3401",
+      "transformation": "Selected RFC 4231 cases 1, 2, 6, and 7; represented messages as their source UTF-8 text, compacted repeated key bytes into byte/count fields, and copied lowercase SHA-256/SHA-512 authentication codes verbatim."
+    }
+  ]
+}

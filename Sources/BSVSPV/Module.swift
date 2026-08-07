@@ -1,1 +1,1 @@
-// BSVSPV implementation is introduced through vector-backed work packets.
+// TODO: Implement BSVSPV with proof-validation vectors.

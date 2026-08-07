@@ -10,11 +10,23 @@ const (
 var operations = []string{
 	"base58.decode", "base58.encode", "base58check.decode", "base58check.encode",
 	"base64.decode", "base64.encode", "big.umod", "bytes.reverse", "digest32.display",
-	"digest32.parse", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
+	"digest32.parse", "drbg.generate", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 	"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "metadata",
 	"scriptnum.decode", "scriptnum.encode", "u16.decode", "u16.encode", "u32.decode",
 	"u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 	"varint.decode", "varint.encode",
+}
+
+type drbgAction struct {
+	Type    string  `json:"type"`
+	Count   *string `json:"count,omitempty"`
+	Entropy *string `json:"entropy,omitempty"`
+}
+
+type drbgGenerateArgs struct {
+	Entropy string       `json:"entropy"`
+	Nonce   string       `json:"nonce"`
+	Actions []drbgAction `json:"actions"`
 }
 
 type request struct {

@@ -1,1 +1,1 @@
-// BSVNetwork implementation is introduced through vector-backed work packets.
+// TODO: Implement BSVNetwork with mocked transport and integration tests.

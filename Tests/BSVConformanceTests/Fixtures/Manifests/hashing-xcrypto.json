@@ -1,0 +1,22 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "xcrypto-ripemd160-v0.54.0",
+  "source": {
+    "url": "https://go.googlesource.com/crypto",
+    "revision": "v0.54.0"
+  },
+  "license": {
+    "identifier": "BSD-3-Clause",
+    "file": "Licenses/go-xcrypto-bsd.txt",
+    "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+  },
+  "notes": "Canonical RIPEMD-160 values only from the permissively licensed x/crypto tests; implementation source was not copied or translated.",
+  "files": [
+    {
+      "originalPath": "ripemd160/ripemd160_test.go",
+      "localPath": "Permissive/XCrypto/RIPEMD160/vectors.json",
+      "sha256": "d52e5c05476988f2f6f3c03bcb595095bbc72b9c32640486bf79ef465b2a69e6",
+      "transformation": "Copied the eight canonical message/digest value pairs and million-a expected value into JSON; added repeat 1 for ordinary messages and represented million-a as message a repeated 1000000 times."
+    }
+  ]
+}

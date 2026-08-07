@@ -1,7 +1,8 @@
 # Swift BSV SDK planning
 
-Status: Architecture reviewed by Fable and revised. Phase 0 gates are resolved
-for skeleton creation through a conservative no-copy fixture policy.
+Status: Foundation and initial core/crypto/key primitive packets are implemented,
+vector-backed, and reviewed by Fable. The conservative no-copy fixture policy
+remains in force.
 
 This directory defines how the Swift SDK will reach functional parity with
 `bsv-blockchain/go-sdk` without mechanically translating its Go package layout.
@@ -24,9 +25,9 @@ This directory defines how the Swift SDK will reach functional parity with
 
 ## Review gate
 
-Fable completed a subscription-authenticated, read-only review on 2026-08-07.
-Its required changes are incorporated into the drafts. The initial skeleton may
-be created without copying Open BSV or unlicensed BRC material.
+Fable completed subscription-authenticated, read-only architecture and
+implementation reviews on 2026-08-07. Required changes are incorporated in the
+current tree. No Anthropic API key or Open-BSV fixture copying was used.
 
 Documents:
 
@@ -40,6 +41,7 @@ Documents:
 - [Fable Phase 0 implementation review](FableP0ImplementationReview-2026-08-07.md)
 - [Fable Phase 1 implementation-review brief](FableP1ImplementationReviewBrief.md)
 - [Fable Phase 1 implementation review](FableP1ImplementationReview-2026-08-07.md)
+- [Fable core cryptography and key review](FableCoreCryptoReview-2026-08-07.md)
 - [Testing and conformance](Testing.md)
 - [Compatibility inventory](Compatibility.md)
 - [Detailed compatibility evidence](../Compatibility/README.md)

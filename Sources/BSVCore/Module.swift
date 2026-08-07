@@ -1,1 +1,1 @@
-// BSVCore implementation is introduced through vector-backed work packets.
+// BSVCore implementations are organized under Binary, Encoding, and Values.

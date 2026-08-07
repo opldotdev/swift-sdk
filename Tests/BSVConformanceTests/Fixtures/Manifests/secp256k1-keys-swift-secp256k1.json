@@ -1,0 +1,28 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "swift-secp256k1-keys-0.23.2",
+  "source": {
+    "url": "https://github.com/21-DOT-DEV/swift-secp256k1",
+    "revision": "e70a10e036a55fffea31568f0af92d69b6d449cd"
+  },
+  "license": {
+    "identifier": "MIT",
+    "file": "Licenses/swift-secp256k1-mit.txt",
+    "sha256": "3f662f0afc2c5a0702de996e3b89dd43d66e5d22c6dade94010f99afbce09486"
+  },
+  "notes": "Selected key-pair, format-conversion, and scalar-boundary values directly from the pinned swift-secp256k1 0.23.2 dependency tests. No Open BSV Go SDK source, fixture, or oracle output is included.",
+  "files": [
+    {
+      "originalPath": "Tests/ZKPTests/AsymmetricTests.swift",
+      "localPath": "Permissive/SwiftSecp256k1/Keys/key-vectors.json",
+      "sha256": "30ca757a8ae4d9eea9877ea89c64d64fce519b87cf5df59f19be5821ef16f96f",
+      "transformation": "Selected the compressed private/public pair, uncompressed private/public pair, and compressed/uncompressed format-conversion point verbatim; represented lowercase hexadecimal strings as structured JSON."
+    },
+    {
+      "originalPath": "Projects/Sources/SecurityTests/SecurityTestVectors.swift",
+      "localPath": "Permissive/SwiftSecp256k1/Keys/scalar-validation.json",
+      "sha256": "6a8d4d9ee00db7d4c6390c100cdf58c4c31f25d8551db8e4f5a48cce1a191501",
+      "transformation": "Selected the zero, curve-order, and maximum-valid scalar byte arrays verbatim; converted their bytes to lowercase hexadecimal JSON strings."
+    }
+  ]
+}

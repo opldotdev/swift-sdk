@@ -1,1 +1,1 @@
-// BSVTransaction implementation is introduced through vector-backed work packets.
+// TODO: Implement BSVTransaction with wire-format and signing vectors.

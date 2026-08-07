@@ -18,6 +18,7 @@ import (
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	base58 "github.com/bsv-blockchain/go-sdk/compat/base58"
+	drbgprimitive "github.com/bsv-blockchain/go-sdk/primitives/drbg"
 	primitives "github.com/bsv-blockchain/go-sdk/primitives/hash"
 	"github.com/bsv-blockchain/go-sdk/script/interpreter"
 	"github.com/bsv-blockchain/go-sdk/util"
@@ -226,6 +227,8 @@ func execute(req request, meta metadata) (result any, err error) {
 			return nil, categorizedError{"invalidLength", err.Error()}
 		}
 		return map[string]string{"display": hash.String()}, nil
+	case "drbg.generate":
+		return generateDRBG(req.Args)
 	case "base58.encode":
 		var args struct {
 			Bytes string `json:"bytes"`
@@ -281,6 +284,87 @@ func execute(req request, meta metadata) (result any, err error) {
 	default:
 		return nil, categorizedError{"unsupportedOperation", "operation is not in the pinned registry"}
 	}
+}
+
+func generateDRBG(raw json.RawMessage) (any, error) {
+	var args drbgGenerateArgs
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.Actions == nil {
+		return nil, categorizedError{"invalidEncoding", "actions must be a JSON array"}
+	}
+	entropy, err := protocolHex(args.Entropy)
+	if err != nil {
+		return nil, err
+	}
+	if len(entropy) < 32 {
+		return nil, categorizedError{"insufficientEntropy", "entropy must contain at least 32 bytes"}
+	}
+	nonce, err := protocolHex(args.Nonce)
+	if err != nil {
+		return nil, err
+	}
+	generator, err := drbgprimitive.NewDRBG(entropy, nonce)
+	if err != nil {
+		return nil, categorizedError{"internal", "pinned DRBG rejected validated initialization"}
+	}
+
+	outputs := make([]string, 0)
+	estimatedResponseByteCount := 256
+	for _, action := range args.Actions {
+		switch action.Type {
+		case "generate":
+			if action.Count == nil || action.Entropy != nil {
+				return nil, categorizedError{"invalidEncoding", "generate action requires only count"}
+			}
+			count64, err := strconv.ParseInt(*action.Count, 10, 64)
+			if err != nil || strconv.FormatInt(count64, 10) != *action.Count {
+				return nil, categorizedError{"invalidEncoding", "count must be a canonical decimal integer"}
+			}
+			if count64 < 0 {
+				return nil, categorizedError{"invalidRequestedByteCount", "requested byte count must not be negative"}
+			}
+			if generator.ReseedCounter > 10000 {
+				return nil, categorizedError{"reseedRequired", "DRBG reseed is required"}
+			}
+			if count64 > 937 {
+				return nil, categorizedError{"requestTooLarge", "requested byte count exceeds 937"}
+			}
+			count := int(count64)
+			estimatedOutputByteCount := count*2 + 3
+			if estimatedResponseByteCount > maxLineBytes-estimatedOutputByteCount {
+				return nil, categorizedError{"resourceLimit", "DRBG output exceeds protocol resource limit"}
+			}
+			output, err := generator.Generate(count)
+			if err != nil {
+				return nil, categorizedError{"internal", "pinned DRBG rejected validated generation"}
+			}
+			estimatedResponseByteCount += estimatedOutputByteCount
+			outputs = append(outputs, hex.EncodeToString(output))
+		case "reseed":
+			if action.Entropy == nil || action.Count != nil {
+				return nil, categorizedError{"invalidEncoding", "reseed action requires only entropy"}
+			}
+			reseedEntropy, err := protocolHex(*action.Entropy)
+			if err != nil {
+				return nil, err
+			}
+			if len(reseedEntropy) < 32 {
+				return nil, categorizedError{"insufficientEntropy", "reseed entropy must contain at least 32 bytes"}
+			}
+			if err := generator.Reseed(reseedEntropy); err != nil {
+				return nil, categorizedError{"internal", "pinned DRBG rejected validated reseed"}
+			}
+		default:
+			return nil, categorizedError{"invalidEncoding", "action type must be generate or reseed"}
+		}
+	}
+
+	return map[string]any{
+		"outputs":       outputs,
+		"reseedCounter": strconv.Itoa(generator.ReseedCounter),
+	}, nil
 }
 
 func decodeArgs(raw json.RawMessage, destination any) error {

@@ -68,7 +68,11 @@ for real domains, not one-file categories. Expected examples include:
 BSVCrypto/
 ├── Hashing/
 ├── Symmetric/
+└── Random/
+
+BSVKeys/
 ├── Secp256k1/
+├── Encoding/
 ├── Derivation/
 └── Sharing/
 

@@ -1,0 +1,22 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "nist-cavs14.3-hmac-drbg-sha256-no-reseed",
+  "source": {
+    "url": "https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/drbg/drbgtestvectors.zip",
+    "revision": "CAVS 14.3; generated 2013-04-02; archive published 2015-11-04"
+  },
+  "license": {
+    "identifier": "LicenseRef-NIST-Public-Domain",
+    "file": "Licenses/nist-data-notice.txt",
+    "sha256": "23f04e1e16e18620dee1307c45ce7f82d23196377f0d00c0803b2f8ec7600c88"
+  },
+  "notes": "One official NIST CAVP HMAC_DRBG SHA-256 no-reseed case selected independently from the primary NIST archive; no Open-BSV source, test, fixture, or generated oracle output is included.",
+  "files": [
+    {
+      "originalPath": "drbgvectors_no_reseed.zip/HMAC_DRBG.rsp",
+      "localPath": "Permissive/NIST/HMACDRBG/hmac-drbg-sha256.json",
+      "sha256": "3c1b457ed2ab1a2c575d7d638aa7197a98ef491bbda7b9a0204f69620f132b09",
+      "transformation": "Selected COUNT 0 from the first SHA-256, prediction-resistance false, 256-bit entropy, 128-bit nonce, empty personalization/additional-input section. Lowercased the source hexadecimal, converted ReturnedBitsLen 1024 to two 128-byte generate counts per the archive Readme, renamed fields, and omitted formatting plus unrelated cases. ReturnedBits remains the second generate result exactly as published."
+    }
+  ]
+}

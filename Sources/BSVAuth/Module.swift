@@ -1,1 +1,1 @@
-// BSVAuth implementation is introduced through vector-backed work packets.
+// TODO: Implement BSVAuth with vector-backed conformance tests.

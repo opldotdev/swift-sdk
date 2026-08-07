@@ -1,1 +1,1 @@
-// BSVKeys implementation is introduced through vector-backed work packets.
+// BSVKeys implementations are organized under Encoding and Secp256k1.

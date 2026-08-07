@@ -1,0 +1,29 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "swift-crypto-aes-4.5.1",
+  "source": {
+    "url": "https://github.com/apple/swift-crypto",
+    "revision": "47d3869a7291f085c1fb9fb1e6d3b97a793f45c6"
+  },
+  "license": {
+    "identifier": "Apache-2.0",
+    "file": "Licenses/swift-crypto-aes-notice.txt",
+    "sha256": "b3ddc2ae068e76b3beb71be03c0400f90090f9469aa491bf7b1ac42320af37b8"
+  },
+  "notes": "Selected AES-CBC-PKCS#7 and AES-GCM Wycheproof vectors distributed by the exact pinned Swift Crypto dependency. The upstream source-file SHA-256 values are 9f1e4c4194343305e958915fc2a3f38e440f01763f293ecdc6ce1abb62e5b51a for AES-CBC and f7d77a3a059f30c80b05376a44286f79c50150537b9588e74d87158c2c64de80 for AES-GCM. No Open BSV SDK source, fixture, or oracle output is included.",
+  "files": [
+    {
+      "originalPath": "Tests/CryptoExtrasVectors/aes_cbc_pkcs5_test.json",
+      "localPath": "Permissive/SwiftCrypto/AES/aes-cbc-pkcs7.json",
+      "sha256": "54e6efe1c63befa6431136fc683faa62d551196386d2b3651099cd66ed292b89",
+      "transformation": "Selected upstream cases 1, 2, 3, 25, 62, 63, 64, 123, 124, and 125; preserved every selected test field and hexadecimal value, added the enclosing keySize to each case, and represented the subset in a compact fixture schema. PKCS5 in the upstream filename denotes PKCS#7 padding for AES's 16-byte block size."
+    },
+    {
+      "originalPath": "Tests/Test Vectors/aes_gcm_test.json",
+      "localPath": "Permissive/SwiftCrypto/AES/aes-gcm.json",
+      "sha256": "db5e0fbc8ea70e09d1e132a595adc78cc2285b39da64a4a30bf00e35c18f879f",
+      "transformation": "Selected upstream cases 2, 4, 68, 92, 97, 178, 265, 269, and 273; preserved every selected test field and hexadecimal value, added enclosing keySize/ivSize/tagSize metadata to each case, and represented the subset in a compact fixture schema.",
+      "notes": "The subset covers AES-128/192/256, empty/plaintext/AAD, 12-byte and 32-byte nonces, and the deliberately unsupported official 8-byte nonce known answer."
+    }
+  ]
+}

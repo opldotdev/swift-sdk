@@ -1,1 +1,1 @@
-// BSVBigNum implementation is introduced through vector-backed work packets.
+// TODO: Implement BSVBigNum with resource-boundary and arithmetic tests.

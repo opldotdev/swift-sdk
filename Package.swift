@@ -61,12 +61,15 @@ let package = Package(
                 "BSVBigNum",
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "CryptoExtras", package: "swift-crypto"),
-                .product(name: "P256K", package: "swift-secp256k1"),
             ]
         ),
         .target(
             name: "BSVKeys",
-            dependencies: ["BSVCore", "BSVCrypto"]
+            dependencies: [
+                "BSVCore",
+                "BSVCrypto",
+                .product(name: "P256K", package: "swift-secp256k1"),
+            ]
         ),
         .target(
             name: "BSVScript",
@@ -133,6 +136,16 @@ let package = Package(
         .testTarget(
             name: "BSVCoreTests",
             dependencies: ["BSVCore"],
+            exclude: ["README.md"]
+        ),
+        .testTarget(
+            name: "BSVCryptoTests",
+            dependencies: ["BSVCrypto", "BSVCore"],
+            exclude: ["README.md"]
+        ),
+        .testTarget(
+            name: "BSVKeysTests",
+            dependencies: ["BSVKeys", "BSVCrypto", "BSVCore"],
             exclude: ["README.md"]
         ),
         .testTarget(

@@ -94,6 +94,7 @@ supports exactly one version byte.
 | `hmac.sha256/sha512` | `{key,message}` | `{bytes}` |
 | `digest32.parse` | `{display}` | `{bytes}` (internal byte order) |
 | `digest32.display` | `{bytes}` | `{display}` (reversed hexadecimal order) |
+| `drbg.generate` | `{entropy,nonce,actions}` | `{outputs,reseedCounter}` (`actions` contains strict `{type:"generate",count}` or `{type:"reseed",entropy}` objects; byte fields are lowercase hex and counts/counter are decimal strings) |
 | `base58.encode` | `{bytes}` | `{text}` |
 | `base58.decode` | `{text}` | `{bytes}` |
 | `base58check.encode` | `{payload,version}` | `{text}` |
@@ -106,7 +107,9 @@ Stable error categories are `invalidEncoding`, `invalidCharacter`,
 `invalidLength`, `truncated`, `trailingData`, `noncanonical`, `overflow`,
 `resourceLimit`, `checksum`, `version`, `key`, `signature`, `scalar`,
 `authentication`, `padding`, `numberTooLarge`, `nonminimal`, `divisionByZero`,
-`unsupportedOperation`, `oraclePanic`, `timeout`, `transport`, and `internal`.
+`insufficientEntropy`, `invalidRequestedByteCount`, `requestTooLarge`,
+`reseedRequired`, `unsupportedOperation`, `oraclePanic`, `timeout`, `transport`,
+and `internal`.
 Typed errors take precedence. The one pinned message fallback is isolated and
 unit tested; diagnostic messages are not a compatibility surface. An operation
 panic is recovered as `oraclePanic`. Startup, pin, or stream corruption exits

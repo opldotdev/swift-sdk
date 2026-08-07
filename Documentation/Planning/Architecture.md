@@ -1,6 +1,6 @@
 # Architecture proposal
 
-Status: Revised after Fable review; the fixture-license Phase 0 blocker remains.
+Status: Implemented target graph, revised after architecture and primitive reviews.
 
 ## Design constraints
 
@@ -86,24 +86,28 @@ against remaining bytes before allocation.
   HASH160, and constant-time comparisons.
 - AES-GCM, AES-CBC with PKCS#7, raw AES block behavior required by parity, and
   HMAC-DRBG.
-- secp256k1 public/private keys, ECDSA, compact recovery, ECDH, tweaks, and
-  serialized key validation.
-- BRC-42 key derivation, BRC-94 proof behavior, symmetric keys, Shamir shares,
-  and backup formats.
+- Symmetric key envelopes and HMAC-DRBG.
 - Injected secure randomness for deterministic tests.
 
 Proposed dependencies:
 
 - `apple/swift-crypto` 4.x (`Crypto` and `CryptoExtras`).
-- `21-DOT-DEV/swift-secp256k1` 0.23.x (`P256K`).
 - A small, separately audited RIPEMD-160 implementation because Swift Crypto
   does not expose RIPEMD-160.
 
 ### BSVKeys
 
+- secp256k1 public/private keys, ECDSA, compact recovery, ECDH, tweaks, and
+  serialized key validation.
+- BRC-42 key derivation, BRC-94 proof behavior, Shamir shares, and backup
+  formats.
 - Base58Check, WIF, legacy addresses, BIP-32, BIP-39, Bitcoin Signed Message,
   and compatible ECIES formats.
 - No transaction or script interpreter dependency.
+
+Proposed dependency:
+
+- `21-DOT-DEV/swift-secp256k1` 0.23.x (`P256K`).
 
 ### BSVScript
 

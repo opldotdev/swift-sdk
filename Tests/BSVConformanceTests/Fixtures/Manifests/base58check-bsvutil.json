@@ -1,0 +1,22 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "bsvutil-base58check-1d77cf353ea9",
+  "source": {
+    "url": "https://github.com/bitcoinsv/bsvutil",
+    "revision": "v0.0.0-20181216182056-1d77cf353ea9"
+  },
+  "license": {
+    "identifier": "ISC",
+    "file": "Licenses/bsvutil-isc.txt",
+    "sha256": "e1c5f3cd7e6fc7534021fe569150f46b2f63f172ff658aef4b9d81e438e38f47"
+  },
+  "notes": "The complete Base58Check value table comes directly from the permissively licensed bsvutil module; no Go SDK fixture or oracle output is included.",
+  "files": [
+    {
+      "originalPath": "base58/base58check_test.go",
+      "localPath": "Permissive/BSVUtil/Base58Check/base58check.json",
+      "sha256": "7e6d498d6050bb0787d9cf7d41818b88b44bbb0574f060ab610db5a05004e68e",
+      "transformation": "The complete checkEncodingStringTests table is translated to JSON by representing the version byte as a decimal integer, each Go input string as lowercase UTF-8 hexadecimal named payload, and each out value verbatim as encoded."
+    }
+  ]
+}

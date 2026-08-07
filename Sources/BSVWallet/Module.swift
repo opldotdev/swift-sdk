@@ -1,1 +1,1 @@
-// BSVWallet implementation is introduced through vector-backed work packets.
+// TODO: Implement BSVWallet with BRC-100 protocol vectors.
