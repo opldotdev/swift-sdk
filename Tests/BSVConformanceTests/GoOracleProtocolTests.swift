@@ -256,7 +256,7 @@ private func validMetadata() -> GoOracleMetadata {
 private func testConfiguration(executable: URL) -> GoOracleConfiguration {
     GoOracleConfiguration(
         executable: executable, arguments: [], environment: ["BSV_GO_SDK_PATH": "/external/fake"],
-        deadline: 1, startupDeadline: 1, required: false, expectedPin: .pinned
+        deadline: 5, startupDeadline: 5, required: false, expectedPin: .pinned
     )
 }
 

@@ -1,0 +1,34 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "swift-secp256k1-key-operations-0.23.2",
+  "source": {
+    "url": "https://github.com/21-DOT-DEV/swift-secp256k1",
+    "revision": "e70a10e036a55fffea31568f0af92d69b6d449cd"
+  },
+  "license": {
+    "identifier": "MIT",
+    "file": "Licenses/swift-secp256k1-key-operations-mit.txt",
+    "sha256": "3f662f0afc2c5a0702de996e3b89dd43d66e5d22c6dade94010f99afbce09486"
+  },
+  "notes": "Selected ECDH, additive-tweak, and full-point key values directly from the pinned swift-secp256k1 0.23.2 dependency. No Open BSV Go SDK source, fixture, or oracle output is included.",
+  "files": [
+    {
+      "originalPath": "Tests/ZKPTests/TweakTests.swift",
+      "localPath": "Permissive/SwiftSecp256k1/KeyOperations/tweak-addition-vector.json",
+      "sha256": "adff1430f43e2998443885a410f043d39ab8949060cb3ceecbf4b0108d47cc14",
+      "transformation": "Copied the private key, public key, and expected tweaked private key hexadecimal strings verbatim. Evaluated the upstream SHA256.hash of the private-key UTF-8 string and recorded the resulting 32-byte tweak as lowercase hexadecimal."
+    },
+    {
+      "originalPath": "Tests/ZKPTests/ECDHTests.swift",
+      "localPath": "Permissive/SwiftSecp256k1/KeyOperations/ecdh-private-inputs.json",
+      "sha256": "905e912bfd7a4e7467f4bf44222566195763ed600a503c4ef040d7a8c325d3b4",
+      "transformation": "Copied both private-key hexadecimal strings from the upstream key-agreement test verbatim and assigned descriptive JSON field names."
+    },
+    {
+      "originalPath": "Tests/ZKPTests/AsymmetricTests.swift",
+      "localPath": "Permissive/SwiftSecp256k1/KeyOperations/exact-point-vector.json",
+      "sha256": "86498852433cfb1651410609148a88d885a4344305925fc99dad2131a8640493",
+      "transformation": "Copied the private-key and exact uncompressed public-key hexadecimal strings from the upstream fixed-key test verbatim and assigned descriptive JSON field names."
+    }
+  ]
+}

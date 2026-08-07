@@ -1,0 +1,22 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "decred-ecdsa-p2d-cc5e1d63",
+  "source": {
+    "url": "https://github.com/decred/dcrd",
+    "revision": "cc5e1d635561c2cfb825530c1808f9f2b3cbdf36"
+  },
+  "license": {
+    "identifier": "ISC",
+    "file": "Licenses/decred-ecdsa-isc-p2d.txt",
+    "sha256": "480be5fb1be03ff19fd71d863f453f16262e98d4e568f5bccfcb7aa3ccf8cf0d"
+  },
+  "notes": "Direct permissive Decred secp256k1 ECDSA vectors. The upstream signing vectors state that the key, digest, nonce, r, and s values were independently verified with Sage. Selected RFC 6979 cases were transformed to fixed-width r||s and canonical DER. Selected malformed DER cases are verbatim hex. No Open BSV Go SDK source, fixture, or oracle output is included.",
+  "files": [
+    {
+      "originalPath": "dcrec/secp256k1/ecdsa/signature_test.go",
+      "localPath": "Permissive/Decred/ECDSAP2D/signature-vectors.json",
+      "sha256": "b56a4480a45b46f0359c03e5fa30433e54e5b5ea21fe2ae7bf52723d74b46df9",
+      "transformation": "Selected two RFC6979 signTests and nine strict DER rejection cases. Concatenated each 32-byte r and s as compact form and encoded those same integers in canonical DER; represented all bytes as lowercase hexadecimal JSON strings."
+    }
+  ]
+}

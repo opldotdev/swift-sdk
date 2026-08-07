@@ -1,0 +1,40 @@
+{
+  "hashAddresses": [
+    {
+      "hash": "e34cce70c86373273efcc54ce7d2a491bb4a0e84",
+      "network": "mainnet",
+      "encoded": "1MirQ9bwyQcGVJPwKUgapu5ouK2E2Ey4gX"
+    },
+    {
+      "hash": "0ef030107fd26e0b6bf40512bca2ceb1dd80adaa",
+      "network": "mainnet",
+      "encoded": "12MzCDwodF9G1e7jfwLXfR164RNtx4BRVG"
+    },
+    {
+      "hash": "78b316a08647d5b77283e512d3603f1f1c8de68f",
+      "network": "testnet",
+      "encoded": "mrX9vMRYLfVy1BnZbc5gZjuyaqH3ZW2ZHz"
+    }
+  ],
+  "publicKeyAddresses": [
+    {
+      "publicKey": "02192d74d0cb94344c9569c2e77901573d8d7903c3ebec3a957724895dca52c6b4",
+      "network": "mainnet",
+      "compressed": true,
+      "encoded": "13CG6SJ3yHUXo4Cr2RY4THLLJrNFuG3gUg"
+    },
+    {
+      "publicKey": "03b0bd634234abbb1ba1e986e884185c61cf43e001f9137f23c2c409273eb16e65",
+      "network": "mainnet",
+      "compressed": true,
+      "encoded": "15sHANNUBSh6nDp8XkDPmQcW6n3EFwmvE6"
+    },
+    {
+      "publicKey": "0411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3",
+      "network": "mainnet",
+      "compressed": false,
+      "encoded": "12cbQLTFMXRnSzktFkuoG3eHoMeFtpTu3S"
+    }
+  ],
+  "invalidChecksum": "1MirQ9bwyQcGVJPwKUgapu5ouK2E2Ey4gY"
+}

@@ -15,7 +15,8 @@
 ## Overview
 
 Swift BSV SDK provides idiomatic, memory-safe Swift APIs for Bitcoin data,
-wire encodings, hashing, symmetric cryptography, and secp256k1 keys. It is
+wire encodings, hashing, symmetric cryptography, secp256k1 keys, signatures,
+and legacy key formats. It is
 designed for behavioral and wire-format compatibility with the BSV SDK family
 while embracing Swift value semantics, explicit resource bounds, and
 structured errors.
@@ -93,6 +94,9 @@ limits visible at the call site.
 - AES-CBC with PKCS#7 padding and detached AES-GCM authenticated encryption
 - Validated secp256k1 private keys and compressed, uncompressed, or hybrid
   public-key parsing backed by libsecp256k1
+- Deterministic digest-level ECDSA with strict DER and compact signatures
+- Raw-point ECDH plus additive and multiplicative secp256k1 key tweaks
+- Wallet Import Format and legacy P2PKH addresses on mainnet and testnet
 - Swift 6 value semantics, structured errors, and `Sendable` public values
 - Unified `BSV` import plus focused core, cryptography, and key libraries
 

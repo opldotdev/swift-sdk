@@ -1,0 +1,14 @@
+[
+  {
+    "privateKey": "0c28fca386c7a227600b2fe50b7cae11ec86d3bf1fbe471be89827e19d72aa1d",
+    "network": "mainnet",
+    "compressed": false,
+    "encoded": "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ"
+  },
+  {
+    "privateKey": "dda35a1488fb97b6eb3fe6e9ef2a25814e396fb5dc295fe994b96789b21a0398",
+    "network": "testnet",
+    "compressed": true,
+    "encoded": "cV1Y7ARUr9Yx7BR55nTdnR7ZXNJphZtCCMBTEZBJe1hXt2kB684q"
+  }
+]

@@ -1,0 +1,40 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "bsvutil-wif-address-1d77cf353ea9",
+  "source": {
+    "url": "https://github.com/bitcoinsv/bsvutil",
+    "revision": "v0.0.0-20181216182056-1d77cf353ea9"
+  },
+  "license": {
+    "identifier": "ISC",
+    "file": "Licenses/bsvutil-isc.txt",
+    "sha256": "e1c5f3cd7e6fc7534021fe569150f46b2f63f172ff658aef4b9d81e438e38f47"
+  },
+  "notes": "Direct WIF, legacy P2PKH, public-key/address, and negative Base58Check vectors from the permissively licensed bsvutil test tables. Policy-only WIF cases absent upstream are independently constructed in Swift tests; no Open-BSV fixtures or Go oracle outputs are included.",
+  "files": [
+    {
+      "originalPath": "wif_test.go",
+      "localPath": "Permissive/BSVUtil/WIFAddress/wif.json",
+      "sha256": "10c41cd2ca5ca736862b7e5c036b841a4dd60b09aca065d4d49792955a75b2a8",
+      "transformation": "The complete TestEncodeDecodeWIF table is translated to JSON; private-key byte literals become lowercase hexadecimal, chain parameters become mainnet/testnet strings, compression booleans and encoded strings are preserved verbatim."
+    },
+    {
+      "originalPath": "address_test.go",
+      "localPath": "Permissive/BSVUtil/WIFAddress/legacy-address.json",
+      "sha256": "795db463741bd4efb2e4ab82ab3aca45cfb84a56cb337f4c48283a6e6d5982e9",
+      "transformation": "The three positive legacy P2PKH hash/address cases, the legacy P2PKH bad-checksum string, and the first compressed-even, compressed-odd, and uncompressed public-key/address cases are translated to JSON. Byte literals become lowercase hexadecimal; network and serialization choices are explicit; strings are verbatim."
+    },
+    {
+      "originalPath": "base58/base58_test.go",
+      "localPath": "Permissive/BSVUtil/WIFAddress/base58-negative.json",
+      "sha256": "0da702f75512128592b40a8a00d05ad00eef41abd3a2309a62c1cd9be5258362",
+      "transformation": "The complete invalidStringTests input column is copied verbatim to a JSON string array."
+    },
+    {
+      "originalPath": "base58/base58check_test.go",
+      "localPath": "Permissive/BSVUtil/WIFAddress/base58check-negative.json",
+      "sha256": "c60d93d3f9407f29d3a39f9bd26ff386dc6cf09aee57c826861edc9b9b040e5e",
+      "transformation": "The checksum-error string is copied verbatim and the upstream generated strings of lengths zero through three are expanded deterministically as JSON strings."
+    }
+  ]
+}
