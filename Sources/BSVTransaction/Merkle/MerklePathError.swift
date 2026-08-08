@@ -36,5 +36,6 @@ public enum MerklePathError: Error, Equatable, Sendable {
     case missingSibling(level: Int, offset: UInt64)
     case blockHeightMismatch(expected: UInt32, actual: UInt32)
     case rootMismatch
+    case inconsistentRoot
     case conflictingElement(level: Int, offset: UInt64)
 }

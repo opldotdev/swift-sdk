@@ -14,6 +14,7 @@ import (
 	"math"
 	"math/big"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -52,6 +53,33 @@ func (o oracleChainTracker) CurrentHeight(_ context.Context) (uint32, error) {
 		}
 	}
 	return current, nil
+}
+
+func summarizeBeef(beef *transaction.Beef) map[string]any {
+	transactionIDs := make([]chainhash.Hash, 0, len(beef.Transactions))
+	for transactionID := range beef.Transactions {
+		transactionIDs = append(transactionIDs, transactionID)
+	}
+	sort.Slice(transactionIDs, func(i, j int) bool {
+		return transactionIDs[i].String() < transactionIDs[j].String()
+	})
+	transactions := make([]map[string]string, 0, len(transactionIDs))
+	for _, transactionID := range transactionIDs {
+		entry := beef.Transactions[transactionID]
+		summary := map[string]string{
+			"format":        strconv.Itoa(int(entry.DataFormat)),
+			"transactionID": transactionID.String(),
+		}
+		if entry.DataFormat == transaction.RawTxAndBumpIndex {
+			summary["bumpIndex"] = strconv.Itoa(entry.BumpIndex)
+		}
+		transactions = append(transactions, summary)
+	}
+	return map[string]any{
+		"bumps":        strconv.Itoa(len(beef.BUMPs)),
+		"transactions": transactions,
+		"version":      strconv.FormatUint(uint64(beef.Version), 10),
+	}
 }
 
 func execute(req request, meta metadata) (result any, err error) {
@@ -496,6 +524,72 @@ func execute(req request, meta metadata) (result any, err error) {
 			return nil, err
 		}
 		return map[string]bool{"valid": valid}, nil
+	case "transaction.beef.merge":
+		var args struct {
+			Left  string `json:"left"`
+			Right string `json:"right"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		leftBytes, err := protocolHex(args.Left)
+		if err != nil {
+			return nil, err
+		}
+		rightBytes, err := protocolHex(args.Right)
+		if err != nil {
+			return nil, err
+		}
+		left, err := transaction.NewBeefFromBytes(leftBytes)
+		if err != nil {
+			return nil, err
+		}
+		right, err := transaction.NewBeefFromBytes(rightBytes)
+		if err != nil {
+			return nil, err
+		}
+		if err := left.MergeBeef(right); err != nil {
+			return nil, err
+		}
+		return summarizeBeef(left), nil
+	case "transaction.beef.txidonly":
+		var args struct {
+			Bytes string `json:"bytes"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		beef, err := transaction.NewBeefFromBytes(data)
+		if err != nil {
+			return nil, err
+		}
+		projected, err := beef.TxidOnly()
+		if err != nil {
+			return nil, err
+		}
+		return summarizeBeef(projected), nil
+	case "transaction.beef.trim":
+		var args struct {
+			Bytes               string   `json:"bytes"`
+			KnownTransactionIDs []string `json:"knownTransactionIDs"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		beef, err := transaction.NewBeefFromBytes(data)
+		if err != nil {
+			return nil, err
+		}
+		beef.TrimknownTxIDs(args.KnownTransactionIDs)
+		return summarizeBeef(beef), nil
 	case "transaction.fee":
 		var args struct {
 			Bytes               string    `json:"bytes"`

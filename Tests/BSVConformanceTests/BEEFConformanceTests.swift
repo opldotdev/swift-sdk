@@ -166,6 +166,90 @@ struct BEEFConformanceTests {
             #expect(pinnedGoDivergence.result == .object(["valid": .bool(false)]))
         }
     }
+
+    @Test("graph transforms match intended Go semantics and record merge artifacts")
+    func graphTransformDifferentials() throws {
+        let configuration = GoOracleConfiguration.default()
+        switch try GoOracleClient.connect(configuration: configuration) {
+        case .unavailable(let reason):
+            #expect(!configuration.required)
+            print("BEEF graph Go oracle unavailable: \(reason)")
+        case .available(let client):
+            defer { client.close() }
+            let fixture = try conformanceBEEFFixture()
+            let proofless = try BEEF(
+                merklePaths: [],
+                transactions: [.raw(fixture.parent)],
+                limits: fixture.limits
+            )
+            let proof = try BEEF(
+                merklePaths: [fixture.path],
+                transactions: [.transactionID(fixture.parentID)],
+                limits: fixture.limits
+            )
+            let merged = try proofless.merging(proof, limits: fixture.limits)
+            #expect(merged.transactions == [.rawWithMerklePath(
+                transaction: fixture.parent,
+                merklePathIndex: 0
+            )])
+
+            let goMerge = try client.request(
+                id: "beef-graph-merge-stale-format-artifact",
+                operation: "transaction.beef.merge",
+                arguments: [
+                    "left": .string(try proofless.hex(limits: fixture.limits)),
+                    "right": .string(try proof.hex(limits: fixture.limits)),
+                ]
+            )
+            #expect(goMerge.result == .object([
+                "bumps": .string("1"),
+                "transactions": .array([.object([
+                    "format": .string("0"),
+                    "transactionID": .string(fixture.parentID.displayHex),
+                ])]),
+                "version": .string(String(BEEFVersion.v2.rawValue)),
+            ]))
+
+            let projected = try proofless.transactionIDOnly(limits: fixture.limits)
+            let goProjection = try client.request(
+                id: "beef-graph-txid-only",
+                operation: "transaction.beef.txidonly",
+                arguments: [
+                    "bytes": .string(try proofless.hex(limits: fixture.limits)),
+                ]
+            )
+            #expect(projected.transactions == [.transactionID(fixture.parentID)])
+            #expect(goProjection.result == .object([
+                "bumps": .string("0"),
+                "transactions": .array([.object([
+                    "format": .string("2"),
+                    "transactionID": .string(fixture.parentID.displayHex),
+                ])]),
+                "version": .string(String(BEEFVersion.v2.rawValue)),
+            ]))
+
+            let trimmed = try projected.trimmingKnownTransactionIDs(
+                [fixture.parentID],
+                limits: fixture.limits
+            )
+            let goTrim = try client.request(
+                id: "beef-graph-trim-known",
+                operation: "transaction.beef.trim",
+                arguments: [
+                    "bytes": .string(try projected.hex(limits: fixture.limits)),
+                    "knownTransactionIDs": .array([
+                        .string(fixture.parentID.displayHex),
+                    ]),
+                ]
+            )
+            #expect(trimmed.transactions.isEmpty)
+            #expect(goTrim.result == .object([
+                "bumps": .string("0"),
+                "transactions": .array([]),
+                "version": .string(String(BEEFVersion.v2.rawValue)),
+            ]))
+        }
+    }
 }
 
 private struct ConformanceBEEFFixture {

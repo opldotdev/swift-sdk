@@ -106,7 +106,10 @@ supports exactly one version byte.
 | `scriptnum.encode` | `{value,era}` | `{bytes}` |
 | `scriptnum.decode` | `{bytes,era,minimal,maxBytes}` | `{value}` |
 | `transaction.beef.decode` | `{bytes}` | `{version,bumps,transactions,newestTxid,atomicSubject}` for BEEF v1/v2 or Atomic BEEF |
+| `transaction.beef.merge` | `{left,right}` | Sorted semantic summary after pinned Go merges two envelopes |
 | `transaction.beef.reencode` | `{bytes}` | `{bytes}` emitted by pinned Go after parsing BEEF v2 or Atomic BEEF |
+| `transaction.beef.trim` | `{bytes,knownTransactionIDs}` | Sorted semantic summary after pinned Go trims known txid-only records |
+| `transaction.beef.txidonly` | `{bytes}` | Sorted semantic summary after pinned Go projects all records to txid-only |
 | `transaction.beef.validate` | `{bytes,allowTransactionIDOnly}` | `{valid}` using the pinned Go structural/proof policy |
 | `transaction.beef.verify` | `{bytes,allowTransactionIDOnly,validRoots:[{blockHeight,root}]}` | `{valid}` after pinned Go structural and chain-root verification |
 | `transaction.decode` | `{bytes}` | `{bytes,version,inputs,outputs,lockTime,txid}` |

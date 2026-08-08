@@ -199,12 +199,72 @@ func TestCompleteOperationRegistry(t *testing.T) {
 		"base64.decode", "base64.encode", "big.umod", "bytes.reverse", "digest32.display",
 		"digest32.parse", "drbg.generate", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "metadata",
-		"script.asm.decode", "script.asm.encode", "script.asm.names", "scriptnum.decode", "scriptnum.encode", "transaction.beef.decode", "transaction.beef.reencode", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
+		"script.asm.decode", "script.asm.encode", "script.asm.names", "scriptnum.decode", "scriptnum.encode", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
 	}
 	if !reflect.DeepEqual(operations, expected) {
 		t.Fatalf("registry mismatch\n got: %v\nwant: %v", operations, expected)
+	}
+}
+
+func TestBEEFGraphTransformValues(t *testing.T) {
+	zeroID := strings.Repeat("00", 32)
+	minimal := "0200beef000102" + zeroID
+	wantOne := map[string]any{
+		"bumps": "0",
+		"transactions": []map[string]string{{
+			"format":        "0",
+			"transactionID": zeroID,
+		}},
+		"version": "4022206466",
+	}
+
+	for _, tc := range []struct {
+		name string
+		op   string
+		args string
+		want any
+	}{
+		{
+			name: "merge",
+			op:   "transaction.beef.merge",
+			args: `{"left":"` + minimal + `","right":"` + minimal + `"}`,
+			want: wantOne,
+		},
+		{
+			name: "txidonly",
+			op:   "transaction.beef.txidonly",
+			args: `{"bytes":"` + minimal + `"}`,
+			want: map[string]any{
+				"bumps": "0",
+				"transactions": []map[string]string{{
+					"format":        "2",
+					"transactionID": zeroID,
+				}},
+				"version": "4022206466",
+			},
+		},
+		{
+			name: "trim",
+			op:   "transaction.beef.trim",
+			args: `{"bytes":"` + minimal + `","knownTransactionIDs":["` + zeroID + `"]}`,
+			want: map[string]any{
+				"bumps":        "0",
+				"transactions": []map[string]string{},
+				"version":      "4022206466",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := execute(testRequest(tc.op, tc.args), metadata{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }
 

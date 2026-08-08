@@ -376,6 +376,24 @@ public struct MerklePath: Hashable, Sendable {
         return try root(for: TransactionID(wireBytes: hash.bytes))
     }
 
+    /// Computes and cross-checks the root represented by every level-zero hash.
+    package func consistentRoot() throws -> Hash256 {
+        var expected: Hash256?
+        for element in levels[0] {
+            guard let hash = element.hash else { continue }
+            let transactionID = TransactionID(
+                exactDigestBytesGuaranteed: hash.bytes
+            )
+            let candidate = try root(for: transactionID)
+            if let expected, expected != candidate {
+                throw MerklePathError.inconsistentRoot
+            }
+            expected = candidate
+        }
+        guard let expected else { throw MerklePathError.missingLevelZeroHash }
+        return expected
+    }
+
     /// Returns a canonical union after proving both paths anchor to the same block root.
     public func merging(_ other: MerklePath) throws -> MerklePath {
         guard blockHeight == other.blockHeight else {
@@ -384,7 +402,7 @@ public struct MerklePath: Hashable, Sendable {
                 actual: other.blockHeight
             )
         }
-        guard try root() == other.root() else {
+        guard try consistentRoot() == other.consistentRoot() else {
             throw MerklePathError.rootMismatch
         }
 
@@ -418,7 +436,9 @@ public struct MerklePath: Hashable, Sendable {
                 compacted[levelIndex].append(element)
             }
         }
-        return try MerklePath(blockHeight: blockHeight, levels: compacted)
+        let merged = try MerklePath(blockHeight: blockHeight, levels: compacted)
+        _ = try merged.consistentRoot()
+        return merged
     }
 
     private static func merge(

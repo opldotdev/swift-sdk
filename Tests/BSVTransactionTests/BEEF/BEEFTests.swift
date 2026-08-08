@@ -451,6 +451,139 @@ struct BEEFTests {
         requireSendable(atomic)
         requireSendable(BEEFTransaction.raw(fixture.parent))
     }
+
+    @Test("merge promotes versions, orders parents, and attaches arriving proofs")
+    func graphMerge() throws {
+        let fixture = try beefFixture()
+        let childFirst = try BEEF(
+            version: .v1,
+            merklePaths: [],
+            transactions: [.raw(fixture.child)],
+            limits: fixture.limits
+        )
+        let proofOnly = try BEEF(
+            version: .v2,
+            merklePaths: [fixture.parentPath],
+            transactions: [.rawWithMerklePath(
+                transaction: fixture.parent,
+                merklePathIndex: 0
+            )],
+            limits: fixture.limits
+        )
+
+        let merged = try childFirst.merging(proofOnly, limits: fixture.limits)
+        #expect(merged.version == .v2)
+        #expect(merged.merklePaths == [fixture.parentPath])
+        #expect(try merged.transactions.map {
+            try $0.transactionID(limits: fixture.limits.transactionLimits)
+        } == [fixture.parentID, fixture.childID])
+        #expect(merged.transactions[0] == .rawWithMerklePath(
+            transaction: fixture.parent,
+            merklePathIndex: 0
+        ))
+        #expect(merged.transactions[1] == .raw(fixture.child))
+
+        let proofless = try BEEF(
+            merklePaths: [],
+            transactions: [.raw(fixture.parent)],
+            limits: fixture.limits
+        )
+        let pathWithPlaceholder = try BEEF(
+            merklePaths: [fixture.parentPath],
+            transactions: [.transactionID(fixture.parentID)],
+            limits: fixture.limits
+        )
+        #expect(try proofless.merging(
+            pathWithPlaceholder,
+            limits: fixture.limits
+        ).transactions == [.rawWithMerklePath(
+            transaction: fixture.parent,
+            merklePathIndex: 0
+        )])
+    }
+
+    @Test("transaction-ID-only projection is always valid BRC-96 framing")
+    func transactionIDOnlyProjection() throws {
+        let fixture = try beefFixture()
+        let v1 = try BEEF(
+            version: .v1,
+            merklePaths: [fixture.parentPath],
+            transactions: [
+                .rawWithMerklePath(transaction: fixture.parent, merklePathIndex: 0),
+                .raw(fixture.child),
+            ],
+            limits: fixture.limits
+        )
+
+        let projected = try v1.transactionIDOnly(limits: fixture.limits)
+        #expect(projected.version == .v2)
+        #expect(projected.merklePaths == v1.merklePaths)
+        #expect(projected.transactions == [
+            .transactionID(fixture.parentID),
+            .transactionID(fixture.childID),
+        ])
+        #expect(try BEEF(
+            bytes: projected.serialized(limits: fixture.limits),
+            limits: fixture.limits
+        ) == projected)
+    }
+
+    @Test("known-ID trimming removes only placeholders and remaps proof indexes")
+    func trimKnownTransactionIDs() throws {
+        let fixture = try beefFixture()
+        let childPath = try MerklePath(
+            blockHeight: 8,
+            levels: [[.hash(
+                offset: 0,
+                hash: try Hash256(fixture.childID.wireBytes),
+                isTransactionID: false
+            )]]
+        )
+        let envelope = try BEEF(
+            merklePaths: [childPath, fixture.parentPath],
+            transactions: [
+                .rawWithMerklePath(transaction: fixture.parent, merklePathIndex: 1),
+                .transactionID(fixture.childID),
+            ],
+            limits: fixture.limits
+        )
+
+        let trimmed = try envelope.trimmingKnownTransactionIDs(
+            [fixture.childID],
+            limits: fixture.limits
+        )
+        #expect(trimmed.merklePaths == [fixture.parentPath])
+        #expect(trimmed.transactions == [.rawWithMerklePath(
+            transaction: fixture.parent,
+            merklePathIndex: 0
+        )])
+
+        let rawKnown = try BEEF(
+            merklePaths: [],
+            transactions: [.raw(fixture.parent)],
+            limits: fixture.limits
+        )
+        #expect(try rawKnown.trimmingKnownTransactionIDs(
+            [fixture.parentID],
+            limits: fixture.limits
+        ).transactions == [.raw(fixture.parent)])
+    }
+
+    @Test("Merkle merging rejects a forged internal node for any level-zero leaf")
+    func mergeRejectsInconsistentPath() throws {
+        let fixture = try beefFixture()
+        let siblingID = TransactionID(
+            exactDigestBytesGuaranteed: BSVHashing.sha256d([0x22]).bytes
+        )
+        let forged = try inconsistentPath(
+            first: fixture.parentID,
+            second: siblingID
+        )
+
+        #expect(throws: MerklePathError.inconsistentRoot) {
+            try forged.merging(forged)
+        }
+    }
 }
 
 private struct BEEFFixture {
@@ -527,4 +660,37 @@ private func beefFixture() throws -> BEEFFixture {
 
 private func requireSendable<T: Sendable>(_ value: T) {
     _ = value
+}
+
+private func inconsistentPath(
+    first: TransactionID,
+    second: TransactionID
+) throws -> MerklePath {
+    let firstHash = try Hash256(first.wireBytes)
+    let secondHash = try Hash256(second.wireBytes)
+    let firstSibling = BSVHashing.sha256d([0xa1])
+    let secondSibling = BSVHashing.sha256d([0xb2])
+    return try MerklePath(
+        blockHeight: 42,
+        levels: [
+            [
+                .hash(offset: 0, hash: firstHash, isTransactionID: true),
+                .hash(offset: 1, hash: firstSibling, isTransactionID: false),
+                .hash(offset: 2, hash: secondHash, isTransactionID: true),
+                .hash(offset: 3, hash: secondSibling, isTransactionID: false),
+            ],
+            [
+                .hash(
+                    offset: 0,
+                    hash: MerkleTree.parent(firstHash, firstSibling),
+                    isTransactionID: false
+                ),
+                .hash(
+                    offset: 1,
+                    hash: BSVHashing.sha256d([0xff]),
+                    isTransactionID: false
+                ),
+            ],
+        ]
+    )
 }

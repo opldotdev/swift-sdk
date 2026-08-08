@@ -98,7 +98,8 @@ differentials, and Fable review.
 - Transaction-owned chain-tracker protocol and BUMP/BEEF root verification.
   (Accepted)
 - Full BRC-67 script, fee, and lock-condition validation in `BSVSPV`.
-- Transaction graph operations and proof propagation.
+- Bounded BEEF merge, txid-only projection, known-ID trimming, and proof
+  propagation. (Accepted)
 
 Merkle/BUMP/BEEF parsing and serialization may run in parallel with Phase 5.
 Only verification paths that execute scripts wait for the interpreter.

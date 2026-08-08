@@ -139,6 +139,8 @@ print(account.neutered.serialized)
   dependency validation and explicit transaction-ID-only trust policy
 - Async, transport-independent chain tracking with BUMP and BEEF root
   verification through the `BSVSPV` proof façade
+- Immutable BEEF graph merge, proof propagation, BRC-96 txid-only projection,
+  and known-ID trimming with stable parent-before-child ordering
 - Redacted default descriptions for mnemonics and extended private keys, with
   explicitly named properties for intentional secret export
 - Swift 6 value semantics, structured errors, and `Sendable` public values
