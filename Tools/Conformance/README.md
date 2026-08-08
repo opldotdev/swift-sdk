@@ -187,6 +187,8 @@ digits, or hyphens. This intentionally rejects the Go-accepted prefixes `A`,
 | `script.bip276.decode` | `{text}` | `{prefix,version,network,data}` using the pinned Go SDK checksum decoder |
 | `script.bip276.encode` | `{prefix,version,network,data}` | `{text}` using the pinned Go SDK lowercase encoder |
 | `script.execute` | `{unlockingScript,lockingScript,era,flags?,transactionVersion?}` | `{stack,valid}` for bounded context-free execution; `transactionVersion` is a canonical decimal string used by Chronicle version opcodes |
+| `script.json.marshal` | `{bytes}` | `{json}` where `json` is the lowercase Script JSON document encoded as lowercase hex |
+| `script.json.unmarshal` | `{json}` | `{bytes}` after the pinned Go `Script.UnmarshalJSON` method reads the hex-encoded document bytes |
 | `scriptnum.encode` | `{value,era}` | `{bytes}` |
 | `scriptnum.decode` | `{bytes,era,minimal,maxBytes}` | `{value}` |
 | `transaction.beef.decode` | `{bytes}` | `{version,bumps,transactions,newestTxid,atomicSubject}` for BEEF v1/v2 or Atomic BEEF |
@@ -210,6 +212,12 @@ digits, or hyphens. This intentionally rejects the Go-accepted prefixes `A`,
 | `wallet.wire.request.reencode` | `{call,bytes}` | `{bytes}` after complete call-aware preflight, pinned typed parsing, and canonical re-encoding |
 | `wallet.wire.result.inspect` | `{call,bytes}` | success/failure kind and bounded byte counts after complete call-aware preflight and pinned typed parsing |
 | `wallet.wire.result.reencode` | `{call,bytes}` | `{bytes}` after complete call-aware preflight, pinned typed parsing, and canonical re-encoding |
+
+Script JSON arguments carry the JSON document as lowercase hex. The outer
+oracle JSON parser therefore cannot unescape, normalize, or reject the inner
+document before the selected pinned method sees it. The adapter checks the
+hexadecimal character count before decoding. It limits scripts to 128 KiB and
+Script JSON documents to 256 KiB plus two quote bytes.
 
 Wallet-wire operations are limited to calls 1 through 8, 11 through 16, and 23
 through 28. Before any selected pinned serializer runs, the oracle scans the applicable

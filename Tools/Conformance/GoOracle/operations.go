@@ -914,6 +914,10 @@ func execute(req request, meta metadata) (result any, err error) {
 		return executeCompatibilityTailBIP276Decode(req.Args)
 	case "script.bip276.encode":
 		return executeCompatibilityTailBIP276Encode(req.Args)
+	case "script.json.marshal":
+		return marshalScriptJSON(req.Args)
+	case "script.json.unmarshal":
+		return unmarshalScriptJSON(req.Args)
 	case "spv.verify":
 		var args struct {
 			Bytes               string  `json:"bytes"`
@@ -1588,6 +1592,60 @@ func execute(req request, meta metadata) (result any, err error) {
 	default:
 		return nil, categorizedError{"unsupportedOperation", "operation is not in the pinned registry"}
 	}
+}
+
+const (
+	scriptJSONMaximumScriptBytes   = 128 * 1024
+	scriptJSONMaximumDocumentBytes = scriptJSONMaximumScriptBytes*2 + 2
+)
+
+func marshalScriptJSON(raw json.RawMessage) (any, error) {
+	var args struct {
+		Bytes string `json:"bytes"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if len(args.Bytes) > scriptJSONMaximumScriptBytes*2 {
+		return nil, categorizedError{"resourceLimit", "script exceeds operation limit"}
+	}
+	data, err := protocolHex(args.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	value := scriptpkg.NewFromBytes(data)
+	document, err := value.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	if len(document) > scriptJSONMaximumDocumentBytes {
+		return nil, categorizedError{"resourceLimit", "Script JSON exceeds operation limit"}
+	}
+	return map[string]string{"json": hex.EncodeToString(document)}, nil
+}
+
+func unmarshalScriptJSON(raw json.RawMessage) (any, error) {
+	var args struct {
+		JSON string `json:"json"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if len(args.JSON) > scriptJSONMaximumDocumentBytes*2 {
+		return nil, categorizedError{"resourceLimit", "Script JSON exceeds operation limit"}
+	}
+	document, err := protocolHex(args.JSON)
+	if err != nil {
+		return nil, err
+	}
+	var value scriptpkg.Script
+	if err := value.UnmarshalJSON(document); err != nil {
+		return nil, err
+	}
+	if len(value) > scriptJSONMaximumScriptBytes {
+		return nil, categorizedError{"resourceLimit", "script exceeds operation limit"}
+	}
+	return map[string]string{"bytes": hex.EncodeToString(value.Bytes())}, nil
 }
 
 const walletWireMaximumBytes = 256 * 1024

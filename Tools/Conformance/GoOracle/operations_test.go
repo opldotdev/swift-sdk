@@ -229,6 +229,116 @@ func TestScriptASMNamesAndArtifacts(t *testing.T) {
 	}
 }
 
+func TestScriptJSONOperations(t *testing.T) {
+	for _, tc := range []struct {
+		name, scriptHex, documentHex string
+	}{
+		{"empty", "", "2222"},
+		{"lowercase", "00ff51ac", "22303066663531616322"},
+	} {
+		t.Run(tc.name+" marshal", func(t *testing.T) {
+			got, err := execute(testRequest(
+				"script.json.marshal", `{"bytes":"`+tc.scriptHex+`"}`,
+			), metadata{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]string{"json": tc.documentHex}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("got %#v, want %#v", got, want)
+			}
+		})
+		t.Run(tc.name+" unmarshal", func(t *testing.T) {
+			got, err := execute(testRequest(
+				"script.json.unmarshal", `{"json":"`+tc.documentHex+`"}`,
+			), metadata{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]string{"bytes": tc.scriptHex}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("got %#v, want %#v", got, want)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name, documentHex, want string
+	}{
+		{"uppercase normalizes", "22414122", "aa"},
+		{"non-string token is accepted", "6161", "aa"},
+		{"trailing quote is trimmed", "2261612222", "aa"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := execute(testRequest(
+				"script.json.unmarshal", `{"json":"`+tc.documentHex+`"}`,
+			), metadata{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]string{"bytes": tc.want}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("got %#v, want %#v", got, want)
+			}
+		})
+	}
+
+	escaped := hex.EncodeToString([]byte(`"\u0061\u0061"`))
+	_, err := execute(testRequest(
+		"script.json.unmarshal", `{"json":"`+escaped+`"}`,
+	), metadata{})
+	if err == nil {
+		t.Fatal("expected escaped JSON string to fail")
+	}
+	if got := normalizeError(err).Category; got != "invalidCharacter" {
+		t.Fatalf("got %s, want invalidCharacter (%v)", got, err)
+	}
+
+	exactScript := strings.Repeat("00", scriptJSONMaximumScriptBytes)
+	exactMarshal, err := execute(testRequest(
+		"script.json.marshal", `{"bytes":"`+exactScript+`"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatalf("exact script limit: %v", err)
+	}
+	exactDocument := exactMarshal.(map[string]string)["json"]
+	if len(exactDocument) != scriptJSONMaximumDocumentBytes*2 {
+		t.Fatalf("exact document hex has %d bytes, want %d", len(exactDocument), scriptJSONMaximumDocumentBytes*2)
+	}
+	exactUnmarshal, err := execute(testRequest(
+		"script.json.unmarshal", `{"json":"`+exactDocument+`"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatalf("exact document limit: %v", err)
+	}
+	if got := exactUnmarshal.(map[string]string)["bytes"]; got != exactScript {
+		t.Fatal("exact document did not preserve the script")
+	}
+
+	for _, tc := range []struct {
+		name, operation, args string
+	}{
+		{
+			"marshal bound", "script.json.marshal",
+			`{"bytes":"` + strings.Repeat("00", scriptJSONMaximumScriptBytes+1) + `"}`,
+		},
+		{
+			"unmarshal bound", "script.json.unmarshal",
+			`{"json":"` + strings.Repeat("00", scriptJSONMaximumDocumentBytes+1) + `"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := execute(testRequest(tc.operation, tc.args), metadata{})
+			if err == nil {
+				t.Fatal("expected resource limit error")
+			}
+			if got := normalizeError(err).Category; got != "resourceLimit" {
+				t.Fatalf("got %s, want resourceLimit (%v)", got, err)
+			}
+		})
+	}
+}
+
 func TestCompleteOperationRegistry(t *testing.T) {
 	expected := []string{
 		"base58.decode", "base58.encode", "base58check.decode", "base58check.encode",
@@ -236,7 +346,7 @@ func TestCompleteOperationRegistry(t *testing.T) {
 		"digest32.parse", "drbg.generate", "ecies.bitcore.decrypt", "ecies.bitcore.encrypt", "ecies.electrum.decrypt", "ecies.electrum.encrypt", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "keyshares.recover", "keyshares.split", "metadata",
 		"portable.encrypted.decrypt", "portable.encrypted.encrypt", "portable.signed.sign", "portable.signed.verify",
-		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.bip276.decode", "script.bip276.encode", "script.execute", "scriptnum.decode", "scriptnum.encode", "spv.verify", "symmetric.decrypt", "symmetric.encrypt", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.ef.decode", "transaction.ef.encode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
+		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.bip276.decode", "script.bip276.encode", "script.execute", "script.json.marshal", "script.json.unmarshal", "scriptnum.decode", "scriptnum.encode", "spv.verify", "symmetric.decrypt", "symmetric.encrypt", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.ef.decode", "transaction.ef.encode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
 		"wallet.wire.request.inspect", "wallet.wire.request.reencode", "wallet.wire.result.inspect", "wallet.wire.result.reencode",

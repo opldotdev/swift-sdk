@@ -88,10 +88,13 @@ review. Extended Format carries each input's source output; raw serialization,
 transaction IDs, equality, and hashing remain unchanged. Parsing requires an
 explicit wire format so marker-like raw transactions are never auto-detected.
 BIP-276 text and BRC-307 inscription construction are also accepted with
-explicit input and output limits.
+explicit input and output limits. Strict bounded Script JSON is accepted with
+bidirectional pinned-Go checks for canonical lowercase documents and an
+explicit ruling for the pinned unmarshal artifacts.
 
 - Transaction value/graph semantics and ADR. (Accepted)
-- Script representation, parsing, ASM, opcodes, and templates that do not sign.
+- Script representation, parsing, ASM, strict bounded JSON, opcodes, and
+  templates that do not sign. (Accepted)
 - Resource-bounded script numbers and era configuration.
 - Transaction model, parsing, serialization, IDs, and outpoints. (Accepted)
 - Extended Format parsing and serialization with source outputs. (Accepted)

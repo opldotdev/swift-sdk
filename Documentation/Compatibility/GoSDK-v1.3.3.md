@@ -230,6 +230,11 @@ Edges: base58, EC/hash, util, `pkg/errors`, big-int.
 Important behavior:
 
 - Push encoding and minimal-push choice are byte consensus seams.
+- Script JSON marshaling emits one quoted lowercase hexadecimal string. The
+  exported unmarshal method trims quote bytes from both ends instead of parsing
+  exactly one JSON string token. It therefore accepts uppercase hex, unquoted
+  hex, and extra quote bytes at an end, but it rejects JSON escape sequences.
+  Swift uses the strict bounded policy in COMP-047.
 - BIP-276 checksum is the first four bytes of double-SHA256 over the textual payload; `EncodeBIP276` returns literal `"ERROR"` for invalid version/network rather than an error.
 - Chronicle opcodes `0xb3`–`0xb7` stringify using `OP_SUBSTR`, `OP_LEFT`, `OP_RIGHT`, `OP_LSHIFTNUM`, `OP_RSHIFTNUM`, taking precedence over legacy `NOP4`–`NOP8`.
 - Address APIs are historical namespace placement, not a reason to invert Swift dependencies.
@@ -799,7 +804,7 @@ License warning: these live under the Open BSV-licensed upstream. Use the Go ora
    compact recovery, ECDH, tweaks, Base58Check, WIF, Address and network
    versions, BRC-42, BRC-94, and BRC-140.
 5. `BSVCompat`: BIP-32, BIP-39, BSM, and ECIES.
-6. `BSVScript`: script bytes/opcodes/pushes/ASM/BIP-276/inscriptions plus bounded ScriptNumber encoding. Establish era-independent encoding before execution.
+6. `BSVScript`: script bytes/opcodes/pushes/ASM/strict bounded Script JSON/BIP-276/inscriptions plus bounded ScriptNumber encoding. Establish era-independent encoding before execution.
 7. `BSVTransaction` foundation: graph semantics ADR/prototype first; raw model/parser/serializer/txid/outpoint, sighash, fee protocol/model, P2PKH, transaction-neutral PushDrop, and the `UnlockingScriptTemplate`, `FeeModel`, `ChainTracker`, `Broadcaster` protocols.
 8. Parallel after transaction serialization:
    - `BSVInterpreter`: parser/stack/control/arithmetic/crypto/signature opcodes and era policy.
