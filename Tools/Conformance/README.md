@@ -119,6 +119,17 @@ both embedded keys. These preflights keep the pinned BRC-77 unchecked slices and
 short BRC-78 heuristic behind stable typed errors; panic recovery remains only a
 final generic defense and does not echo recovered values or request material.
 
+Wallet-wire operations accept a selected decimal `call` and lowercase even
+hex `bytes`. They are bounded before invoking pinned Go and cover only calls 8,
+11 through 16, and 23 through 28. Request operations require the frame's call
+byte to match the selected call and validate the one-byte originator span and
+UTF-8. Result operations preflight canonical, fully consumed error frames.
+`inspect` returns only call/kind and byte counts; `reencode` parses and emits
+through the selected pinned Go call serializer. This generic request/result
+shape can add later action and certificate calls without adding operation
+names. Errors never include the input, originator, keys, messages, stacks, or
+Go panic text.
+
 BIP-276 operations cap data at 32 KiB and prefixes at 128 printable ASCII
 bytes before calling the pinned SDK. Encode accepts nonzero decimal uint8
 version and network values. Pinned Go decode parses the hexadecimal fields and
@@ -195,6 +206,20 @@ digits, or hyphens. This intentionally rejects the Go-accepted prefixes `A`,
 | `transaction.merklepath.root` | `{bytes,txid}` | `{root}` using display-order txid/root strings |
 | `transaction.p2pkh.sign` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash,privateKey}` | `{unlockingScript}` using the pinned Go signer |
 | `transaction.sighash` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash}` | `{preimage,digest}` for canonical legacy or replay-protected signature-hash flags |
+| `wallet.wire.request.inspect` | `{call,bytes}` | `{call,originatorUTF8ByteCount,parameterByteCount,canonicalParameterByteCount}` after complete call-aware preflight and pinned typed parsing |
+| `wallet.wire.request.reencode` | `{call,bytes}` | `{bytes}` after complete call-aware preflight, pinned typed parsing, and canonical re-encoding |
+| `wallet.wire.result.inspect` | `{call,bytes}` | success/failure kind and bounded byte counts after complete call-aware preflight and pinned typed parsing |
+| `wallet.wire.result.reencode` | `{call,bytes}` | `{bytes}` after complete call-aware preflight, pinned typed parsing, and canonical re-encoding |
+
+Wallet-wire operations are limited to calls 8, 11 through 16, and 23 through
+28. Before any selected pinned serializer runs, the oracle scans the applicable
+request or success-result grammar using byte indexes: canonical CompactSize,
+bounded counts before slicing, exact fixed fields and discriminators, checked
+UInt32 heights, bounded DER structure, fixed-width secp256k1 scalar range and
+low-S checks, empty-call shapes, and full consumption.
+Remote-error framing is scanned independently with 2,000-byte message and
+8,192-byte stack limits. Over-limit declarations report `resourceLimit`;
+in-limit declarations that exceed the remaining packet report `truncated`.
 
 Extended Format oracle requests use literal six-byte `0000000000ef` markers,
 lowercase hex, canonical unsigned-decimal source amounts, and exactly one source
@@ -203,7 +228,7 @@ size preflight run before the pinned Go parser. The Extended Format known answer
 in this repository was authored for the Swift SDK under its MIT license; it was
 not copied from the pinned Go SDK or BRC examples.
 
-Stable error categories are `invalidEncoding`, `invalidCharacter`,
+Stable error categories are `invalidEncoding`, `invalidArgument`, `invalidCharacter`,
 `invalidLength`, `truncated`, `trailingData`, `noncanonical`, `overflow`,
 `resourceLimit`, `checksum`, `version`, `key`, `signature`, `scalar`,
 `authentication`, `padding`, `numberTooLarge`, `nonminimal`, `divisionByZero`,

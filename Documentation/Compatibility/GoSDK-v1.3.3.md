@@ -418,6 +418,16 @@ Public functions, organized completely:
 
 Edges: chainhash, EC, transaction, util, wallet. This codec is a prime differential-oracle boundary.
 
+Swift checkpoint: strict bounded request/result frames and typed payload codecs
+are accepted for calls 8, 11 through 16, and 23 through 28. Raw request frames
+recognize every defined call 1 through 28, but the typed enum is closed to this
+13-call key/query set. Canonical CompactSize, exact discriminators and fixed
+results, checked UInt32 conversion, complete error frames, and redacted bounded
+remote errors follow COMP-045. Go's absent `forSelf` value is accepted and
+normalized to the required Swift value `false`; canonical Swift output uses
+the explicit false byte. Action and certificate payload codecs remain future
+packets rather than partial public cases.
+
 #### `wallet/substrates` → `BSVWallet`, concrete HTTP in `BSVNetwork` if factored
 
 Public:
@@ -428,6 +438,10 @@ Public:
 - `WalletWireTransceiver`, implementing every wallet operation over frames.
 - `HTTPWalletWire`.
 - `HTTPWalletJSON`, implementing every wallet operation over JSON.
+
+Swift status: future. The accepted wallet-wire codec is stateless serialization
+only and adds no processor, transceiver, HTTP transport, wallet execution,
+persistence, or permission behavior.
 
 Edges: wallet/serializer and stdlib HTTP.
 

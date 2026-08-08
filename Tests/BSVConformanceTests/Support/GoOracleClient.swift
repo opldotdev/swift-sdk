@@ -222,6 +222,7 @@ struct GoOracleExpectedPin: Sendable {
             "script.asm.decode", "script.asm.encode", "script.asm.names", "script.bip276.decode", "script.bip276.encode", "script.execute", "scriptnum.decode", "scriptnum.encode", "spv.verify", "symmetric.decrypt", "symmetric.encrypt", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.ef.decode", "transaction.ef.encode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
             "u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
             "varint.decode", "varint.encode",
+            "wallet.wire.request.inspect", "wallet.wire.request.reencode", "wallet.wire.result.inspect", "wallet.wire.result.reencode",
         ]
     )
 }

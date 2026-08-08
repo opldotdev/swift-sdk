@@ -239,9 +239,342 @@ func TestCompleteOperationRegistry(t *testing.T) {
 		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.bip276.decode", "script.bip276.encode", "script.execute", "scriptnum.decode", "scriptnum.encode", "spv.verify", "symmetric.decrypt", "symmetric.encrypt", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.ef.decode", "transaction.ef.encode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
+		"wallet.wire.request.inspect", "wallet.wire.request.reencode", "wallet.wire.result.inspect", "wallet.wire.result.reencode",
 	}
 	if !reflect.DeepEqual(operations, expected) {
 		t.Fatalf("registry mismatch\n got: %v\nwant: %v", operations, expected)
+	}
+}
+
+func TestWalletWireOperations(t *testing.T) {
+	// Frames are authored from the documented grammar, independently of Go
+	// serializer fixtures: call, one-byte originator length, originator, payload.
+	requestHex := "0800" + "0100ff00"
+	requestResult, err := execute(testRequest(
+		"wallet.wire.request.reencode",
+		`{"call":"8","bytes":"`+requestHex+`"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requestResult.(map[string]string)["bytes"]; got != requestHex {
+		t.Fatalf("request reencode got %s, want canonical input", got)
+	}
+	inspection, err := execute(testRequest(
+		"wallet.wire.request.inspect",
+		`{"call":"8","bytes":"`+requestHex+`"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInspection := map[string]string{
+		"call": "8", "originatorUTF8ByteCount": "0",
+		"parameterByteCount": "4", "canonicalParameterByteCount": "4",
+	}
+	if !reflect.DeepEqual(inspection, wantInspection) {
+		t.Fatalf("inspection got %#v, want %#v", inspection, wantInspection)
+	}
+
+	resultHex := "00fdfd00"
+	result, err := execute(testRequest(
+		"wallet.wire.result.reencode",
+		`{"call":"25","bytes":"`+resultHex+`"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.(map[string]string)["bytes"]; got != resultHex {
+		t.Fatalf("result reencode got %s, want canonical input", got)
+	}
+
+	errorHex := "0703626164036f6e65"
+	errorResult, err := execute(testRequest(
+		"wallet.wire.result.inspect",
+		`{"call":"28","bytes":"`+errorHex+`"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantError := map[string]string{
+		"call": "28", "kind": "failure", "code": "7",
+		"messageByteCount": "3", "stackByteCount": "3",
+	}
+	if !reflect.DeepEqual(errorResult, wantError) {
+		t.Fatalf("error inspection got %#v, want %#v", errorResult, wantError)
+	}
+}
+
+func TestWalletWireHostilePreflight(t *testing.T) {
+	cases := []struct {
+		name, op, args, category string
+	}{
+		{"odd hex", "wallet.wire.request.inspect", `{"call":"8","bytes":"0"}`, "invalidLength"},
+		{"uppercase hex", "wallet.wire.request.inspect", `{"call":"8","bytes":"AA"}`, "invalidEncoding"},
+		{"unsupported call", "wallet.wire.request.inspect", `{"call":"9","bytes":"0900"}`, "invalidEncoding"},
+		{"zero call", "wallet.wire.request.inspect", `{"call":"0","bytes":"0000"}`, "invalidEncoding"},
+		{"out-of-range call", "wallet.wire.request.inspect", `{"call":"29","bytes":"1d00"}`, "invalidEncoding"},
+		{"noncanonical call", "wallet.wire.request.inspect", `{"call":"08","bytes":"0800"}`, "invalidEncoding"},
+		{"mismatched call", "wallet.wire.request.inspect", `{"call":"8","bytes":"1700"}`, "invalidEncoding"},
+		{"truncated request", "wallet.wire.request.inspect", `{"call":"8","bytes":"08"}`, "truncated"},
+		{"truncated originator", "wallet.wire.request.inspect", `{"call":"8","bytes":"0802aa"}`, "truncated"},
+		{"invalid originator UTF-8", "wallet.wire.request.inspect", `{"call":"8","bytes":"0801ff0100ff00"}`, "invalidEncoding"},
+		{"trailing error", "wallet.wire.result.inspect", `{"call":"28","bytes":"01000000"}`, "trailingData"},
+		{"noncanonical error length", "wallet.wire.result.inspect", `{"call":"28","bytes":"01fd000000"}`, "noncanonical"},
+		{"request declared max count stopped before pinned decoder", "wallet.wire.request.inspect", `{"call":"11","bytes":"0b0000057769726531016b0b00ffffffffffffffffffff"}`, "resourceLimit"},
+		{"request UInt32 overflow stopped before pinned decoder", "wallet.wire.request.reencode", `{"call":"26","bytes":"1a00ff0000000001000000"}`, "invalidArgument"},
+		{"fixed result trailing byte stopped before pinned decoder", "wallet.wire.result.reencode", `{"call":"13","bytes":"00` + strings.Repeat("00", 33) + `"}`, "trailingData"},
+		{"error message over field limit", "wallet.wire.result.inspect", `{"call":"28","bytes":"01fdd107"}`, "resourceLimit"},
+		{"unknown field", "wallet.wire.result.inspect", `{"call":"28","bytes":"00","secret":"aa"}`, "invalidEncoding"},
+		{"bounded input", "wallet.wire.result.inspect", `{"call":"28","bytes":"` + strings.Repeat("00", walletWireMaximumBytes+1) + `"}`, "resourceLimit"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := execute(testRequest(tc.op, tc.args), metadata{})
+			if err == nil {
+				t.Fatal("expected preflight rejection")
+			}
+			if got := normalizeError(err).Category; got != tc.category {
+				t.Fatalf("got %s, want %s", got, tc.category)
+			}
+		})
+	}
+}
+
+func walletWireTestKeyParameters() []byte {
+	// [security level, protocol, key ID, self, privileged=false, no reason]
+	return []byte{0, 5, 'w', 'i', 'r', 'e', '1', 1, 'k', 0x0b, 0, 0xff}
+}
+
+func walletWireTestBytes(parts ...[]byte) []byte {
+	var result []byte
+	for _, part := range parts {
+		result = append(result, part...)
+	}
+	return result
+}
+
+func walletWireTestHighSDER(t *testing.T) []byte {
+	t.Helper()
+	value, err := hex.DecodeString(
+		"3046022100c6c4137b0e5fbfc88ae3f293d7e80c8566c43ae20340075d44f75b009c943d09" +
+			"022100ff45decaeca8d1ca6bc2a5322e8deaa89faaebd04c2f75c96db8f1c41d8cabe1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func walletWireTestCategory(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected wallet-wire preflight rejection")
+	}
+	if got := normalizeError(err).Category; got != want {
+		t.Fatalf("got %s, want %s (%v)", got, want, err)
+	}
+}
+
+func TestWalletWireCompactSizePreflightWidths(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     []byte
+		value    uint64
+		category string
+	}{
+		{"fd", []byte{0xfd, 0xfd, 0}, 0xfd, ""},
+		{"fe", []byte{0xfe, 0, 0, 1, 0}, 0x10000, ""},
+		{"ff", []byte{0xff, 0, 0, 0, 0, 1, 0, 0, 0}, 0x100000000, ""},
+		{"max uint64", []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, ^uint64(0), ""},
+		{"fd noncanonical", []byte{0xfd, 0xfc, 0}, 0, "noncanonical"},
+		{"fe noncanonical", []byte{0xfe, 0xff, 0xff, 0, 0}, 0, "noncanonical"},
+		{"ff noncanonical", []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0}, 0, "noncanonical"},
+		{"fd truncated", []byte{0xfd, 0xfd}, 0, "truncated"},
+		{"fe truncated", []byte{0xfe, 0, 0, 1}, 0, "truncated"},
+		{"ff truncated", []byte{0xff, 0, 0, 0, 0, 1, 0, 0}, 0, "truncated"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			position := 0
+			value, err := walletWireCompactSize(test.data, &position)
+			if test.category != "" {
+				walletWireTestCategory(t, err, test.category)
+				return
+			}
+			if err != nil || value != test.value || position != len(test.data) {
+				t.Fatalf("value=%d position=%d err=%v", value, position, err)
+			}
+		})
+	}
+}
+
+func TestWalletWireDERScalarRangeAndLowSPreflight(t *testing.T) {
+	highDER := walletWireTestHighSDER(t)
+	if valid, lowS := walletWireDERStatus(highDER); !valid || lowS {
+		t.Fatalf("high-S DER status valid=%t lowS=%t", valid, lowS)
+	}
+
+	halfOrderDER := walletWireTestBytes(
+		[]byte{0x30, 0x25, 0x02, 0x01, 0x01, 0x02, 0x20},
+		walletWireSecp256k1HalfOrder[:],
+	)
+	if valid, lowS := walletWireDERStatus(halfOrderDER); !valid || !lowS {
+		t.Fatalf("half-order DER status valid=%t lowS=%t", valid, lowS)
+	}
+
+	halfOrderPlusOne := walletWireSecp256k1HalfOrder
+	halfOrderPlusOne[31]++
+	highBoundaryDER := walletWireTestBytes(
+		[]byte{0x30, 0x25, 0x02, 0x01, 0x01, 0x02, 0x20},
+		halfOrderPlusOne[:],
+	)
+	if valid, lowS := walletWireDERStatus(highBoundaryDER); !valid || lowS {
+		t.Fatalf("half-order-plus-one DER status valid=%t lowS=%t", valid, lowS)
+	}
+
+	orderDER := walletWireTestBytes(
+		[]byte{0x30, 0x26, 0x02, 0x01, 0x01, 0x02, 0x21, 0},
+		walletWireSecp256k1Order[:],
+	)
+	if valid, _ := walletWireDERStatus(orderDER); valid {
+		t.Fatal("curve-order S scalar must be rejected")
+	}
+	if valid, _ := walletWireDERStatus([]byte{0x30, 0x06, 0x02, 0x01, 0, 0x02, 0x01, 1}); valid {
+		t.Fatal("zero R scalar must be rejected")
+	}
+}
+
+func TestWalletWireRequestGrammarPreflightRejectsBeforePinnedDecoder(t *testing.T) {
+	key := walletWireTestKeyParameters()
+	validDER := []byte{0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01}
+	highDER := walletWireTestHighSDER(t)
+	digest := make([]byte, 32)
+	hmac := make([]byte, 32)
+
+	valid := []struct {
+		call byte
+		data []byte
+	}{
+		{8, []byte{1, 0, 0xff, 0}},
+		{8, walletWireTestBytes([]byte{0}, key, []byte{0, 0})},
+		{11, walletWireTestBytes(key, []byte{0, 0})},
+		{12, walletWireTestBytes(key, []byte{0, 0})},
+		{13, walletWireTestBytes(key, []byte{0, 0})},
+		{14, walletWireTestBytes(key, hmac, []byte{0, 0})},
+		{15, walletWireTestBytes(key, []byte{2}, digest, []byte{0})},
+		{16, walletWireTestBytes(key, []byte{0, byte(len(validDER))}, validDER, []byte{2}, digest, []byte{0})},
+		{23, nil}, {24, nil}, {25, nil}, {26, []byte{0}}, {27, nil}, {28, nil},
+	}
+	for _, test := range valid {
+		if err := walletWirePreflightRequestParameters(test.call, test.data); err != nil {
+			t.Fatalf("call %d rejected canonical grammar: %v", test.call, err)
+		}
+	}
+	canonicalVerify := valid[7].data
+	if allocations := testing.AllocsPerRun(1000, func() {
+		if err := walletWirePreflightRequestParameters(16, canonicalVerify); err != nil {
+			panic(err)
+		}
+	}); allocations != 0 {
+		t.Fatalf("request grammar preflight allocated %.2f times per run", allocations)
+	}
+
+	tests := []struct {
+		name     string
+		call     byte
+		data     []byte
+		category string
+	}{
+		{"identity discriminator", 8, []byte{2}, "invalidEncoding"},
+		{"identity access truncation", 8, []byte{1, 0}, "truncated"},
+		{"identity seek discriminator", 8, []byte{1, 0, 0xff, 2}, "invalidEncoding"},
+		{"protocol discriminator", 11, append([]byte{3}, key[1:]...), "invalidEncoding"},
+		{"protocol count within limit beyond remaining", 11, []byte{0, 5, 'w'}, "truncated"},
+		{"protocol count over limit", 11, []byte{0, 0xfd, 0x91, 0x01}, "resourceLimit"},
+		{"noncanonical protocol count", 11, []byte{0, 0xfd, 5, 0}, "noncanonical"},
+		{"empty key ID", 11, append([]byte{0, 5, 'w', 'i', 'r', 'e', '1'}, 0), "invalidArgument"},
+		{"counterparty discriminator", 11, walletWireTestBytes(key[:9], []byte{0}), "invalidEncoding"},
+		{"counterparty fixed truncation", 11, walletWireTestBytes(key[:9], []byte{2, 0}), "truncated"},
+		{"privileged discriminator", 11, walletWireTestBytes(key[:10], []byte{2}), "invalidEncoding"},
+		{"reason count over limit", 11, walletWireTestBytes(key[:11], []byte{0xfd, 1, 4}), "resourceLimit"},
+		{"request fd count beyond remaining", 11, walletWireTestBytes(key, []byte{0xfd, 0xfd, 0}), "truncated"},
+		{"request fe count beyond remaining", 11, walletWireTestBytes(key, []byte{0xfe, 0, 0, 1, 0}), "truncated"},
+		{"request ff count over limit", 11, walletWireTestBytes(key, []byte{0xff, 0, 0, 0, 0, 1, 0, 0, 0}), "resourceLimit"},
+		{"request max uint64 count", 11, walletWireTestBytes(key, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}), "resourceLimit"},
+		{"HMAC fixed truncation", 14, walletWireTestBytes(key, hmac[:31]), "truncated"},
+		{"signature payload discriminator", 15, walletWireTestBytes(key, []byte{3}), "invalidEncoding"},
+		{"signature digest truncation", 15, walletWireTestBytes(key, []byte{2}, digest[:31]), "truncated"},
+		{"for-self discriminator", 16, walletWireTestBytes(key, []byte{2}), "invalidEncoding"},
+		{"DER count over limit", 16, walletWireTestBytes(key, []byte{0, 73}), "resourceLimit"},
+		{"DER count beyond remaining", 16, walletWireTestBytes(key, []byte{0, 8, 0x30}), "truncated"},
+		{"DER structure", 16, walletWireTestBytes(key, []byte{0, 8, 0x31, 6, 2, 1, 1, 2, 1, 1}), "invalidEncoding"},
+		{"high-S DER", 16, walletWireTestBytes(key, []byte{0, byte(len(highDER))}, highDER, []byte{2}, digest, []byte{0}), "invalidArgument"},
+		{"empty verify data", 16, walletWireTestBytes(key, []byte{0, 8}, validDER, []byte{1, 0}), "invalidArgument"},
+		{"height uint32 overflow", 26, []byte{0xff, 0, 0, 0, 0, 1, 0, 0, 0}, "invalidArgument"},
+		{"empty-call trailing", 23, []byte{0}, "trailingData"},
+		{"key-varbytes trailing", 11, walletWireTestBytes(key, []byte{0, 0, 0}), "trailingData"},
+		{"fixed-HMAC trailing", 14, walletWireTestBytes(key, hmac, []byte{0, 0, 0}), "trailingData"},
+		{"signature trailing", 15, walletWireTestBytes(key, []byte{2}, digest, []byte{0, 0}), "trailingData"},
+		{"verify-signature trailing", 16, walletWireTestBytes(key, []byte{0, 8}, validDER, []byte{2}, digest, []byte{0, 0}), "trailingData"},
+		{"height trailing", 26, []byte{0, 0}, "trailingData"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			walletWireTestCategory(t, walletWirePreflightRequestParameters(test.call, test.data), test.category)
+		})
+	}
+}
+
+func TestWalletWireResultGrammarPreflightRejectsBeforePinnedDecoder(t *testing.T) {
+	validDER := []byte{0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01}
+	highDER := walletWireTestHighSDER(t)
+	tests := []struct {
+		name     string
+		call     byte
+		data     []byte
+		category string
+	}{
+		{"public key fixed truncation", 8, append([]byte{2}, make([]byte, 31)...), "truncated"},
+		{"public key discriminator", 8, append([]byte{4}, make([]byte, 32)...), "invalidEncoding"},
+		{"public key trailing", 8, append([]byte{2}, make([]byte, 33)...), "trailingData"},
+		{"HMAC fixed truncation", 13, make([]byte, 31), "truncated"},
+		{"HMAC trailing", 13, make([]byte, 33), "trailingData"},
+		{"empty success trailing", 14, []byte{0}, "trailingData"},
+		{"DER malformed", 15, append([]byte{}, validDER[:7]...), "invalidEncoding"},
+		{"DER over limit", 15, make([]byte, 73), "resourceLimit"},
+		{"high-S DER", 15, highDER, "invalidArgument"},
+		{"authentication truncation", 23, nil, "truncated"},
+		{"authentication discriminator", 23, []byte{2}, "invalidEncoding"},
+		{"authentication trailing", 23, []byte{1, 0}, "trailingData"},
+		{"height uint32 overflow", 25, []byte{0xff, 0, 0, 0, 0, 1, 0, 0, 0}, "invalidArgument"},
+		{"height trailing", 25, []byte{0, 0}, "trailingData"},
+		{"header fixed truncation", 26, make([]byte, 79), "truncated"},
+		{"header trailing", 26, make([]byte, 81), "trailingData"},
+		{"network discriminator", 27, []byte{2}, "invalidEncoding"},
+		{"network trailing", 27, []byte{1, 0}, "trailingData"},
+		{"version invalid UTF-8", 28, []byte{0xff}, "invalidEncoding"},
+		{"version over limit", 28, make([]byte, walletWireMaximumTextBytes+1), "resourceLimit"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			walletWireTestCategory(t, walletWirePreflightResultPayload(test.call, test.data), test.category)
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"message over operation maximum", []byte{1, 0xfd, 0xd1, 7}, "resourceLimit"},
+		{"message within maximum beyond remaining", []byte{1, 0xfd, 0xd0, 7}, "truncated"},
+		{"stack over operation maximum", append([]byte{1, 0, 0xfd, 1, 0x20}, make([]byte, 0)...), "resourceLimit"},
+		{"stack within maximum beyond remaining", []byte{1, 0, 0xfd, 0, 0x20}, "truncated"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := walletWirePreflightResult(test.data)
+			walletWireTestCategory(t, err, test.want)
+		})
 	}
 }
 

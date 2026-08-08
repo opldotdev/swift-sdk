@@ -172,8 +172,12 @@ policy.
   (Accepted)
 - Bounded Go-compatible request/result JSON for the seven cryptographic calls.
   (Accepted)
+- Strict bounded wallet-wire framing and typed binary codecs for the seven
+  cryptographic calls plus authentication, height/header, network, and version
+  queries. (Accepted)
 - Offline BRC-52 certificate values, keyrings, and binary codecs. (Accepted)
-- Persistent wallet state, request/response substrates, and permission policy.
+- Action/certificate wallet-wire codecs, transport substrates, persistent
+  wallet state, remote execution, and permission policy.
   (Future)
 - Chain-aware certificate revocation checks. (Future)
 
