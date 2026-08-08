@@ -141,8 +141,8 @@ print(account.neutered.serialized)
   duplicate branches, compound paths, and conflict-checked proof merging
 - Bounded BRC-62/BRC-96 BEEF v1/v2 and BRC-95 Atomic BEEF codecs with ordered
   dependency validation and explicit transaction-ID-only trust policy
-- Async, transport-independent chain tracking with BUMP and BEEF root
-  verification through the `BSVSPV` proof façade
+- Full BRC-67 SPV validation with async chain tracking, BEEF ancestry and source
+  resolution, checked fees, and Script execution through the `BSVSPV` façade
 - Immutable BEEF graph merge, proof propagation, BRC-96 txid-only projection,
   and known-ID trimming with stable parent-before-child ordering
 - Redacted default descriptions for mnemonics and extended private keys, with

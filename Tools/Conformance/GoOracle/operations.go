@@ -27,6 +27,7 @@ import (
 	"github.com/bsv-blockchain/go-sdk/script/interpreter"
 	interpreterdebug "github.com/bsv-blockchain/go-sdk/script/interpreter/debug"
 	"github.com/bsv-blockchain/go-sdk/script/interpreter/scriptflag"
+	"github.com/bsv-blockchain/go-sdk/spv"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	feemodelpkg "github.com/bsv-blockchain/go-sdk/transaction/fee_model"
 	sighashpkg "github.com/bsv-blockchain/go-sdk/transaction/sighash"
@@ -538,6 +539,56 @@ func execute(req request, meta metadata) (result any, err error) {
 			names[raw] = name
 		}
 		return map[string]any{"names": names}, nil
+	case "spv.verify":
+		var args struct {
+			Bytes               string  `json:"bytes"`
+			SatoshisPerKilobyte *string `json:"satoshisPerKilobyte,omitempty"`
+			ValidRoots          []struct {
+				BlockHeight string `json:"blockHeight"`
+				Root        string `json:"root"`
+			} `json:"validRoots"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		tx, err := transaction.NewTransactionFromBEEF(data)
+		if err != nil {
+			return nil, err
+		}
+		roots := make(map[uint32]chainhash.Hash, len(args.ValidRoots))
+		for _, item := range args.ValidRoots {
+			height, err := decimalUint(item.BlockHeight, 32)
+			if err != nil {
+				return nil, err
+			}
+			root, err := chainhash.NewHashFromHex(item.Root)
+			if err != nil {
+				return nil, err
+			}
+			roots[uint32(height)] = *root
+		}
+		var feeModel transaction.FeeModel
+		if args.SatoshisPerKilobyte != nil {
+			rate, err := decimalUint(*args.SatoshisPerKilobyte, 64)
+			if err != nil {
+				return nil, err
+			}
+			feeModel = &feemodelpkg.SatoshisPerKilobyte{Satoshis: rate}
+		}
+		valid, err := spv.Verify(
+			context.Background(),
+			tx,
+			oracleChainTracker{validRoots: roots},
+			feeModel,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]bool{"valid": valid}, nil
 	case "transaction.decode":
 		var args struct {
 			Bytes string `json:"bytes"`

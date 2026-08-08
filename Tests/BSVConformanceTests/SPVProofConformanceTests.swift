@@ -1,11 +1,93 @@
 import BSVCore
 import BSVCrypto
+import BSVInterpreter
+import BSVSPV
 import BSVScript
 import BSVTransaction
 import Testing
 
 @Suite("SPV proof conformance", .serialized)
 struct SPVProofConformanceTests {
+    @Test("complete BRC-67 verification matches the pinned Go SDK")
+    func completeVerification() async throws {
+        let configuration = GoOracleConfiguration.default()
+        switch try GoOracleClient.connect(configuration: configuration) {
+        case .unavailable(let reason):
+            #expect(!configuration.required)
+            print("SPV Go oracle unavailable: \(reason)")
+        case .available(let client):
+            defer { client.close() }
+            let fixture = try completeSPVConformanceFixture()
+            let root = try fixture.path.root(for: fixture.parentID)
+            let rootDisplay = TransactionID(
+                exactDigestBytesGuaranteed: root.bytes
+            ).displayHex
+
+            #expect(try await SPVProofVerifier.verify(
+                fixture.beef,
+                rootTransactionID: fixture.childID,
+                using: ConformanceChainTracker(
+                    root: root,
+                    blockHeight: fixture.path.blockHeight
+                ),
+                feeModel: SatoshisPerKilobyteFeeModel(satoshisPerKilobyte: 1),
+                scriptConfiguration: fixture.scriptConfiguration,
+                limits: fixture.beefLimits
+            ))
+
+            let response = try client.request(
+                id: "spv-complete-brc67",
+                operation: "spv.verify",
+                arguments: [
+                    "bytes": .string(try fixture.beef.hex(limits: fixture.beefLimits)),
+                    "satoshisPerKilobyte": .string("1"),
+                    "validRoots": .array([.object([
+                        "blockHeight": .string(String(fixture.path.blockHeight)),
+                        "root": .string(rootDisplay),
+                    ])]),
+                ]
+            )
+            #expect(response.ok)
+            #expect(response.result == .object(["valid": .bool(true)]))
+
+            let inflationary = try completeSPVConformanceFixture(outputSatoshis: 11)
+            let inflationaryRoot = try inflationary.path.root(for: inflationary.parentID)
+            let inflationaryRootDisplay = TransactionID(
+                exactDigestBytesGuaranteed: inflationaryRoot.bytes
+            ).displayHex
+            await #expect(throws: SPVValidationError.outputsExceedInputs(
+                transactionID: inflationary.childID,
+                inputs: 10,
+                outputs: 11
+            )) {
+                try await SPVProofVerifier.verify(
+                    inflationary.beef,
+                    rootTransactionID: inflationary.childID,
+                    using: ConformanceChainTracker(
+                        root: inflationaryRoot,
+                        blockHeight: inflationary.path.blockHeight
+                    ),
+                    scriptConfiguration: inflationary.scriptConfiguration,
+                    limits: inflationary.beefLimits
+                )
+            }
+            let goInflationary = try client.request(
+                id: "spv-go-unused-input-total-artifact",
+                operation: "spv.verify",
+                arguments: [
+                    "bytes": .string(try inflationary.beef.hex(
+                        limits: inflationary.beefLimits
+                    )),
+                    "validRoots": .array([.object([
+                        "blockHeight": .string(String(inflationary.path.blockHeight)),
+                        "root": .string(inflationaryRootDisplay),
+                    ])]),
+                ]
+            )
+            #expect(goInflationary.result == .object(["valid": .bool(true)]))
+        }
+    }
+
     @Test("pinned Go agrees on accepted and rejected BEEF chain roots")
     func beefVerification() async throws {
         let configuration = GoOracleConfiguration.default()
@@ -121,6 +203,90 @@ struct SPVProofConformanceTests {
             #expect(goConflict.result == .object(["valid": .bool(false)]))
         }
     }
+}
+
+private struct CompleteSPVConformanceFixture {
+    let beefLimits: BEEFLimits
+    let beef: BEEF
+    let parentID: TransactionID
+    let childID: TransactionID
+    let path: MerklePath
+    let scriptConfiguration: ScriptExecutionConfiguration
+}
+
+private func completeSPVConformanceFixture(
+    outputSatoshis: UInt64 = 9
+) throws -> CompleteSPVConformanceFixture {
+    let transactionLimits = try TransactionLimits(
+        maximumTransactionByteCount: 10_000,
+        maximumInputCount: 10,
+        maximumOutputCount: 10,
+        maximumScriptByteCount: 1_000
+    )
+    let beefLimits = try BEEFLimits(
+        maximumByteCount: 100_000,
+        maximumMerklePathCount: 10,
+        maximumTransactionCount: 10,
+        transactionLimits: transactionLimits,
+        merklePathLimits: MerklePathLimits(
+            maximumByteCount: 10_000,
+            maximumLeavesPerLevel: 100,
+            maximumTotalLeaves: 1_000
+        )
+    )
+    let trueScript = try Script(
+        bytes: [Opcode.drop.rawValue, Opcode.one.rawValue],
+        maximumByteCount: 2
+    )
+    let parent = Transaction(
+        version: 1,
+        inputs: [],
+        outputs: [TransactionOutput(satoshis: 10, lockingScript: trueScript)],
+        lockTime: 0
+    )
+    let parentID = try parent.transactionID(limits: transactionLimits)
+    let child = Transaction(
+        version: 1,
+        inputs: [TransactionInput(
+            previousOutput: Outpoint(transactionID: parentID, outputIndex: 0),
+            unlockingScript: try Script(bytes: [Opcode.one.rawValue], maximumByteCount: 1)
+        )],
+        outputs: [TransactionOutput(
+            satoshis: outputSatoshis,
+            lockingScript: trueScript
+        )],
+        lockTime: 0
+    )
+    let childID = try child.transactionID(limits: transactionLimits)
+    let path = try MerklePath(
+        blockHeight: 42,
+        levels: [[.hash(
+            offset: 0,
+            hash: try Hash256(parentID.wireBytes),
+            isTransactionID: true
+        )]]
+    )
+    let beef = try BEEF(
+        version: .v1,
+        merklePaths: [path],
+        transactions: [
+            .rawWithMerklePath(transaction: parent, merklePathIndex: 0),
+            .raw(child),
+        ],
+        limits: beefLimits
+    )
+    return CompleteSPVConformanceFixture(
+        beefLimits: beefLimits,
+        beef: beef,
+        parentID: parentID,
+        childID: childID,
+        path: path,
+        scriptConfiguration: try ScriptExecutionConfiguration(
+            era: .genesis,
+            flags: [.enableForkID],
+            resourceLimits: .standard
+        )
+    )
 }
 
 private struct SPVConformanceFixture {

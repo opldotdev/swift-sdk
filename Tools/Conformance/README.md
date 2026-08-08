@@ -113,6 +113,7 @@ supports exactly one version byte.
 | `transaction.beef.txidonly` | `{bytes}` | Sorted semantic summary after pinned Go projects all records to txid-only |
 | `transaction.beef.validate` | `{bytes,allowTransactionIDOnly}` | `{valid}` using the pinned Go structural/proof policy |
 | `transaction.beef.verify` | `{bytes,allowTransactionIDOnly,validRoots:[{blockHeight,root}]}` | `{valid}` after pinned Go structural and chain-root verification |
+| `spv.verify` | `{bytes,validRoots:[{blockHeight,root}],satoshisPerKilobyte?}` | `{valid}` after pinned Go BRC-67 ancestry, root-fee, and Script verification of a v1 BEEF root transaction |
 | `transaction.decode` | `{bytes}` | `{bytes,version,inputs,outputs,lockTime,txid}` |
 | `transaction.fee` | `{bytes,satoshisPerKilobyte,unlockingByteCounts}` | `{fee}` using actual nonempty scripts or one decimal-string/null estimate per input |
 | `transaction.merklepath.combine` | `{left,right}` | `{bytes}` for the combined canonical BRC-74 path |

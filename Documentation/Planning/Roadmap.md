@@ -104,12 +104,15 @@ cleanup differentials cover the consensus-sensitive paths.
 - BEEF and Atomic BEEF. (Accepted)
 - Transaction-owned chain-tracker protocol and BUMP/BEEF root verification.
   (Accepted)
-- Full BRC-67 script, fee, and lock-condition validation in `BSVSPV`.
+- Full BRC-67 source resolution, value/fee, Script, lock-condition, and trusted
+  Merkle-root validation in `BSVSPV`. (Accepted checkpoint)
 - Bounded BEEF merge, txid-only projection, known-ID trimming, and proof
   propagation. (Accepted)
 
 Merkle/BUMP/BEEF parsing and serialization may run in parallel with Phase 5.
-Full BRC-67 validation waits for the remaining signature/multisignature packet.
+The accepted BRC-67 checkpoint composes the signature/multisignature interpreter
+with BEEF ancestry and injected chain/fee policy. Network finality data remains
+caller-owned rather than hard-wired to a service.
 
 ## Phase 7: Network services
 
