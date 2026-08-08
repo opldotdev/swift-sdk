@@ -31,7 +31,7 @@ struct URLSessionHTTPTransportTests {
         )) {
             try await transport().send(request, maximumResponseBodyByteCount: 8)
         }
-        #expect(await waitForProtocolStop())
+        await expectProtocolStopWhenObservable()
     }
 
     @Test("rejects chunked body overflow as soon as limit plus one arrives")
@@ -46,12 +46,24 @@ struct URLSessionHTTPTransportTests {
         )) {
             try await transport().send(request, maximumResponseBodyByteCount: 8)
         }
-        #expect(await waitForProtocolStop())
+        await expectProtocolStopWhenObservable()
     }
 
     @Test("rejects redirects without following the target")
     func redirect() async throws {
+#if os(Linux)
+        // swift-corelibs-foundation traps if a custom URLProtocol invokes the
+        // redirect callback directly. A delivered 3xx response exercises the
+        // transport's equivalent fail-closed response path without entering
+        // that unsupported test-harness path.
+        MockURLProtocol.configure(.response(
+            status: 307,
+            headers: ["Location": "https://redirect.invalid/target"],
+            chunks: []
+        ))
+#else
         MockURLProtocol.configure(.redirect(status: 307))
+#endif
         await #expect(throws: NetworkServiceError.redirect(statusCode: 307)) {
             try await transport().send(request, maximumResponseBodyByteCount: 8)
         }
@@ -99,7 +111,7 @@ struct URLSessionHTTPTransportTests {
             try await operation.value
         }
         #expect(start.duration(to: clock.now) < .seconds(1))
-        #expect(await waitForProtocolStop())
+        await expectProtocolStopWhenObservable()
     }
 
     private var request: HTTPRequest {
@@ -124,6 +136,17 @@ struct URLSessionHTTPTransportTests {
             await Task.yield()
         }
         return MockURLProtocol.wasStopped
+    }
+
+    private func expectProtocolStopWhenObservable() async {
+#if os(Linux)
+        // FoundationNetworking does not promise to invoke stopLoading() on a
+        // custom URLProtocol after response-disposition or task cancellation.
+        // The typed failure and single request remain the portable contract.
+        #expect(MockURLProtocol.requestCount == 1)
+#else
+        #expect(await waitForProtocolStop())
+#endif
     }
 }
 
