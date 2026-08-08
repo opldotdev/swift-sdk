@@ -182,13 +182,13 @@ final class WalletWireGoOracleTests: XCTestCase {
             + [10]
             + Array("oracle-key".utf8)
             + [0x0B, 0, 0xFF]
-        let highSRequest = [UInt8](arrayLiteral: WalletCall.verifySignature.rawValue, 0)
-            + keyParameters
-            + [0, UInt8(highDER.count)]
-            + highDER
-            + [2]
-            + [UInt8](repeating: 0, count: 32)
-            + [0]
+        var highSRequest = [UInt8](arrayLiteral: WalletCall.verifySignature.rawValue, 0)
+        highSRequest.append(contentsOf: keyParameters)
+        highSRequest.append(contentsOf: [0, UInt8(highDER.count)])
+        highSRequest.append(contentsOf: highDER)
+        highSRequest.append(2)
+        highSRequest.append(contentsOf: [UInt8](repeating: 0, count: 32))
+        highSRequest.append(0)
         let goHighSRequest = try request(
             client,
             operation: "wallet.wire.request.reencode",
@@ -260,13 +260,16 @@ final class WalletWireGoOracleTests: XCTestCase {
         let canonicalSignature = try PrivateKey(
             [UInt8](repeating: 0, count: 31) + [11]
         ).sign(digest: BSVHashing.sha256([1, 2]))
-        let absentVerifySignature = [UInt8](arrayLiteral: WalletCall.verifySignature.rawValue, 0)
-            + keyParameters
-            + [0xFF, UInt8(canonicalSignature.derBytes.count)]
-            + canonicalSignature.derBytes
-            + [2]
-            + canonicalDigest.bytes
-            + [0]
+        var absentVerifySignature = [UInt8](
+            arrayLiteral: WalletCall.verifySignature.rawValue,
+            0
+        )
+        absentVerifySignature.append(contentsOf: keyParameters)
+        absentVerifySignature.append(contentsOf: [0xFF, UInt8(canonicalSignature.derBytes.count)])
+        absentVerifySignature.append(contentsOf: canonicalSignature.derBytes)
+        absentVerifySignature.append(2)
+        absentVerifySignature.append(contentsOf: canonicalDigest.bytes)
+        absentVerifySignature.append(0)
         let goAbsentVerifySignature = try oracleBytes(
             client,
             operation: "wallet.wire.request.reencode",
