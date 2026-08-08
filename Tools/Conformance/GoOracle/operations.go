@@ -25,6 +25,8 @@ import (
 	primitives "github.com/bsv-blockchain/go-sdk/primitives/hash"
 	scriptpkg "github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/script/interpreter"
+	interpreterdebug "github.com/bsv-blockchain/go-sdk/script/interpreter/debug"
+	"github.com/bsv-blockchain/go-sdk/script/interpreter/scriptflag"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	feemodelpkg "github.com/bsv-blockchain/go-sdk/transaction/fee_model"
 	sighashpkg "github.com/bsv-blockchain/go-sdk/transaction/sighash"
@@ -34,6 +36,97 @@ import (
 
 type oracleChainTracker struct {
 	validRoots map[uint32]chainhash.Hash
+}
+
+func executeScriptPair(raw json.RawMessage) (any, error) {
+	var args struct {
+		UnlockingScript    string   `json:"unlockingScript"`
+		LockingScript      string   `json:"lockingScript"`
+		Era                string   `json:"era"`
+		Flags              []string `json:"flags,omitempty"`
+		TransactionVersion *string  `json:"transactionVersion,omitempty"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	unlockingBytes, err := protocolHex(args.UnlockingScript)
+	if err != nil {
+		return nil, err
+	}
+	lockingBytes, err := protocolHex(args.LockingScript)
+	if err != nil {
+		return nil, err
+	}
+	unlockingScript := scriptpkg.NewFromBytes(unlockingBytes)
+	lockingScript := scriptpkg.NewFromBytes(lockingBytes)
+
+	var flags scriptflag.Flag
+	for _, name := range args.Flags {
+		switch name {
+		case "p2sh":
+			flags |= scriptflag.Bip16
+		case "cleanStack":
+			flags |= scriptflag.VerifyCleanStack
+		case "minimalData":
+			flags |= scriptflag.VerifyMinimalData
+		case "minimalIf":
+			flags |= scriptflag.VerifyMinimalIf
+		case "signaturePushOnly":
+			flags |= scriptflag.VerifySigPushOnly
+		default:
+			return nil, categorizedError{"invalidEncoding", "unknown script flag: " + name}
+		}
+	}
+
+	options := []interpreter.ExecutionOptionFunc{
+		interpreter.WithScripts(lockingScript, unlockingScript),
+		interpreter.WithFlags(flags),
+	}
+	if args.TransactionVersion != nil {
+		version, err := decimalUint(*args.TransactionVersion, 32)
+		if err != nil {
+			return nil, err
+		}
+		tx := &transaction.Transaction{
+			Version: uint32(version),
+			Inputs: []*transaction.TransactionInput{{
+				UnlockingScript: unlockingScript,
+			}},
+		}
+		options = append(options, interpreter.WithTx(
+			tx,
+			0,
+			&transaction.TransactionOutput{LockingScript: lockingScript},
+		))
+	}
+	switch args.Era {
+	case "legacy":
+	case "genesis":
+		options = append(options, interpreter.WithAfterGenesis())
+	case "chronicle":
+		options = append(options, interpreter.WithAfterChronicle())
+	default:
+		return nil, categorizedError{"invalidEncoding", "script era must be legacy, genesis, or chronicle"}
+	}
+
+	debugger := interpreterdebug.NewDebugger()
+	var finalStack [][]byte
+	debugger.AttachAfterExecute(func(state *interpreter.State) {
+		finalStack = make([][]byte, len(state.DataStack))
+		for i := range state.DataStack {
+			finalStack[i] = append([]byte(nil), state.DataStack[i]...)
+		}
+	})
+	options = append(options, interpreter.WithDebugger(debugger))
+	if err := interpreter.NewEngine().Execute(options...); err != nil {
+		return nil, err
+	}
+
+	stack := make([]string, len(finalStack))
+	for i := range finalStack {
+		stack[i] = hex.EncodeToString(finalStack[i])
+	}
+	return map[string]any{"stack": stack, "valid": true}, nil
 }
 
 func (o oracleChainTracker) IsValidRootForHeight(
@@ -339,6 +432,8 @@ func execute(req request, meta metadata) (result any, err error) {
 		return encodeScriptNumber(req.Args)
 	case "scriptnum.decode":
 		return decodeScriptNumber(req.Args)
+	case "script.execute":
+		return executeScriptPair(req.Args)
 	case "script.asm.decode":
 		var args struct {
 			Text string `json:"text"`

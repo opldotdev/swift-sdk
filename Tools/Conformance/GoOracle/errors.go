@@ -21,6 +21,31 @@ func normalizeError(err error) oracleError {
 	var scriptError interpretererrors.Error
 	if errors.As(err, &scriptError) {
 		switch scriptError.ErrorCode {
+		case interpretererrors.ErrEvalFalse:
+			return oracleError{Category: "evaluatedFalse", Message: err.Error()}
+		case interpretererrors.ErrEmptyStack:
+			return oracleError{Category: "emptyStack", Message: err.Error()}
+		case interpretererrors.ErrEarlyReturn:
+			return oracleError{Category: "earlyReturn", Message: err.Error()}
+		case interpretererrors.ErrInvalidStackOperation:
+			return oracleError{Category: "invalidStackOperation", Message: err.Error()}
+		case interpretererrors.ErrVerify:
+			return oracleError{Category: "verifyFailed", Message: err.Error()}
+		case interpretererrors.ErrEqualVerify:
+			return oracleError{Category: "equalVerifyFailed", Message: err.Error()}
+		case interpretererrors.ErrUnbalancedConditional:
+			return oracleError{Category: "unbalancedConditional", Message: err.Error()}
+		case interpretererrors.ErrReservedOpcode:
+			return oracleError{Category: "reservedOpcode", Message: err.Error()}
+		case interpretererrors.ErrDisabledOpcode:
+			return oracleError{Category: "disabledOpcode", Message: err.Error()}
+		case interpretererrors.ErrScriptTooBig, interpretererrors.ErrElementTooBig,
+			interpretererrors.ErrTooManyOperations, interpretererrors.ErrStackOverflow:
+			return oracleError{Category: "consensusLimit", Message: err.Error()}
+		case interpretererrors.ErrNotPushOnly:
+			return oracleError{Category: "notPushOnly", Message: err.Error()}
+		case interpretererrors.ErrCleanStack:
+			return oracleError{Category: "cleanStack", Message: err.Error()}
 		case interpretererrors.ErrNumberTooBig, interpretererrors.ErrNumberTooSmall:
 			return oracleError{Category: "numberTooLarge", Message: err.Error()}
 		case interpretererrors.ErrMinimalData:

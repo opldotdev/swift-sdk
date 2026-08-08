@@ -1,3 +1,5 @@
 # BSVInterpreter tests
 
-This test target is added to Package.swift with the module's first implementation packet.
+This target exercises the public Script execution API, consensus-era behavior,
+resource ceilings, and hostile-input failures. Cross-SDK stack and error parity
+belongs in `BSVConformanceTests/InterpreterConformanceTests.swift`.

@@ -83,9 +83,16 @@ differentials, and Fable review.
 
 ## Phase 5: Script execution
 
-- Stack and control flow.
-- Arithmetic, bitwise, splice, crypto, and signature opcodes.
-- Pre-Genesis, Genesis, and Chronicle rules and limits.
+Accepted checkpoint: the bounded interpreter now covers stack/control flow,
+splice, bitwise, arbitrary-precision arithmetic, hashing, P2SH, ForkID
+`CHECKSIG`, CLTV/CSV, and Chronicle version/slice/shift rules. Exact pinned-Go
+stack and failure differentials cover the consensus-sensitive era transitions.
+Legacy non-ForkID signature hashing and `CHECKMULTISIG` remain the next packet.
+
+- Stack and control flow. (Accepted)
+- Arithmetic, bitwise, splice, and crypto opcodes. (Accepted except multisignature)
+- Pre-Genesis, Genesis, and Chronicle rules and limits. (Accepted checkpoint)
+- Legacy signature hashing and `CHECKMULTISIG`/`CHECKMULTISIGVERIFY`.
 - Full valid/invalid transaction and reference-script suites.
 - Explicit compatibility rulings for Go script-number artifacts, including
   pre-Genesis clamping, overflow-until-reinterpretation, and in-place minimal
@@ -102,7 +109,7 @@ differentials, and Fable review.
   propagation. (Accepted)
 
 Merkle/BUMP/BEEF parsing and serialization may run in parallel with Phase 5.
-Only verification paths that execute scripts wait for the interpreter.
+Full BRC-67 validation waits for the remaining signature/multisignature packet.
 
 ## Phase 7: Network services
 

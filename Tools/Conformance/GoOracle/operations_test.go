@@ -199,12 +199,85 @@ func TestCompleteOperationRegistry(t *testing.T) {
 		"base64.decode", "base64.encode", "big.umod", "bytes.reverse", "digest32.display",
 		"digest32.parse", "drbg.generate", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "metadata",
-		"script.asm.decode", "script.asm.encode", "script.asm.names", "scriptnum.decode", "scriptnum.encode", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
+		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.execute", "scriptnum.decode", "scriptnum.encode", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
 	}
 	if !reflect.DeepEqual(operations, expected) {
 		t.Fatalf("registry mismatch\n got: %v\nwant: %v", operations, expected)
+	}
+}
+
+func TestScriptExecuteFoundation(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		want any
+	}{
+		{
+			"stack equality",
+			`{"unlockingScript":"012a","lockingScript":"7687","era":"legacy"}`,
+			map[string]any{"stack": []string{"01"}, "valid": true},
+		},
+		{
+			"conditional branch",
+			`{"unlockingScript":"","lockingScript":"006300675168","era":"genesis"}`,
+			map[string]any{"stack": []string{"01"}, "valid": true},
+		},
+		{
+			"return ignores malformed tail",
+			`{"unlockingScript":"516a4c","lockingScript":"51","era":"genesis"}`,
+			map[string]any{"stack": []string{"01", "01"}, "valid": true},
+		},
+		{
+			"early return preserves alt stack across scripts",
+			`{"unlockingScript":"516b6a","lockingScript":"6c","era":"genesis"}`,
+			map[string]any{"stack": []string{"01"}, "valid": true},
+		},
+		{
+			"hidden genesis version conditional is a no-op",
+			`{"unlockingScript":"","lockingScript":"0063656851","era":"genesis"}`,
+			map[string]any{"stack": []string{"01"}, "valid": true},
+		},
+		{
+			"returned genesis version conditional is a no-op",
+			`{"unlockingScript":"51","lockingScript":"51636a6568","era":"genesis"}`,
+			map[string]any{"stack": []string{"01"}, "valid": true},
+		},
+		{
+			"chronicle transaction version",
+			`{"unlockingScript":"","lockingScript":"6204020000008804020000006551675068","era":"chronicle","transactionVersion":"2"}`,
+			map[string]any{"stack": []string{"01"}, "valid": true},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := execute(testRequest("script.execute", tc.args), metadata{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+
+	_, err := execute(testRequest(
+		"script.execute",
+		`{"unlockingScript":"","lockingScript":"00","era":"legacy"}`,
+	), metadata{})
+	if err == nil || normalizeError(err).Category != "evaluatedFalse" {
+		t.Fatalf("expected evaluatedFalse, got %v", err)
+	}
+
+	for _, opcode := range []string{"ba", "bc", "bd", "fe", "ff"} {
+		_, err = execute(testRequest(
+			"script.execute",
+			`{"unlockingScript":"","lockingScript":"`+opcode+`","era":"chronicle"}`,
+		), metadata{})
+		if err == nil || normalizeError(err).Category != "reservedOpcode" {
+			t.Fatalf("opcode %s: expected reservedOpcode, got %v", opcode, err)
+		}
 	}
 }
 

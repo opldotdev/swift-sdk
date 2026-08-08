@@ -17,7 +17,7 @@
 Swift BSV SDK provides idiomatic, memory-safe Swift APIs for Bitcoin data,
 wire encodings, hashing, symmetric cryptography, secp256k1 keys, signatures,
 hierarchical deterministic keys, mnemonics, legacy key formats, and bounded
-Bitcoin Script, transaction, Merkle-proof, and BEEF envelope parsing. It is
+Bitcoin Script execution, transaction, Merkle-proof, and BEEF envelopes. It is
 designed for behavioral and wire-format compatibility with the BSV SDK family
 while embracing Swift value semantics, explicit resource bounds, and
 structured errors.
@@ -131,6 +131,9 @@ print(account.neutered.serialized)
   and xprv/xpub/tprv/tpub serialization
 - Bounded Bitcoin Script bytes, BRC-106 ASM and compact SASM, raw opcode and
   PUSHDATA parsing, signed-magnitude numbers, and P2PK/P2PKH/P2SH/BRC-18 templates
+- Era-aware Bitcoin Script execution with control flow, stack, splice, bitwise,
+  arbitrary-precision numeric, hashing, P2SH, ForkID signature, CLTV/CSV, and
+  Chronicle opcode behavior under explicit resource limits
 - Bounded legacy transaction parsing and canonical serialization, outpoints,
   transaction IDs, coinbase recognition, and checked satoshi totals
 - Bounded BRC-74 BUMP binary and strict JSON codecs, Merkle-root computation,

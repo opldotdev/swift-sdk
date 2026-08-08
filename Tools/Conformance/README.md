@@ -103,6 +103,7 @@ supports exactly one version byte.
 | `script.asm.decode` | `{text}` | `{bytes}` (Go SDK canonical ASM parser) |
 | `script.asm.encode` | `{bytes}` | `{text}` (Go SDK canonical ASM formatter) |
 | `script.asm.names` | `{}` | `{names}` (all 256 pinned Go SDK opcode names in byte order) |
+| `script.execute` | `{unlockingScript,lockingScript,era,flags?,transactionVersion?}` | `{stack,valid}` for bounded context-free execution; `transactionVersion` is a canonical decimal string used by Chronicle version opcodes |
 | `scriptnum.encode` | `{value,era}` | `{bytes}` |
 | `scriptnum.decode` | `{bytes,era,minimal,maxBytes}` | `{value}` |
 | `transaction.beef.decode` | `{bytes}` | `{version,bumps,transactions,newestTxid,atomicSubject}` for BEEF v1/v2 or Atomic BEEF |

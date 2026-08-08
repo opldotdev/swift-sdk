@@ -18,6 +18,14 @@ public enum BSVHashing {
         Hash512(exactDigestBytesGuaranteed: Array(SHA512.hash(data: bytes)))
     }
 
+    /// Computes legacy SHA-1 for Bitcoin Script's `OP_SHA1`.
+    ///
+    /// SHA-1 is exposed only for protocol compatibility and must not be used
+    /// as a new signature or authentication construction.
+    public static func sha1(_ bytes: [UInt8]) -> Hash160 {
+        Hash160(exactDigestBytesGuaranteed: Array(Insecure.SHA1.hash(data: bytes)))
+    }
+
     /// Computes RIPEMD-160 and preserves its raw digest byte order.
     public static func ripemd160(_ bytes: [UInt8]) -> Hash160 {
         Hash160(exactDigestBytesGuaranteed: RIPEMD160.digest(bytes))

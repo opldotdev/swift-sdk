@@ -10,7 +10,11 @@ public struct ScriptNumber: Hashable, Sendable {
     /// The pre-Genesis input limit used by most numeric opcodes.
     public static let legacyMaximumByteCount = 4
 
-    private let value: BigSigned
+    package let value: BigSigned
+
+    package init(value: BigSigned) {
+        self.value = value
+    }
 
     /// Creates a Script number from a native signed integer.
     public init(_ value: Int64) {
