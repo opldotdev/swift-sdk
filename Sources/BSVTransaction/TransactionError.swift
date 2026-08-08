@@ -34,4 +34,10 @@ public enum TransactionError: Error, Equatable, Sendable {
     case sourceOutputIsNotPayToPublicKeyHash(inputIndex: Int)
     case privateKeyDoesNotMatchSourceOutput(inputIndex: Int)
     case satoshiTotalOverflow
+    case outputSatoshisExceedInputs(inputs: UInt64, outputs: UInt64)
+    case missingUnlockingScriptEstimate(inputIndex: Int)
+    case invalidUnlockingScriptEstimate(inputIndex: Int, byteCount: Int)
+    case unlockingScriptEstimateExceedsLimit(inputIndex: Int, actual: UInt64, maximum: UInt64)
+    case feeCalculationOverflow
+    case insufficientInputSatoshis(inputs: UInt64, outputs: UInt64, fee: UInt64)
 }

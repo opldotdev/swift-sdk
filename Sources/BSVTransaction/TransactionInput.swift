@@ -4,6 +4,13 @@ import BSVScript
 public struct TransactionInput: Hashable, Sendable {
     public static let finalSequence: UInt32 = .max
 
+    /// Maximum projected size of a compressed-key P2PKH unlocking script.
+    ///
+    /// libsecp256k1 produces low-S signatures, but R can require a DER sign
+    /// padding byte. A 71-byte DER signature, hash-type byte, and compressed
+    /// public-key push occupy at most 107 bytes in total.
+    public static let payToPublicKeyHashUnlockingScriptByteCount = 107
+
     public var previousOutput: Outpoint
     public var unlockingScript: Script
     public var sequence: UInt32
@@ -12,16 +19,25 @@ public struct TransactionInput: Hashable, Sendable {
     /// wire bytes, equality, or hashing.
     public var sourceOutput: TransactionOutput?
 
+    /// The projected unlocking-script size used before an input is signed.
+    ///
+    /// Fee models ignore this value once `unlockingScript` is nonempty. Like
+    /// `sourceOutput`, it is construction metadata and does not participate in
+    /// wire serialization, equality, or hashing.
+    public var estimatedUnlockingScriptByteCount: Int?
+
     public init(
         previousOutput: Outpoint,
         unlockingScript: Script,
         sequence: UInt32 = TransactionInput.finalSequence,
-        sourceOutput: TransactionOutput? = nil
+        sourceOutput: TransactionOutput? = nil,
+        estimatedUnlockingScriptByteCount: Int? = nil
     ) {
         self.previousOutput = previousOutput
         self.unlockingScript = unlockingScript
         self.sequence = sequence
         self.sourceOutput = sourceOutput
+        self.estimatedUnlockingScriptByteCount = estimatedUnlockingScriptByteCount
     }
 
     public static func == (lhs: TransactionInput, rhs: TransactionInput) -> Bool {

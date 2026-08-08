@@ -106,6 +106,7 @@ supports exactly one version byte.
 | `scriptnum.encode` | `{value,era}` | `{bytes}` |
 | `scriptnum.decode` | `{bytes,era,minimal,maxBytes}` | `{value}` |
 | `transaction.decode` | `{bytes}` | `{bytes,version,inputs,outputs,lockTime,txid}` |
+| `transaction.fee` | `{bytes,satoshisPerKilobyte,unlockingByteCounts}` | `{fee}` using actual nonempty scripts or one decimal-string/null estimate per input |
 | `transaction.p2pkh.sign` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash,privateKey}` | `{unlockingScript}` using the pinned Go signer |
 | `transaction.sighash` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash}` | `{preimage,digest}` for the pinned Go replay-protected algorithm |
 

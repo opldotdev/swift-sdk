@@ -136,6 +136,7 @@ big.umod
 scriptnum.encode|decode
 drbg.generate
 transaction.decode
+transaction.fee
 transaction.p2pkh.sign
 transaction.sighash
 script.asm.decode|encode|names

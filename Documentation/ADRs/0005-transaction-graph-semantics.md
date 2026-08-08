@@ -23,6 +23,10 @@ is not serialized and does not participate in equality or hashing; adding
 known source information cannot change the identity of otherwise equal wire
 transactions.
 
+Construction-only fee metadata follows the same rule: unsigned inputs may
+carry an unlocking-script size estimate and outputs may be marked as change.
+Neither marker participates in wire serialization, equality, or hashing.
+
 Complete source transactions are not recursively embedded in inputs. The BEEF
 packet will introduce an explicit graph/store keyed by `TransactionID` and
 will pass that store or a resolver into ancestry-dependent operations. The

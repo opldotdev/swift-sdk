@@ -77,8 +77,8 @@ differentials, and Fable review.
 - Script representation, parsing, ASM, opcodes, and templates that do not sign.
 - Resource-bounded script numbers and era configuration.
 - Transaction model, parsing, serialization, IDs, and outpoints. (Accepted)
-- Fee models.
-- Sighash variants and transaction-aware unlocking templates.
+- Fee models and checked equal change distribution. (Accepted)
+- ForkID sighash variants and P2PKH transaction signing. (Accepted)
 
 ## Phase 5: Script execution
 

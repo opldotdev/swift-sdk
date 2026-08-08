@@ -24,6 +24,7 @@ import (
 	scriptpkg "github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/script/interpreter"
 	"github.com/bsv-blockchain/go-sdk/transaction"
+	feemodelpkg "github.com/bsv-blockchain/go-sdk/transaction/fee_model"
 	sighashpkg "github.com/bsv-blockchain/go-sdk/transaction/sighash"
 	p2pkhpkg "github.com/bsv-blockchain/go-sdk/transaction/template/p2pkh"
 	"github.com/bsv-blockchain/go-sdk/util"
@@ -348,6 +349,45 @@ func execute(req request, meta metadata) (result any, err error) {
 			"txid":     tx.TxID().String(),
 			"version":  strconv.FormatUint(uint64(tx.Version), 10),
 		}, nil
+	case "transaction.fee":
+		var args struct {
+			Bytes               string    `json:"bytes"`
+			SatoshisPerKilobyte string    `json:"satoshisPerKilobyte"`
+			UnlockingByteCounts []*string `json:"unlockingByteCounts"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		rate, err := decimalUint(args.SatoshisPerKilobyte, 64)
+		if err != nil {
+			return nil, err
+		}
+		tx, err := transaction.NewTransactionFromBytes(data)
+		if err != nil {
+			return nil, err
+		}
+		if len(args.UnlockingByteCounts) != len(tx.Inputs) {
+			return nil, categorizedError{"invalidLength", "unlockingByteCounts must have one entry per input"}
+		}
+		for inputIndex, encodedCount := range args.UnlockingByteCounts {
+			if encodedCount == nil {
+				continue
+			}
+			count, err := decimalUint(*encodedCount, 32)
+			if err != nil {
+				return nil, err
+			}
+			tx.Inputs[inputIndex].UnlockingScriptTemplate = fixedLengthUnlocker(count)
+		}
+		fee, err := (&feemodelpkg.SatoshisPerKilobyte{Satoshis: rate}).ComputeFee(tx)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"fee": strconv.FormatUint(fee, 10)}, nil
 	case "transaction.sighash":
 		var args struct {
 			Bytes          string `json:"bytes"`
@@ -468,6 +508,16 @@ func execute(req request, meta metadata) (result any, err error) {
 	default:
 		return nil, categorizedError{"unsupportedOperation", "operation is not in the pinned registry"}
 	}
+}
+
+type fixedLengthUnlocker uint32
+
+func (f fixedLengthUnlocker) Sign(*transaction.Transaction, uint32) (*scriptpkg.Script, error) {
+	return nil, errors.New("fixed-length oracle unlocker cannot sign")
+}
+
+func (f fixedLengthUnlocker) EstimateLength(*transaction.Transaction, uint32) uint32 {
+	return uint32(f)
 }
 
 func generateDRBG(raw json.RawMessage) (any, error) {

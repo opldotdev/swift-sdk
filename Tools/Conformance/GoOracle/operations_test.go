@@ -173,7 +173,7 @@ func TestCompleteOperationRegistry(t *testing.T) {
 		"base64.decode", "base64.encode", "big.umod", "bytes.reverse", "digest32.display",
 		"digest32.parse", "drbg.generate", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "metadata",
-		"script.asm.decode", "script.asm.encode", "script.asm.names", "scriptnum.decode", "scriptnum.encode", "transaction.decode", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
+		"script.asm.decode", "script.asm.encode", "script.asm.names", "scriptnum.decode", "scriptnum.encode", "transaction.decode", "transaction.fee", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
 	}
@@ -191,6 +191,50 @@ func TestTransactionSighashRejectsNonForkIDFlags(t *testing.T) {
 		}
 		if got := normalizeError(err).Category; got != "invalidEncoding" {
 			t.Fatalf("flag %s: got %s, want invalidEncoding", flag, got)
+		}
+	}
+}
+
+func TestTransactionFeeUsesActualScriptsAndExplicitEstimates(t *testing.T) {
+	emptyInputTransaction := `0100000001` + strings.Repeat("00", 32) + `0000000000ffffffff0000000000`
+	for _, tc := range []struct {
+		name string
+		args string
+		want string
+	}{
+		{
+			"projected P2PKH input",
+			`{"bytes":"` + emptyInputTransaction + `","satoshisPerKilobyte":"1000","unlockingByteCounts":["106"]}`,
+			"157",
+		},
+		{
+			"zero rate",
+			`{"bytes":"` + emptyInputTransaction + `","satoshisPerKilobyte":"0","unlockingByteCounts":["106"]}`,
+			"0",
+		},
+		{
+			"empty transaction rounds up",
+			`{"bytes":"01000000000000000000","satoshisPerKilobyte":"1","unlockingByteCounts":[]}`,
+			"1",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := execute(testRequest("transaction.fee", tc.args), metadata{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, map[string]string{"fee": tc.want}) {
+				t.Fatalf("got %#v, want fee %s", got, tc.want)
+			}
+		})
+	}
+
+	for _, args := range []string{
+		`{"bytes":"` + emptyInputTransaction + `","satoshisPerKilobyte":"1000","unlockingByteCounts":[]}`,
+		`{"bytes":"` + emptyInputTransaction + `","satoshisPerKilobyte":"1000","unlockingByteCounts":[null]}`,
+	} {
+		if _, err := execute(testRequest("transaction.fee", args), metadata{}); err == nil {
+			t.Fatalf("expected fee operation failure for %s", args)
 		}
 	}
 }
@@ -225,6 +269,7 @@ func TestEveryOperationHasDeterministicSuccess(t *testing.T) {
 		testRequest("script.asm.encode", `{"bytes":"0051b3ff"}`),
 		testRequest("script.asm.names", `{}`),
 		testRequest("transaction.decode", `{"bytes":"01000000000000000000"}`),
+		testRequest("transaction.fee", `{"bytes":"01000000000000000000","satoshisPerKilobyte":"100","unlockingByteCounts":[]}`),
 		testRequest("transaction.p2pkh.sign", `{"bytes":"0100000001`+strings.Repeat("00", 32)+`0000000000ffffffff0100000000000000000000000000","inputIndex":"0","sourceSatoshis":"0","sourceScript":"","signatureHash":"65","privateKey":"`+strings.Repeat("00", 31)+`01"}`),
 		testRequest("transaction.sighash", `{"bytes":"0100000001`+strings.Repeat("00", 32)+`0000000000ffffffff0100000000000000000000000000","inputIndex":"0","sourceSatoshis":"0","sourceScript":"","signatureHash":"65"}`),
 	}

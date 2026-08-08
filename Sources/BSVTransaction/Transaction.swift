@@ -197,6 +197,16 @@ public struct Transaction: Hashable, Sendable {
     }
 
     public func serializedByteCount(limits: TransactionLimits) throws -> Int {
+        try serializedByteCount(
+            unlockingScriptByteCounts: inputs.map { $0.unlockingScript.byteCount },
+            limits: limits
+        )
+    }
+
+    package func serializedByteCount(
+        unlockingScriptByteCounts: [Int],
+        limits: TransactionLimits
+    ) throws -> Int {
         guard UInt64(inputs.count) <= limits.maximumInputCount else {
             throw TransactionError.inputCountExceedsLimit(
                 actual: UInt64(inputs.count),
@@ -209,17 +219,32 @@ public struct Transaction: Hashable, Sendable {
                 maximum: limits.maximumOutputCount
             )
         }
+        guard unlockingScriptByteCounts.count == inputs.count else {
+            throw TransactionError.serializedSizeOverflow
+        }
 
         var total = 4
         try Self.add(CompactSize.encodedLength(of: UInt64(inputs.count)), to: &total)
-        for input in inputs {
-            try Self.validate(script: input.unlockingScript, limits: limits)
+        for (inputIndex, scriptByteCount) in unlockingScriptByteCounts.enumerated() {
+            guard scriptByteCount >= 0 else {
+                throw TransactionError.invalidUnlockingScriptEstimate(
+                    inputIndex: inputIndex,
+                    byteCount: scriptByteCount
+                )
+            }
+            let scriptByteCount64 = UInt64(scriptByteCount)
+            guard scriptByteCount64 <= limits.maximumScriptByteCount else {
+                throw TransactionError.scriptTooLarge(
+                    actual: scriptByteCount64,
+                    maximum: limits.maximumScriptByteCount
+                )
+            }
             try Self.add(32 + 4 + 4, to: &total)
             try Self.add(
-                CompactSize.encodedLength(of: UInt64(input.unlockingScript.byteCount)),
+                CompactSize.encodedLength(of: scriptByteCount64),
                 to: &total
             )
-            try Self.add(input.unlockingScript.byteCount, to: &total)
+            try Self.add(scriptByteCount, to: &total)
         }
         try Self.add(CompactSize.encodedLength(of: UInt64(outputs.count)), to: &total)
         for output in outputs {
