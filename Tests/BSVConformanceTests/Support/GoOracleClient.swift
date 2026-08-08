@@ -180,7 +180,7 @@ enum GoOracleClientError: Error, Equatable, Sendable {
     case responseTooLarge
     case timeout
     case transport(String)
-    case processExited(Int32)
+    case processExited(Int32, String)
     case malformedOutput(String)
 }
 
@@ -388,10 +388,16 @@ final class GoOracleClient: @unchecked Sendable {
             }
         }
         let outputHandle = outputPipe.fileHandleForReading
+        let errorHandle = errorPipe.fileHandleForReading
         process.terminationHandler = { process in
             outputHandle.readabilityHandler = nil
+            errorHandle.readabilityHandler = nil
             _ = reader.append(outputHandle.readDataToEndOfFile())
-            reader.fail(with: .processExited(process.terminationStatus))
+            _ = diagnostics.append(errorHandle.readDataToEndOfFile())
+            reader.fail(with: .processExited(
+                process.terminationStatus,
+                oracleDiagnosticSummary(diagnostics.value)
+            ))
             terminated.signal()
         }
         do { try process.run() }
@@ -538,11 +544,29 @@ final class GoOracleClient: @unchecked Sendable {
         }
         if output.exceededLimit { throw GoOracleClientError.responseTooLarge }
         if diagnostics.exceededLimit { throw GoOracleClientError.transport("oracle diagnostics exceeded 1 MiB") }
-        guard process.terminationStatus == 0 else { throw GoOracleClientError.processExited(process.terminationStatus) }
+        guard process.terminationStatus == 0 else {
+            throw GoOracleClientError.processExited(
+                process.terminationStatus,
+                oracleDiagnosticSummary(diagnostics.value)
+            )
+        }
         let data = output.value
         guard data.count <= goOracleMaximumLineBytes else { throw GoOracleClientError.responseTooLarge }
         return data
     }
+}
+
+private func oracleDiagnosticSummary(_ data: Data) -> String {
+    let text = String(decoding: data.prefix(4_096), as: UTF8.self)
+    let sanitized = text.unicodeScalars.map { scalar -> String in
+        switch scalar.properties.generalCategory {
+        case .control, .format, .lineSeparator, .paragraphSeparator:
+            return " "
+        default:
+            return String(scalar)
+        }
+    }.joined()
+    return sanitized.split(whereSeparator: \Character.isWhitespace).joined(separator: " ")
 }
 
 private final class GoOracleLineReader: @unchecked Sendable {

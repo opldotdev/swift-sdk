@@ -79,6 +79,23 @@ struct GoOracleProtocolTests {
         #expect(Date().timeIntervalSince(started) < 3.5)
     }
 
+    @Test("Metadata process exit includes bounded diagnostics")
+    func metadataExitDiagnostics() throws {
+        let script = try fakeOracle(
+            metadata: validMetadata(),
+            serve: .success,
+            metadataExitDiagnostic: "oracle pin validation failed: missing tag"
+        )
+        var configuration = testConfiguration(executable: script)
+        configuration.required = true
+        #expect(throws: GoOracleClientError.processExited(
+            3,
+            "oracle pin validation failed: missing tag"
+        )) {
+            try GoOracleClient.connect(configuration: configuration)
+        }
+    }
+
     @Test("Framing and normalized operation errors decode")
     func framingAndErrorDecode() throws {
         let successScript = try fakeOracle(metadata: validMetadata(), serve: .success)
@@ -176,10 +193,10 @@ struct GoOracleProtocolTests {
     @Test("Nonzero process exit is typed")
     func processExit() throws {
         let client = try requireClient(fakeOracle(metadata: validMetadata(), serve: .exitSeven))
-        #expect(throws: GoOracleClientError.processExited(7)) {
+        #expect(throws: GoOracleClientError.processExited(7, "safe diagnostic")) {
             try client.request(id: "one", operation: "metadata", arguments: [:])
         }
-        #expect(throws: GoOracleClientError.processExited(7)) {
+        #expect(throws: GoOracleClientError.processExited(7, "safe diagnostic")) {
             try client.request(id: "two", operation: "metadata", arguments: [:])
         }
     }
@@ -297,7 +314,8 @@ private func requireClient(_ executable: URL) throws -> GoOracleClient {
 
 private func fakeOracle(
     metadata: GoOracleMetadata, serve behavior: ServeBehavior, metadataUnknownField: Bool = false,
-    metadataUnknownHash: Bool = false, metadataHang: Bool = false
+    metadataUnknownHash: Bool = false, metadataHang: Bool = false,
+    metadataExitDiagnostic: String? = nil
 ) throws -> URL {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("go-oracle-protocol-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -333,13 +351,20 @@ private func fakeOracle(
     case .noRead:
         serve = "while :; do :; done"
     case .exitSeven:
-        serve = "exit 7"
+        serve = "printf '%s\\n' 'safe diagnostic' >&2; exit 7"
     case .unknownResponseField:
         serve = "printf '%s\\n' '{\"schema\":\"bsv-conformance/1\",\"id\":\"one\",\"ok\":true,\"result\":{},\"unknown\":true}'"
     case .unknownErrorField:
         serve = "printf '%s\\n' '{\"schema\":\"bsv-conformance/1\",\"id\":\"one\",\"ok\":false,\"error\":{\"category\":\"internal\",\"message\":\"x\",\"unknown\":true}}'"
     }
-    let metadataCommand = metadataHang ? "while :; do :; done" : "printf '%s\\n' '\(metadataLine)'"
+    let metadataCommand: String
+    if let metadataExitDiagnostic {
+        metadataCommand = "printf '%s\\n' '\(metadataExitDiagnostic)' >&2; exit 3"
+    } else if metadataHang {
+        metadataCommand = "while :; do :; done"
+    } else {
+        metadataCommand = "printf '%s\\n' '\(metadataLine)'"
+    }
     let script = """
         #!/bin/sh
         case "$1" in

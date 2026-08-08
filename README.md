@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⛓️ BSV Blockchain | Swift SDK
+# BSV Blockchain | Swift SDK
 
 **A unified, peer-to-peer, SPV-first SDK for scalable BSV applications in Swift.**
 
@@ -43,28 +43,28 @@
 
 <table align="center">
   <tr>
-    <td align="center" width="25%">📦&nbsp;<a href="#-installation"><code>Installation</code></a></td>
-    <td align="center" width="25%">🚀&nbsp;<a href="#-basic-usage"><code>Basic&nbsp;Usage</code></a></td>
-    <td align="center" width="25%">✨&nbsp;<a href="#-features"><code>Features</code></a></td>
-    <td align="center" width="25%">🧪&nbsp;<a href="#-examples"><code>Examples</code></a></td>
+    <td align="center" width="25%"><a href="#installation"><code>Installation</code></a></td>
+    <td align="center" width="25%"><a href="#basic-usage"><code>Basic&nbsp;Usage</code></a></td>
+    <td align="center" width="25%"><a href="#features"><code>Features</code></a></td>
+    <td align="center" width="25%"><a href="#examples"><code>Examples</code></a></td>
   </tr>
   <tr>
-    <td align="center">📚&nbsp;<a href="#-documentation"><code>Documentation</code></a></td>
-    <td align="center">🧰&nbsp;<a href="#-tests"><code>Tests</code></a></td>
-    <td align="center">🛠️&nbsp;<a href="#-code-standards"><code>Code&nbsp;Standards</code></a></td>
-    <td align="center">👤&nbsp;<a href="#-maintainer"><code>Maintainer</code></a></td>
+    <td align="center"><a href="#documentation"><code>Documentation</code></a></td>
+    <td align="center"><a href="#tests"><code>Tests</code></a></td>
+    <td align="center"><a href="#code-standards"><code>Code&nbsp;Standards</code></a></td>
+    <td align="center"><a href="#maintainer"><code>Maintainer</code></a></td>
   </tr>
   <tr>
-    <td align="center">🧱&nbsp;<a href="#-modules"><code>Modules</code></a></td>
-    <td align="center">🤝&nbsp;<a href="#-contributing"><code>Contributing</code></a></td>
-    <td align="center">📝&nbsp;<a href="#-license"><code>License</code></a></td>
-    <td align="center">🔗&nbsp;<a href="Documentation/Compatibility/GoSDK-v1.3.3.md"><code>Go&nbsp;Parity</code></a></td>
+    <td align="center"><a href="#modules"><code>Modules</code></a></td>
+    <td align="center"><a href="#contributing"><code>Contributing</code></a></td>
+    <td align="center"><a href="#license"><code>License</code></a></td>
+    <td align="center"><a href="Documentation/Compatibility/GoSDK-v1.3.3.md"><code>Go&nbsp;Parity</code></a></td>
   </tr>
 </table>
 
 <br/>
 
-## 🧩 What is in the SDK
+## What is in the SDK
 
 The Swift SDK supplies the main data types and functions for BSV applications.
 It supports cryptography, keys, Script, transactions, Merkle proofs,
@@ -89,7 +89,7 @@ library when you need a smaller dependency set.
 | visionOS | 1 |
 | Linux | Swift 6.1 toolchain |
 
-## 📦 Installation
+## Installation
 
 Add the package to `Package.swift`:
 
@@ -119,7 +119,7 @@ Import the SDK:
 import BSV
 ```
 
-## 🚀 Basic usage
+## Basic usage
 
 The following example creates a key and a mainnet address:
 
@@ -162,7 +162,7 @@ print(Base58.encode(decoded.bytes))
 print(script.isPayToPublicKeyHash)
 ```
 
-## ✨ Features
+## Features
 
 ### Transactions and SPV
 
@@ -213,7 +213,7 @@ print(script.isPayToPublicKeyHash)
 - Reports an ARC response failure after POST as uncertain delivery.
 - Compares specified wire formats with the pinned Go SDK v1.3.3.
 
-## 🧱 Modules
+## Modules
 
 | Module | Purpose |
 | --- | --- |
@@ -229,7 +229,7 @@ print(script.isPayToPublicKeyHash)
 | `BSVWallet` | Supplies offline BRC-100 cryptography and BRC-52 certificate values. |
 | `BSVAuth` | Supplies portable messages and offline certificate workflows. |
 
-## 🧪 Examples
+## Examples
 
 ### Hierarchical keys
 
@@ -270,7 +270,7 @@ let value = BIP276(
 print(try value.encoded(limits: limits))
 ```
 
-## 📚 Documentation
+## Documentation
 
 - [Architecture](Documentation/Planning/Architecture.md)
 - [Compatibility decisions](Documentation/Compatibility/README.md)
@@ -279,7 +279,7 @@ print(try value.encoded(limits: limits))
 - [Architecture decisions](Documentation/ADRs/README.md)
 - [Third-party notices](NOTICE.md)
 
-## 🧰 Tests
+## Tests
 
 Run the complete Swift test suite:
 
@@ -290,7 +290,7 @@ swift test --disable-sandbox
 GitHub Actions runs the test suite on macOS and Linux. It also checks the
 public API and compares supported wire behavior with the pinned Go SDK v1.3.3.
 
-## 🛠️ Code standards
+## Code standards
 
 - Use Swift 6 language mode and strict concurrency checks.
 - Use typed errors for invalid input and failed operations.
@@ -298,7 +298,7 @@ public API and compares supported wire behavior with the pinned Go SDK v1.3.3.
 - Add unit tests and conformance tests for each wire format.
 - Keep secret values out of descriptions, reflection, and error text.
 
-## 👤 Maintainer
+## Maintainer
 
 Luke maintains this repository.
 
@@ -306,7 +306,7 @@ Luke maintains this repository.
 |:---:|
 | [Luke](https://github.com/rohenaz) |
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome.
 
@@ -316,7 +316,7 @@ Contributions are welcome.
 4. Run `swift test --disable-sandbox`.
 5. Open a pull request.
 
-## 📝 License
+## License
 
 The Swift SDK uses the [MIT License](LICENSE).
 
