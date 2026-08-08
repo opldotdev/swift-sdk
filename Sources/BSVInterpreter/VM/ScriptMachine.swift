@@ -57,11 +57,11 @@ package struct ScriptMachine {
 
             let executing = isExecuting
                 && (!returningWithinConditional || opcode == .return)
-            if isLegacyDisabled(opcode), configuration.era != .chronicle,
-               configuration.era == .legacy || executing {
+            if isDisabledBeforeChronicle(opcode), configuration.era != .afterChronicle,
+               configuration.era == .beforeGenesis || executing {
                 throw ScriptExecutionError.consensus(.disabledOpcode(opcode))
             }
-            if isAlwaysIllegalBeforeGenesis(opcode), configuration.era == .legacy {
+            if isAlwaysIllegalBeforeGenesis(opcode), configuration.era == .beforeGenesis {
                 throw ScriptExecutionError.consensus(.reservedOpcode(opcode))
             }
 
@@ -101,7 +101,7 @@ package struct ScriptMachine {
             case Opcode.nop.rawValue:
                 break
             case Opcode.ver.rawValue:
-                guard configuration.era == .chronicle else {
+                guard configuration.era == .afterChronicle else {
                     throw ScriptExecutionError.consensus(.reservedOpcode(opcode))
                 }
                 guard let context else {
@@ -113,7 +113,7 @@ package struct ScriptMachine {
                     throw ScriptExecutionError.consensus(.verifyFailed)
                 }
             case Opcode.return.rawValue:
-                guard configuration.era != .legacy else {
+                guard configuration.era != .beforeGenesis else {
                     throw ScriptExecutionError.consensus(.earlyReturn)
                 }
                 didEarlyReturn = true
@@ -436,7 +436,7 @@ package struct ScriptMachine {
                     throw ScriptExecutionError.consensus(.checkMultiSignatureVerifyFailed)
                 }
             case Opcode.leftShiftNumber.rawValue, Opcode.rightShiftNumber.rawValue:
-                if configuration.era == .chronicle {
+                if configuration.era == .afterChronicle {
                     let shift = try popNativeNumber()
                     guard shift >= 0 else {
                         throw ScriptExecutionError.consensus(.invalidShiftAmount(shift))
@@ -463,7 +463,7 @@ package struct ScriptMachine {
                     throw ScriptExecutionError.consensus(.discouragedUpgradeableNop(opcode))
                 }
             case Opcode.checkLockTimeVerify.rawValue:
-                if configuration.era != .legacy
+                if configuration.era != .beforeGenesis
                     || !configuration.flags.contains(.checkLockTimeVerify) {
                     if configuration.flags.contains(.discourageUpgradeableNops) {
                         throw ScriptExecutionError.consensus(.discouragedUpgradeableNop(opcode))
@@ -472,7 +472,7 @@ package struct ScriptMachine {
                 }
                 try executeCheckLockTime(opcode)
             case Opcode.checkSequenceVerify.rawValue:
-                if configuration.era != .legacy
+                if configuration.era != .beforeGenesis
                     || !configuration.flags.contains(.checkSequenceVerify) {
                     if configuration.flags.contains(.discourageUpgradeableNops) {
                         throw ScriptExecutionError.consensus(.discouragedUpgradeableNop(opcode))
@@ -487,8 +487,8 @@ package struct ScriptMachine {
                     throw ScriptExecutionError.consensus(.discouragedUpgradeableNop(opcode))
                 }
             case Opcode.substring.rawValue, Opcode.left.rawValue, Opcode.right.rawValue:
-                if configuration.era == .chronicle {
-                    try executeChronicleSlice(opcode)
+                if configuration.era == .afterChronicle {
+                    try executeAfterChronicleSlice(opcode)
                     break
                 }
                 if configuration.flags.contains(.discourageUpgradeableNops) {
@@ -552,7 +552,7 @@ package struct ScriptMachine {
             guard let state = conditions.last, let seen = elseSeen.last else {
                 throw ScriptExecutionError.consensus(.unbalancedConditional)
             }
-            if configuration.era != .legacy, seen {
+            if configuration.era != .beforeGenesis, seen {
                 throw ScriptExecutionError.consensus(.multipleElse)
             }
             elseSeen[elseSeen.count - 1] = true
@@ -568,9 +568,9 @@ package struct ScriptMachine {
             conditions.removeLast()
             elseSeen.removeLast()
         case Opcode.verIf.rawValue, Opcode.verNotIf.rawValue:
-            guard configuration.era == .chronicle else {
-                // Genesis made these branch-sensitive before Chronicle gave
-                // them transaction-version matching semantics.
+            guard configuration.era == .afterChronicle else {
+                // After Genesis these are branch-sensitive; after Chronicle they
+                // receive transaction-version matching semantics.
                 guard !isExecuting || !mayEvaluateCondition else {
                     throw ScriptExecutionError.consensus(.reservedOpcode(opcode))
                 }
@@ -808,7 +808,7 @@ package struct ScriptMachine {
         return result
     }
 
-    private mutating func executeChronicleSlice(_ opcode: Opcode) throws {
+    private mutating func executeAfterChronicleSlice(_ opcode: Opcode) throws {
         let length = try popNativeNumber()
         if opcode == .substring {
             let offset = try popNativeNumber()
@@ -899,7 +899,7 @@ package struct ScriptMachine {
         }
 
         let rawPublicKeyCount = try popNativeNumber()
-        let maximumPublicKeys = configuration.era == .legacy ? 20 : Int64(Int32.max)
+        let maximumPublicKeys = configuration.era == .beforeGenesis ? 20 : Int64(Int32.max)
         guard rawPublicKeyCount >= 0, rawPublicKeyCount <= maximumPublicKeys else {
             throw ScriptExecutionError.consensus(.invalidPublicKeyCount(rawPublicKeyCount))
         }
@@ -1182,7 +1182,7 @@ package struct ScriptMachine {
     private func peekNativeNumber(maximumByteCount: Int) throws -> Int64 {
         let encoded = try mainStack.peek()
         // CLTV and CSV deliberately accept a five-byte script number even in
-        // legacy execution, where ordinary arithmetic remains limited to four
+        // before-Genesis execution, where ordinary arithmetic remains limited to four
         // bytes. The caller supplies the opcode-specific consensus bound.
         let consensusMaximum = maximumByteCount
         if encoded.count > consensusMaximum {
@@ -1301,7 +1301,7 @@ package struct ScriptMachine {
         opcode == .verIf || opcode == .verNotIf
     }
 
-    private func isLegacyDisabled(_ opcode: Opcode) -> Bool {
+    private func isDisabledBeforeChronicle(_ opcode: Opcode) -> Bool {
         switch opcode.rawValue {
         case Opcode.twoMul.rawValue, Opcode.twoDiv.rawValue:
             true

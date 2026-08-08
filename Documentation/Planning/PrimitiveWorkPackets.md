@@ -407,7 +407,7 @@ Base58Check is intentionally not a standalone Phase 1 packet. It combines with
 the first Phase 3 WIF/address work packet in `BSVKeys`, after P1-B Base58 and
 P1-C SHA256d are accepted. That packet will own arbitrary version/payload
 Base58Check, checksum and size validation, WIF scalar/network/compression rules,
-and legacy address formats. ISC `bitcoinsv/bsvutil` fixtures and the P0-B
+and P2PKH address formats. ISC `bitcoinsv/bsvutil` fixtures and the P0-B
 `base58check.encode|decode` operations are registered now so the dependency is
 visible without adding a one-file scheduling barrier.
 

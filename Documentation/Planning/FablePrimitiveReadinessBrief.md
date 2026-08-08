@@ -1,5 +1,8 @@
 # Fable consult: primitive implementation readiness
 
+Status: Historical review brief. Its package map is superseded by ADR-0001 and
+`Documentation/Planning/Architecture.md`.
+
 ## Goal
 
 Act as an independent, read-only architecture and cryptography reviewer for a

@@ -75,8 +75,9 @@ The SDK uses Swift value types and typed errors. Public values that cross tasks
 conform to `Sendable`. Decoders use explicit limits when input can cause large
 memory use.
 
-Use the `BSV` library to import all public modules. You can import a focused
-library when you need a smaller dependency set.
+Use the `BSV` library to import the modern public modules. You can import a
+focused library when you need a smaller dependency set. Compatibility features
+are available separately from `BSVCompat`.
 
 ## Requirements
 
@@ -130,7 +131,7 @@ import BSV
 let privateKey = try PrivateKey(
     [UInt8](repeating: 0, count: 31) + [1]
 )
-let address = LegacyAddress(
+let address = Address(
     publicKey: privateKey.publicKey,
     network: .mainnet
 )
@@ -190,8 +191,7 @@ print(script.isPayToPublicKeyHash)
 - Supplies AES-CBC, AES-GCM, and HMAC-DRBG.
 - Uses libsecp256k1 for keys, ECDSA, recovery, ECDH, and key tweaks.
 - Supports BRC-42 child keys and BRC-94 shared-secret proofs.
-- Supports BIP-32 keys and English BIP-39 mnemonics.
-- Supports WIF, legacy P2PKH addresses, BSM, and legacy ECIES.
+- Supports WIF and P2PKH addresses.
 - Supports BRC-140 key shares for offline backups.
 
 ### Wallets, messages, and network services
@@ -217,26 +217,50 @@ print(script.isPayToPublicKeyHash)
 
 | Module | Purpose |
 | --- | --- |
-| `BSV` | Imports all public SDK modules. |
+| `BSV` | Imports the modern public SDK modules. |
 | `BSVCore` | Supplies bytes, fixed hashes, encodings, and CompactSize. |
-| `BSVCrypto` | Supplies hashes, symmetric cryptography, and secp256k1. |
-| `BSVKeys` | Supplies key formats, addresses, BIP-32, BIP-39, BSM, and ECIES. |
+| `BSVCrypto` | Supplies hashes, symmetric cryptography, key derivation functions, and random data. |
+| `BSVKeys` | Supplies secp256k1 keys and signatures, ECDH, key tweaks, WIF, addresses, BRC-42, BRC-94, and BRC-140. |
+| `BSVMessage` | Supplies bounded BRC-77 signed messages and BRC-78 encrypted messages. |
+| `BSVCompat` | Supplies opt-in BSM, ECIES, BIP-32, and BIP-39 compatibility APIs. |
 | `BSVScript` | Supplies Script data, BIP-276, opcodes, ASM, numbers, and templates. |
 | `BSVTransaction` | Supplies transactions, inscriptions, fees, signing, BUMP, and BEEF. |
 | `BSVInterpreter` | Runs Bitcoin Script with explicit limits. |
 | `BSVSPV` | Verifies BRC-67 SPV proofs. |
 | `BSVNetwork` | Supplies ARC, chain tracking, and transaction broadcast services. |
 | `BSVWallet` | Supplies offline BRC-100 cryptography and BRC-52 certificate values. |
-| `BSVAuth` | Supplies portable messages and offline certificate workflows. |
+| `BSVAuth` | Supplies offline certificate workflows and future authentication sessions. |
+
+## BSVCompat
+
+`BSVCompat` is an opt-in product. The `BSV` umbrella does not import it. Add
+the `BSVCompat` product to a target that must read or write these formats:
+
+```swift
+import BSVCompat
+
+let mnemonic = try Mnemonic(
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+)
+```
+
+Use the modern protocol API for new applications when a replacement exists:
+
+| Compatibility API | Preferred API for new applications |
+| --- | --- |
+| Bitcoin Signed Message | BRC-77 `SignedMessage` from `BSVMessage` |
+| Electrum and Bitcore ECIES | BRC-78 `EncryptedMessage` from `BSVMessage` |
+| BIP-32 protocol keys | BRC-42 derivation from `BSVKeys` |
+| BIP-39 mnemonic backup or import | No replacement; use `BSVCompat` when required |
 
 ## Examples
 
 ### Hierarchical keys
 
-Create a BIP-39 seed and derive a BIP-32 account key:
+Create a compatibility BIP-39 seed and derive a BIP-32 account key:
 
 ```swift
-import BSV
+import BSVCompat
 
 let mnemonic = try Mnemonic(
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"

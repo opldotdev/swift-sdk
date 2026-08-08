@@ -1,4 +1,4 @@
-/// A stable error reported while parsing a legacy key or address format.
+/// A stable error reported while parsing a key or address format.
 public enum KeyFormatError: Error, Equatable, Sendable {
     /// Base58Check decoding failed with the preserved underlying cause.
     case invalidEncoding(Base58CheckError)

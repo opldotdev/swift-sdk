@@ -58,7 +58,7 @@ struct ScriptInterpreterTests {
                 Opcode.return.rawValue,
             ],
             locking: [Opcode.fromAltStack.rawValue],
-            era: .genesis
+            era: .afterGenesis
         )
         #expect(earlyReturn.stack == [[1]])
     }
@@ -93,7 +93,7 @@ struct ScriptInterpreterTests {
                     Opcode.if.rawValue,
                     Opcode.return.rawValue,
                 ],
-                era: .genesis
+                era: .afterGenesis
             )
         }
 
@@ -107,11 +107,11 @@ struct ScriptInterpreterTests {
                 Opcode.zero.rawValue,
                 Opcode.one.rawValue,
             ],
-            era: .genesis
+            era: .afterGenesis
         )
         #expect(balancedReturn.stack == [[1]])
 
-        let hiddenGenesisVersionConditional = try execute(
+        let hiddenAfterGenesisVersionConditional = try execute(
             unlocking: [],
             locking: [
                 Opcode.zero.rawValue,
@@ -120,11 +120,11 @@ struct ScriptInterpreterTests {
                 Opcode.endIf.rawValue,
                 Opcode.one.rawValue,
             ],
-            era: .genesis
+            era: .afterGenesis
         )
-        #expect(hiddenGenesisVersionConditional.stack == [[1]])
+        #expect(hiddenAfterGenesisVersionConditional.stack == [[1]])
 
-        let returnedGenesisVersionConditional = try execute(
+        let returnedAfterGenesisVersionConditional = try execute(
             unlocking: [Opcode.one.rawValue],
             locking: [
                 Opcode.one.rawValue,
@@ -133,21 +133,21 @@ struct ScriptInterpreterTests {
                 Opcode.verIf.rawValue,
                 Opcode.endIf.rawValue,
             ],
-            era: .genesis
+            era: .afterGenesis
         )
-        #expect(returnedGenesisVersionConditional.stack == [[1]])
+        #expect(returnedAfterGenesisVersionConditional.stack == [[1]])
 
         #expect(throws: ScriptExecutionError.consensus(.reservedOpcode(.verIf))) {
             try execute(
                 unlocking: [],
                 locking: [Opcode.one.rawValue, Opcode.if.rawValue, Opcode.verIf.rawValue],
-                era: .genesis
+                era: .afterGenesis
             )
         }
     }
 
-    @Test("Chronicle version opcodes use the transaction version")
-    func chronicleVersionOpcodes() throws {
+    @Test("after-Chronicle version opcodes use the transaction version")
+    func afterChronicleVersionOpcodes() throws {
         let unlocking = try script([])
         let locking = try script([
             Opcode.ver.rawValue,
@@ -168,7 +168,7 @@ struct ScriptInterpreterTests {
         let result = try ScriptInterpreter.execute(
             unlockingScript: unlocking,
             lockingScript: locking,
-            configuration: configuration(era: .chronicle),
+            configuration: configuration(era: .afterChronicle),
             context: context
         )
         #expect(result.stack == [[1]])
@@ -177,14 +177,14 @@ struct ScriptInterpreterTests {
             try execute(
                 unlocking: [],
                 locking: [Opcode.ver.rawValue, Opcode.one.rawValue],
-                era: .chronicle
+                era: .afterChronicle
             )
         }
         #expect(throws: ScriptExecutionError.consensus(.unbalancedConditional)) {
             try execute(
                 unlocking: [],
                 locking: [Opcode.verIf.rawValue],
-                era: .chronicle
+                era: .afterChronicle
             )
         }
     }
@@ -195,7 +195,7 @@ struct ScriptInterpreterTests {
             #expect(throws: ScriptExecutionError.consensus(
                 .reservedOpcode(Opcode(rawValue: rawValue))
             )) {
-                try execute(unlocking: [], locking: [rawValue], era: .chronicle)
+                try execute(unlocking: [], locking: [rawValue], era: .afterChronicle)
             }
         }
 
@@ -208,12 +208,12 @@ struct ScriptInterpreterTests {
                 Opcode.endIf.rawValue,
                 Opcode.one.rawValue,
             ],
-            era: .genesis
+            era: .afterGenesis
         )
         #expect(hidden.stack == [[1]])
     }
 
-    @Test("Genesis permits only one ELSE while legacy preserves historical behavior")
+    @Test("after-Genesis permits only one ELSE while before-Genesis preserves historical behavior")
     func multipleElse() throws {
         let script: [UInt8] = [
             Opcode.one.rawValue,
@@ -225,13 +225,13 @@ struct ScriptInterpreterTests {
             Opcode.one.rawValue,
             Opcode.endIf.rawValue,
         ]
-        _ = try execute(unlocking: [], locking: script, era: .legacy)
+        _ = try execute(unlocking: [], locking: script, era: .beforeGenesis)
         #expect(throws: ScriptExecutionError.consensus(.multipleElse)) {
-            try execute(unlocking: [], locking: script, era: .genesis)
+            try execute(unlocking: [], locking: script, era: .afterGenesis)
         }
     }
 
-    @Test("post-Genesis OP_RETURN ignores trailing malformed push data")
+    @Test("after-Genesis OP_RETURN ignores trailing malformed push data")
     func returnStopsIncrementalDecoding() throws {
         let result = try execute(
             unlocking: [
@@ -240,7 +240,7 @@ struct ScriptInterpreterTests {
                 Opcode.pushData1.rawValue,
             ],
             locking: [Opcode.one.rawValue],
-            era: .genesis
+            era: .afterGenesis
         )
         #expect(result.didEarlyReturn)
         #expect(result.stack == [[1], [1]])
@@ -249,7 +249,7 @@ struct ScriptInterpreterTests {
             try execute(
                 unlocking: [],
                 locking: [Opcode.return.rawValue],
-                era: .legacy
+                era: .beforeGenesis
             )
         }
     }
@@ -264,7 +264,7 @@ struct ScriptInterpreterTests {
             try execute(
                 unlocking: [],
                 locking: [Opcode.pushData1.rawValue],
-                era: .genesis
+                era: .afterGenesis
             )
         }
     }
@@ -272,7 +272,7 @@ struct ScriptInterpreterTests {
     @Test("minimal push and minimal IF flags are independently enforced")
     func minimalEncoding() throws {
         let minimalData = try configuration(
-            era: .genesis,
+            era: .afterGenesis,
             flags: [.minimalData]
         )
         #expect(throws: ScriptExecutionError.consensus(.nonMinimalPush)) {
@@ -284,7 +284,7 @@ struct ScriptInterpreterTests {
         }
 
         let minimalIf = try configuration(
-            era: .genesis,
+            era: .afterGenesis,
             flags: [.minimalIf]
         )
         #expect(throws: ScriptExecutionError.consensus(.minimalIf)) {
@@ -304,7 +304,7 @@ struct ScriptInterpreterTests {
     @Test("push-only validation preserves malformed and resource failure types")
     func pushOnlyFailureTypes() throws {
         let malformedConfiguration = try configuration(
-            era: .legacy,
+            era: .beforeGenesis,
             flags: [.signaturePushOnly]
         )
         #expect(throws: ScriptExecutionError.malformedScript(
@@ -329,7 +329,7 @@ struct ScriptInterpreterTests {
             maximumScriptNumberByteCount: 10
         )
         let resourceConfiguration = try ScriptExecutionConfiguration(
-            era: .genesis,
+            era: .afterGenesis,
             flags: [.signaturePushOnly],
             resourceLimits: limits
         )
@@ -356,7 +356,7 @@ struct ScriptInterpreterTests {
             maximumScriptNumberByteCount: 100
         )
         let configuration = try ScriptExecutionConfiguration(
-            era: .genesis,
+            era: .afterGenesis,
             resourceLimits: limits
         )
         let result = try ScriptInterpreter.execute(
@@ -378,8 +378,8 @@ struct ScriptInterpreterTests {
             maximumConditionalDepth: 5,
             maximumScriptNumberByteCount: 5
         )
-        let genesis = try ScriptExecutionConfiguration(
-            era: .genesis,
+        let afterGenesis = try ScriptExecutionConfiguration(
+            era: .afterGenesis,
             resourceLimits: restrictive
         )
         #expect(throws: ScriptExecutionError.resourceBudgetExceeded(
@@ -388,18 +388,18 @@ struct ScriptInterpreterTests {
             try ScriptInterpreter.execute(
                 unlockingScript: try script([]),
                 lockingScript: try script(Array(repeating: Opcode.one.rawValue, count: 6)),
-                configuration: genesis
+                configuration: afterGenesis
             )
         }
 
-        let legacy = try configuration(era: .legacy)
+        let beforeGenesis = try configuration(era: .beforeGenesis)
         #expect(throws: ScriptExecutionError.consensus(
             .scriptTooLarge(actual: 10_001, maximum: 10_000)
         )) {
             try ScriptInterpreter.execute(
                 unlockingScript: try script([]),
                 lockingScript: try script(Array(repeating: Opcode.one.rawValue, count: 10_001)),
-                configuration: legacy
+                configuration: beforeGenesis
             )
         }
     }
@@ -430,7 +430,7 @@ struct ScriptInterpreterTests {
         _ = try ScriptInterpreter.execute(
             unlockingScript: unlocking,
             lockingScript: locking,
-            configuration: try configuration(era: .genesis),
+            configuration: try configuration(era: .afterGenesis),
             context: context
         )
 
@@ -439,7 +439,7 @@ struct ScriptInterpreterTests {
             try ScriptInterpreter.execute(
                 unlockingScript: unlocking,
                 lockingScript: wrongLock,
-                configuration: try configuration(era: .genesis),
+                configuration: try configuration(era: .afterGenesis),
                 context: context
             )
         }
@@ -449,14 +449,14 @@ struct ScriptInterpreterTests {
     func cleanStack() throws {
         #expect(throws: ScriptConfigurationError.cleanStackRequiresPayToScriptHash) {
             try ScriptExecutionConfiguration(
-                era: .legacy,
+                era: .beforeGenesis,
                 flags: [.cleanStack],
                 resourceLimits: .standard
             )
         }
 
         let configuration = try self.configuration(
-            era: .legacy,
+            era: .beforeGenesis,
             flags: [.cleanStack, .payToScriptHash]
         )
         #expect(throws: ScriptExecutionError.consensus(
@@ -478,7 +478,7 @@ struct ScriptInterpreterTests {
                 "0461626364527f7e046162636487",
                 maximumDecodedByteCount: 100
             ),
-            era: .genesis
+            era: .afterGenesis
         )
         #expect(splitAndCat.stack == [[1]])
 
@@ -488,7 +488,7 @@ struct ScriptInterpreterTests {
                 "017f5280027f0087",
                 maximumDecodedByteCount: 100
             ),
-            era: .genesis
+            era: .afterGenesis
         )
         #expect(num2bin.stack == [[1]])
 
@@ -498,7 +498,7 @@ struct ScriptInterpreterTests {
                 "020100815187",
                 maximumDecodedByteCount: 100
             ),
-            era: .genesis
+            era: .afterGenesis
         )
         #expect(bin2num.stack == [[1]])
     }
@@ -511,7 +511,7 @@ struct ScriptInterpreterTests {
                 "020ff00233cc840203c087",
                 maximumDecodedByteCount: 100
             ),
-            era: .genesis
+            era: .afterGenesis
         )
         #expect(result.stack == [[1]])
 
@@ -524,7 +524,7 @@ struct ScriptInterpreterTests {
                     "010102010284",
                     maximumDecodedByteCount: 100
                 ),
-                era: .genesis
+                era: .afterGenesis
             )
         }
     }
@@ -540,7 +540,7 @@ struct ScriptInterpreterTests {
         let result = try execute(
             unlocking: [],
             locking: [Opcode.zero.rawValue, opcode.rawValue],
-            era: .genesis
+            era: .afterGenesis
         )
         #expect(result.stack == [try Hex.decode(
             digestHex,
@@ -562,7 +562,7 @@ struct ScriptInterpreterTests {
         let result = try execute(
             unlocking: [],
             locking: try Hex.decode(scriptHex, maximumDecodedByteCount: 100),
-            era: .genesis
+            era: .afterGenesis
         )
         #expect(result.stack.last == [1])
     }
@@ -575,12 +575,12 @@ struct ScriptInterpreterTests {
         let result = try execute(
             unlocking: [],
             locking: try Hex.decode(scriptHex, maximumDecodedByteCount: 100),
-            era: .genesis
+            era: .afterGenesis
         )
         #expect(result.stack == [[1]])
     }
 
-    @Test("byte shifts preserve width and Chronicle numeric shifts are arithmetic")
+    @Test("byte shifts preserve width and after-Chronicle numeric shifts are arithmetic")
     func shifts() throws {
         for scriptHex in [
             "021234549802234087",
@@ -589,14 +589,14 @@ struct ScriptInterpreterTests {
             #expect(try execute(
                 unlocking: [],
                 locking: Hex.decode(scriptHex, maximumDecodedByteCount: 100),
-                era: .genesis
+                era: .afterGenesis
             ).stack == [[1]])
         }
 
         #expect(try execute(
             unlocking: [],
             locking: Hex.decode("538f51b701829c", maximumDecodedByteCount: 100),
-            era: .chronicle
+            era: .afterChronicle
         ).stack == [[1]])
     }
 
@@ -607,7 +607,7 @@ struct ScriptInterpreterTests {
                 try execute(
                     unlocking: [],
                     locking: [Opcode.one.rawValue, Opcode.zero.rawValue, opcode.rawValue],
-                    era: .genesis
+                    era: .afterGenesis
                 )
             }
         }
@@ -650,7 +650,7 @@ struct ScriptInterpreterTests {
             transactionLimits: limits
         )
         let configuration = try self.configuration(
-            era: .genesis,
+            era: .afterGenesis,
             flags: [.enableForkID, .derSignatures, .lowS, .nullFail]
         )
         let result = try ScriptInterpreter.execute(
@@ -871,12 +871,12 @@ struct ScriptInterpreterTests {
             try execute(
                 unlocking: [Opcode.zero.rawValue, Opcode.zero.rawValue],
                 locking: [Opcode.checkSig.rawValue],
-                era: .genesis
+                era: .afterGenesis
             )
         }
     }
 
-    @Test("legacy P2SH restores the unlocking stack and executes the redeem script")
+    @Test("before-Genesis P2SH restores the unlocking stack and executes the redeem script")
     func payToScriptHash() throws {
         let redeem = try script([Opcode.one.rawValue])
         let locking = try Script.payToScriptHash(
@@ -892,14 +892,14 @@ struct ScriptInterpreterTests {
             unlockingScript: unlocking,
             lockingScript: locking,
             configuration: try configuration(
-                era: .legacy,
+                era: .beforeGenesis,
                 flags: [.payToScriptHash]
             )
         )
         #expect(result.stack == [[1]])
     }
 
-    @Test("legacy CLTV and CSV use coherent transaction context")
+    @Test("before-Genesis CLTV and CSV use coherent transaction context")
     func lockTimeAndSequence() throws {
         let empty = try script([])
         let limits = try TransactionLimits(
@@ -936,7 +936,7 @@ struct ScriptInterpreterTests {
             #expect(try ScriptInterpreter.execute(
                 unlockingScript: empty,
                 lockingScript: currentLocking,
-                configuration: configuration(era: .legacy, flags: flags),
+                configuration: configuration(era: .beforeGenesis, flags: flags),
                 context: context
             ).stack == [[1]])
         }
@@ -958,7 +958,7 @@ struct ScriptInterpreterTests {
                 unlockingScript: empty,
                 lockingScript: failingLock,
                 configuration: configuration(
-                    era: .legacy,
+                    era: .beforeGenesis,
                     flags: [.checkLockTimeVerify]
                 ),
                 context: failingContext
@@ -982,7 +982,7 @@ struct ScriptInterpreterTests {
             unlockingScript: empty,
             lockingScript: disabledSequence,
             configuration: configuration(
-                era: .legacy,
+                era: .beforeGenesis,
                 flags: [.checkSequenceVerify]
             ),
             context: disabledContext
@@ -992,7 +992,7 @@ struct ScriptInterpreterTests {
     private func execute(
         unlocking: [UInt8],
         locking: [UInt8],
-        era: ScriptExecutionEra = .legacy
+        era: ScriptExecutionEra = .beforeGenesis
     ) throws -> ScriptExecutionResult {
         try ScriptInterpreter.execute(
             unlockingScript: script(unlocking),
@@ -1084,7 +1084,7 @@ struct ScriptInterpreterTests {
         try ScriptInterpreter.execute(
             unlockingScript: transaction.inputs[0].unlockingScript,
             lockingScript: spentOutput.lockingScript,
-            configuration: configuration(era: .legacy, flags: flags),
+            configuration: configuration(era: .beforeGenesis, flags: flags),
             context: ScriptExecutionContext(
                 transaction: transaction,
                 inputIndex: 0,

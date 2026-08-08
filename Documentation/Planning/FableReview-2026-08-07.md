@@ -1,5 +1,8 @@
 # Fable architecture review — 2026-08-07
 
+Status: Historical review evidence. Its package map is superseded by ADR-0001
+and `Documentation/Planning/Architecture.md`.
+
 Review channel: `claude-fable-5` through Claude Max subscription.
 
 Authentication evidence: `apiKeySource: none`, `isUsingOverage: false`.

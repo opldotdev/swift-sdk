@@ -2,10 +2,11 @@
 
 import PackageDescription
 
-let publicModules = [
+let modernPublicModules = [
     "BSVCore",
     "BSVCrypto",
     "BSVKeys",
+    "BSVMessage",
     "BSVScript",
     "BSVTransaction",
     "BSVInterpreter",
@@ -13,10 +14,9 @@ let publicModules = [
     "BSVNetwork",
     "BSVWallet",
     "BSVAuth",
-    "BSVServices",
 ]
 
-let publicModuleDependencies = publicModules.map {
+let modernPublicModuleDependencies = modernPublicModules.map {
     Target.Dependency.target(name: $0)
 }
 
@@ -31,7 +31,8 @@ let package = Package(
     ],
     products: [
         .library(name: "BSV", targets: ["BSV"]),
-    ] + publicModules.map { module in
+        .library(name: "BSVCompat", targets: ["BSVCompat"]),
+    ] + modernPublicModules.map { module in
         .library(name: module, targets: [module])
     },
     dependencies: [
@@ -51,7 +52,7 @@ let package = Package(
     targets: [
         .target(
             name: "BSV",
-            dependencies: publicModuleDependencies
+            dependencies: modernPublicModuleDependencies
         ),
         .target(name: "BSVCore"),
         .target(
@@ -80,6 +81,14 @@ let package = Package(
             ]
         ),
         .target(
+            name: "BSVMessage",
+            dependencies: ["BSVCore", "BSVCrypto", "BSVKeys"]
+        ),
+        .target(
+            name: "BSVCompat",
+            dependencies: ["BSVCore", "BSVCrypto", "BSVKeys"]
+        ),
+        .target(
             name: "BSVScript",
             dependencies: ["BSVCore", "BSVBigNum", "BSVCrypto", "BSVKeys"]
         ),
@@ -104,7 +113,7 @@ let package = Package(
         ),
         .target(
             name: "BSVNetwork",
-            dependencies: ["BSVCore", "BSVTransaction", "BSVSPV"]
+            dependencies: ["BSVCore", "BSVTransaction"]
         ),
         .target(
             name: "BSVWallet",
@@ -112,9 +121,7 @@ let package = Package(
                 "BSVCore",
                 "BSVCrypto",
                 "BSVKeys",
-                "BSVScript",
                 "BSVTransaction",
-                "BSVNetwork",
             ]
         ),
         .target(
@@ -123,23 +130,8 @@ let package = Package(
                 "BSVCore",
                 "BSVCrypto",
                 "BSVKeys",
-                "BSVScript",
                 "BSVTransaction",
-                "BSVNetwork",
                 "BSVWallet",
-            ]
-        ),
-        .target(
-            name: "BSVServices",
-            dependencies: [
-                "BSVCore",
-                "BSVCrypto",
-                "BSVKeys",
-                "BSVScript",
-                "BSVTransaction",
-                "BSVNetwork",
-                "BSVWallet",
-                "BSVAuth",
             ]
         ),
         .testTarget(
@@ -161,6 +153,14 @@ let package = Package(
             name: "BSVKeysTests",
             dependencies: ["BSVKeys", "BSVCrypto", "BSVCore"],
             exclude: ["README.md"]
+        ),
+        .testTarget(
+            name: "BSVMessageTests",
+            dependencies: ["BSVMessage", "BSVKeys", "BSVCrypto", "BSVCore"]
+        ),
+        .testTarget(
+            name: "BSVCompatTests",
+            dependencies: ["BSVCompat", "BSVKeys", "BSVCrypto", "BSVCore"]
         ),
         .testTarget(
             name: "BSVScriptTests",
@@ -206,8 +206,9 @@ let package = Package(
             name: "BSVConformanceTests",
             dependencies: [
                 Target.Dependency.target(name: "BSV"),
+                Target.Dependency.target(name: "BSVCompat"),
                 .product(name: "Crypto", package: "swift-crypto"),
-            ] + publicModuleDependencies,
+            ] + modernPublicModuleDependencies,
             resources: [.copy("Fixtures")]
         ),
     ],

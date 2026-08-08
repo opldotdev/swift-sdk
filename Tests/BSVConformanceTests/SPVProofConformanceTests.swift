@@ -282,7 +282,7 @@ private func completeSPVConformanceFixture(
         childID: childID,
         path: path,
         scriptConfiguration: try ScriptExecutionConfiguration(
-            era: .genesis,
+            era: .afterGenesis,
             flags: [.enableForkID],
             resourceLimits: .standard
         )

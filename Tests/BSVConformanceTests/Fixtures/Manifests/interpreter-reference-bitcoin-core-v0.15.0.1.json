@@ -1,0 +1,23 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "interpreter-reference-bitcoin-core-v0.15.0.1",
+  "source": {
+    "url": "https://github.com/bitcoin/bitcoin",
+    "revision": "fb7b5293844ea6adc5dcf5ad0a0c5890b4495939"
+  },
+  "license": {
+    "identifier": "MIT",
+    "file": "Licenses/bitcoin-core-interpreter-v0.15.0.1-mit.txt",
+    "sha256": "93d633183b4715ff1d799dc26b30a6edae096a13fb35b062d0d69463f453644e"
+  },
+  "notes": "Source fixture SHA-256: 5e5b1d8f6e758929bbdf5fe7f4906523cae13de939ece1fcf681824ccfa2b4aa. Deterministic selection starts from source order, admits only non-witness rows whose flags are composed of P2SH, STRICTENC, or MINIMALDATA, and excludes signature, lock-time, SegWit, Taproot, and BTC-disabled/BSV-re-enabled opcode rows. From the remaining applicable rows it takes the first 140 expected successes and the first 60 failures in the supported error categories, then restores source order. No Go SDK data or oracle output is stored.",
+  "files": [
+    {
+      "originalPath": "src/test/data/script_tests.json",
+      "localPath": "Permissive/BitcoinCore/InterpreterReference/script-tests-legacy-subset.json",
+      "sha256": "6b95d199a560cabc64133024a6f6737e9dd5baf6c4e72d2ad8feeebde4591ab0",
+      "transformation": "Selected rows using the manifest's deterministic applicability and source-order rules; represented each retained row as [source index, scriptSig ASM, scriptPubKey ASM, flags, expected ScriptError, comment] without changing the upstream ASM or expected result.",
+      "notes": "Contains 200 applicable legacy cases: 140 successes and 60 failures. Runtime test code independently compiles the retained Bitcoin Core short-form ASM to script bytes."
+    }
+  ]
+}

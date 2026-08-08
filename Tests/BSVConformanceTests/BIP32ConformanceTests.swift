@@ -1,4 +1,5 @@
 import BSVCore
+import BSVCompat
 import BSVKeys
 import Foundation
 import Testing

@@ -5,7 +5,7 @@
 - Authentication: signed-in `claude.ai` Max subscription with
   `ANTHROPIC_API_KEY` removed from the process environment
 - Scope: deterministic ECDSA/DER, secp256k1 tweaks, raw-point ECDH, WIF, and
-  legacy P2PKH addresses
+  P2PKH addresses
 
 ## Verdict
 

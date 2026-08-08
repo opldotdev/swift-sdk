@@ -1,3 +1,4 @@
 # BSVKeys tests
 
-This test target is added to Package.swift with the module's first implementation packet.
+This target tests regular key operations and formats. BSM, ECIES, BIP-32, and
+BIP-39 tests are in `BSVCompatTests`.

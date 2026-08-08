@@ -5,7 +5,7 @@ import Testing
 
 @Suite("WIFAddressConformance", .serialized)
 struct WIFAddressConformanceTests {
-    @Test("direct ISC bsvutil WIF and legacy P2PKH vectors")
+    @Test("direct ISC bsvutil WIF and P2PKH address vectors")
     func directBSVUtilVectors() throws {
         let manifest = try FixtureManifestLoader.loadBundled()
         let group = try #require(
@@ -27,31 +27,31 @@ struct WIFAddressConformanceTests {
                 vector.privateKey,
                 maximumDecodedByteCount: 32
             )
-            let expected = WalletImportFormat(
+            let expected = WIF(
                 privateKey: try PrivateKey(privateKeyBytes),
                 network: try network(vector.network),
                 isCompressed: vector.compressed
             )
 
             #expect(expected.encoded == vector.encoded)
-            #expect(try WalletImportFormat(vector.encoded) == expected)
+            #expect(try WIF(vector.encoded) == expected)
         }
 
         let addressVectors = try decode(
-            LegacyAddressVectors.self,
+            AddressVectors.self,
             at: "WIFAddress/legacy-address.json",
             root: root
         )
         #expect(addressVectors.hashAddresses.count == 3)
         for vector in addressVectors.hashAddresses {
             let hashBytes = try Hex.decode(vector.hash, maximumDecodedByteCount: 20)
-            let expected = LegacyAddress(
+            let expected = Address(
                 publicKeyHash: try Hash160(hashBytes),
                 network: try network(vector.network)
             )
 
             #expect(expected.description == vector.encoded)
-            #expect(try LegacyAddress(vector.encoded) == expected)
+            #expect(try Address(vector.encoded) == expected)
         }
 
         #expect(addressVectors.publicKeyAddresses.count == 3)
@@ -60,18 +60,18 @@ struct WIFAddressConformanceTests {
                 vector.publicKey,
                 maximumDecodedByteCount: 65
             )
-            let expected = LegacyAddress(
+            let expected = Address(
                 publicKey: try PublicKey(publicKeyBytes),
                 network: try network(vector.network),
                 compressed: vector.compressed
             )
 
             #expect(expected.description == vector.encoded)
-            #expect(try LegacyAddress(vector.encoded) == expected)
+            #expect(try Address(vector.encoded) == expected)
         }
 
         #expect(throws: KeyFormatError.invalidEncoding(.checksumMismatch)) {
-            try LegacyAddress(addressVectors.invalidChecksum)
+            try Address(addressVectors.invalidChecksum)
         }
     }
 
@@ -86,7 +86,7 @@ struct WIFAddressConformanceTests {
         #expect(base58Vectors.invalidAlphabet.count == 10)
         for text in base58Vectors.invalidAlphabet {
             #expect(throws: KeyFormatError.self) {
-                try WalletImportFormat(text)
+                try WIF(text)
             }
         }
 
@@ -96,12 +96,12 @@ struct WIFAddressConformanceTests {
             root: root
         )
         #expect(throws: KeyFormatError.invalidEncoding(.checksumMismatch)) {
-            try WalletImportFormat(checkVectors.invalidChecksum)
+            try WIF(checkVectors.invalidChecksum)
         }
         #expect(checkVectors.shortEncodings.count == 4)
         for text in checkVectors.shortEncodings {
             #expect(throws: KeyFormatError.invalidEncoding(.missingChecksum)) {
-                try WalletImportFormat(text)
+                try WIF(text)
             }
         }
     }
@@ -111,13 +111,13 @@ struct WIFAddressConformanceTests {
         let scalar = [UInt8](repeating: 0, count: 31) + [0x01]
 
         #expect(throws: KeyFormatError.invalidPayloadByteCount(32)) {
-            try WalletImportFormat(Base58Check.encode([0x80] + Array(scalar.dropFirst())))
+            try WIF(Base58Check.encode([0x80] + Array(scalar.dropFirst())))
         }
         #expect(throws: KeyFormatError.unsupportedVersion(0x81)) {
-            try WalletImportFormat(Base58Check.encode([0x81] + scalar))
+            try WIF(Base58Check.encode([0x81] + scalar))
         }
         #expect(throws: KeyFormatError.invalidCompressionMarker(0x02)) {
-            try WalletImportFormat(Base58Check.encode([0x80] + scalar + [0x02]))
+            try WIF(Base58Check.encode([0x80] + scalar + [0x02]))
         }
     }
 }
@@ -158,7 +158,7 @@ private struct WIFVector: Decodable {
     let encoded: String
 }
 
-private struct LegacyAddressVectors: Decodable {
+private struct AddressVectors: Decodable {
     let hashAddresses: [HashAddressVector]
     let publicKeyAddresses: [PublicKeyAddressVector]
     let invalidChecksum: String

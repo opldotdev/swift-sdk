@@ -2,7 +2,7 @@ import BSVCore
 import BSVCrypto
 import BSVScript
 
-/// A value-semantic legacy Bitcoin transaction.
+/// A value-semantic Bitcoin transaction.
 ///
 /// This type covers the canonical transaction wire format and the bounded
 /// BRC-30/BIP-239 Extended Format packet. BEEF and signing preimages are

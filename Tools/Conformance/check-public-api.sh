@@ -5,7 +5,7 @@ repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repository_root"
 swift package dump-symbol-graph --minimum-access-level public
 
-modules="BSV BSVCore BSVCrypto BSVKeys BSVScript BSVTransaction BSVInterpreter BSVSPV BSVNetwork BSVWallet BSVAuth BSVServices"
+modules="BSV BSVCore BSVCrypto BSVKeys BSVMessage BSVScript BSVTransaction BSVInterpreter BSVSPV BSVNetwork BSVWallet BSVAuth"
 for module in $modules; do
     graph=$(find .build -type f -path "*/symbolgraph/$module.symbols.json" -print | head -n 1)
     if [ -z "$graph" ]; then

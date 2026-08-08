@@ -98,7 +98,7 @@ struct ScriptNumberTests {
         ) {
             try ScriptNumber(
                 encoded: [0, 0, 0, 0x80, 0],
-                maximumByteCount: ScriptNumber.legacyMaximumByteCount
+                maximumByteCount: ScriptNumber.beforeGenesisMaximumByteCount
             )
         }
 

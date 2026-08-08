@@ -1,3 +1,5 @@
-# BSVServices tests
+# Protected retired-module path
 
-This test target is added to Package.swift with the module's first implementation packet.
+Repository safety policy protects this README from deletion. The package has no
+`BSVServices` product, target, test target, or Swift source. Future concrete
+service modules must each use their own product, target, and tests.

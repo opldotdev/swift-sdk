@@ -13,14 +13,20 @@
 
 ## Executive findings
 
-The current Swift target graph is broadly right. Full parity exposed three
-boundary problems; the first has since been resolved:
+The current Swift target graph resolves these package-boundary differences:
 
-1. Resolved: `BSVServices` now depends on `BSVAuth`, allowing future identity
-   and storage implementations to consume certificate and authenticated-fetch
-   capabilities without a target cycle.
-2. Go `transaction/template/pushdrop` depends on `wallet`, but Swift `BSVTransaction` must remain below `BSVWallet`. Keep PushDrop data encoding/locking and transaction-context signing in `BSVTransaction`; move the wallet-backed unlocker/factory into `BSVWallet`.
-3. Go places WIF methods in `primitives/ec`, addresses in `script`, and BIP-32 depends on both `script` and `chaincfg`. Mirroring those namespaces would create Swift cycles. Keep secp keys in `BSVCrypto`; add WIF/address/BIP-32 conveniences in `BSVKeys`, with extensions on crypto key types where useful.
+1. Go and TypeScript place portable messages outside Auth. Swift uses the
+   standalone `BSVMessage` module with only Core, Crypto, and Keys dependencies.
+2. The reference SDKs expose named identity, overlay, registry, and storage
+   packages. Swift does not expose an empty general services module.
+3. Go `transaction/template/pushdrop` depends on `wallet`, but Swift
+   `BSVTransaction` must remain below `BSVWallet`. Keep PushDrop data
+   encoding/locking and transaction-context signing in `BSVTransaction`; move
+   the wallet-backed unlocker/factory into `BSVWallet`.
+4. Go places WIF methods in `primitives/ec`, addresses in `script`, and BIP-32
+   in `compat`. Mirroring those namespaces would create Swift cycles. Keep WIF
+   and Address in `BSVKeys`; place BIP-32 with the other common compatibility
+   families in `BSVCompat`.
 
 The lowest primitive seam is:
 
@@ -38,8 +44,9 @@ BoundedByteReader/Writer + canonical/flexible CompactSize policy
   -> Interpreter Engine
   -> SPV and concrete networking
   -> Wallet capability protocols
-  -> Auth
-  -> Services
+  -> Auth certificates and future sessions
+
+Keys -> portable messages
 ```
 
 ## Package-by-package capability inventory
@@ -81,7 +88,7 @@ Public vs internal: `ReaderHoldError` is an implementation convenience and shoul
 
 Important quirk: `NewVarIntFromBytes` indexes without a length check and accepts non-minimal encodings. Swift needs an explicit “wire-compatible permissive decode” versus “canonical required” policy and bounded allocation before consuming declared lengths.
 
-#### `compat/base58` → `BSVCore` encoding implementation, surfaced by `BSVKeys`
+#### `compat/base58` → `BSVCore`
 
 Public: `Encode([]byte) string`, `Decode(string) ([]byte,error)`. No internal dependency; uses `math/big`.
 
@@ -115,7 +122,7 @@ Public API judgment: raw `Ghash` is exported Go implementation surface, not an a
 
 Public: `DRBG`, `NewDRBG`, `Generate`, `Reseed`. Dependency: `primitives/hash`. HMAC-DRBG state is private.
 
-#### `primitives/ec` → `BSVCrypto`, with WIF conveniences in `BSVKeys`
+#### `primitives/ec` → `BSVKeys`, with symmetric cryptography in `BSVCrypto`
 
 Purpose: secp256k1 curve, keys, DER/compact signatures, ECDH/BRC-42 derivation, symmetric encryption, Shamir bridge.
 
@@ -131,15 +138,18 @@ Public surface:
 
 Internal edges: `base58`, `aesgcm`, `hash`, `keyshares`, `util`. External: stdlib crypto/ecdsa, HMAC, zlib, ASN.1, big-int.
 
-Swift design: P256K adapter owns serialized point validation, raw ECDH point normalization, tweak operations, compact recovery, and low-S normalization. WIF must be layered in `BSVKeys` despite Go’s placement.
+Swift design: `BSVKeys` owns the P256K adapter, serialized point validation,
+raw ECDH point normalization, tweak operations, compact recovery, low-S
+normalization, and WIF. `BSVCrypto` owns the symmetric-key implementation. This
+split preserves the Go concepts without copying the Go package boundary.
 
-#### `primitives/ecdsa` → `BSVCrypto`
+#### `primitives/ecdsa` → `BSVKeys`
 
 Public: `Sign`, `SignWithCustomK`, `Verify`. Supports forced low-S and custom nonce. Dependency: `primitives/ec`.
 
 Consensus/compatibility: deterministic nonce behavior, DER permissiveness, and externally supplied high-S normalization need byte-level vectors. Locally generated P256K signatures are low-S, but parsing/normalization still needs a narrow wrapper.
 
-#### `primitives/keyshares` → `BSVCrypto` over `BSVBigNum`
+#### `primitives/keyshares` → `BSVKeys` over `BSVBigNum`
 
 Public:
 
@@ -150,15 +160,16 @@ Public:
 
 Edges: `base58`, `util`, `math/big`. The arithmetic/storage details are implementation; backup text format is compatibility API.
 
-#### `primitives/schnorr` → `BSVCrypto`
+#### `primitives/schnorr` → `BSVKeys`
 
 Public: `Proof`; `Schnorr`, `New`, `GenerateProof`, `VerifyProof`. Dependencies: EC and hash. This is the BRC-94-style proof seam, not general transaction Schnorr signing.
 
 ### Compatibility namespace
 
-These are explicitly compatibility packages. Preserve their wire behavior and user-facing concepts, but not their Go directory hierarchy.
+These are explicitly compatibility packages. The four families shared with the
+TypeScript compatibility namespace are in the opt-in `BSVCompat` module.
 
-#### `compat/bip39` and `compat/bip39/wordlists` → `BSVKeys`
+#### `compat/bip39` and `compat/bip39/wordlists` → `BSVCompat`
 
 Public:
 
@@ -170,7 +181,7 @@ Dependencies: wordlists and `x/crypto/pbkdf2`.
 
 Swift concern: a process-global mutable word list is unsafe under Swift 6 concurrency. Model language/word list as an explicit value passed to mnemonic operations; retain a compatibility default if needed, actor/lock-isolated.
 
-#### `compat/bip32` → `BSVKeys`
+#### `compat/bip32` → `BSVCompat`
 
 Public:
 
@@ -181,15 +192,16 @@ Public:
 
 Edges: `base58`, `bip39`, EC/hash, Go `script.Address`, `transaction/chaincfg`.
 
-Swift cycle-breaking: define legacy address/network version types in `BSVKeys`; BIP-32 must not import `BSVScript` or `BSVTransaction`.
+Swift cycle-breaking: define P2PKH address/network version types in `BSVKeys`;
+`BSVCompat` BIP-32 imports `BSVKeys` but not `BSVScript` or `BSVTransaction`.
 
-#### `compat/bsm` → `BSVKeys`
+#### `compat/bsm` → `BSVCompat`
 
 Public: `SignMessage`, `SignMessageString`, `SignMessageWithCompression`, `PubKeyFromSignature`, `VerifyMessage`, `VerifyMessageDER`.
 
 Edges: EC/hash, Go script address, util. Swift should perform address recovery/comparison through `BSVKeys`.
 
-#### `compat/ecies` → `BSVKeys`
+#### `compat/ecies` → `BSVCompat`
 
 Public:
 
@@ -201,7 +213,7 @@ Edges: AES-CBC, EC, hash.
 
 ### Script representation and interpreter
 
-#### `script` → `BSVScript`, except legacy addresses should be owned by `BSVKeys`
+#### `script` → `BSVScript`, except P2PKH addresses should be owned by `BSVKeys`
 
 Public:
 
@@ -421,7 +433,7 @@ Edges: wallet/serializer and stdlib HTTP.
 
 ### Messages and authentication
 
-#### `message` → `BSVAuth`
+#### `message` → `BSVMessage`
 
 Purpose: BRC-77-style recipient-specific encrypted and signed messages.
 
@@ -491,7 +503,8 @@ Edges: all auth subpackages, EC, script, P2PKH, wallet; stdlib HTTP.
 
 ### Overlay and high-level services
 
-All map to `BSVServices`, which now depends on `BSVAuth`.
+These packages need named Swift modules when their public APIs are implemented.
+They do not map to an empty general services module.
 
 #### `overlay`
 
@@ -570,7 +583,8 @@ Public:
 
 Edges: auth HTTP client, base58, overlay/lookup, hash, transaction, PushDrop, util, wallet.
 
-This package motivated the now-established `BSVServices -> BSVAuth` edge.
+This package will need a direct Auth dependency when its named Swift module is
+implemented.
 
 ### Internal/test-support packages
 
@@ -765,8 +779,10 @@ License warning: these live under the Open BSV-licensed upstream. Use the Go ora
 1. `BSVCore`: bounded cursor/writer, endian primitives, hex, CompactSize, Base58 core, fixed hash/txid/outpoint/network values, error categories.
 2. `BSVBigNum`: magnitude/modular arithmetic SPI, sign/magnitude conversion helpers, allocation/operation budgets; test 750 KB and 32 MiB before higher layers rely on it.
 3. `BSVCrypto` hashes and symmetric primitives: SHA/HMAC/RIPEMD/HASH160, AES-CBC/GCM, PKCS#7, DRBG, injected randomness.
-4. `BSVCrypto` secp layer: keys/points, parsing/serialization, ECDSA/DER/compact recovery/ECDH/tweaks, BRC-42/BRC-94, symmetric envelopes and key shares.
-5. `BSVKeys`: Base58Check, WIF, address/network versions, BIP-32, BIP-39, BSM, ECIES.
+4. `BSVKeys`: secp256k1 keys and points, parsing and serialization, ECDSA, DER,
+   compact recovery, ECDH, tweaks, Base58Check, WIF, Address and network
+   versions, BRC-42, BRC-94, and BRC-140.
+5. `BSVCompat`: BIP-32, BIP-39, BSM, and ECIES.
 6. `BSVScript`: script bytes/opcodes/pushes/ASM/BIP-276/inscriptions plus bounded ScriptNumber encoding. Establish era-independent encoding before execution.
 7. `BSVTransaction` foundation: graph semantics ADR/prototype first; raw model/parser/serializer/txid/outpoint, sighash, fee protocol/model, P2PKH, transaction-neutral PushDrop, and the `UnlockingScriptTemplate`, `FeeModel`, `ChainTracker`, `Broadcaster` protocols.
 8. Parallel after transaction serialization:
@@ -775,9 +791,10 @@ License warning: these live under the Open BSV-licensed upstream. Use the Go ora
 9. `BSVSPV`: block headers and complete transaction/script/merkle/fee validation.
 10. `BSVNetwork`: concrete chain trackers, headers client, ARC/TAAL/WOC broadcasters, HTTP seam, Linux networking tests.
 11. `BSVWallet`: BRC-100 models/protocols, key deriver/cache, ProtoWallet, wallet-backed PushDrop, serializers, wire/JSON substrates.
-12. `BSVAuth`: BRC-77 messages, certificates, nonce/certificate utilities, peer/session state, BRC-104 payloads, HTTP/WebSocket/auth-fetch.
-13. `BSVServices`: overlay/admin/lookup/topic, identity, registry, KV store, UHRP storage. The required dependency on `BSVAuth` is already present.
-14. Hardening: differential oracle for every codec, explicit Go-error-to-Swift-error tables, malformed/truncation fuzzing, resource ceilings, concurrency/Sendable review, Linux live transport tests.
+12. `BSVMessage`: BRC-77 and BRC-78 portable messages.
+13. `BSVAuth`: certificates, nonce/certificate utilities, peer/session state, BRC-104 payloads, HTTP/WebSocket/auth-fetch.
+14. Future named modules: overlay/admin/lookup/topic, identity, registry, KV store, and UHRP storage.
+15. Hardening: differential oracle for every codec, explicit Go-error-to-Swift-error tables, malformed/truncation fuzzing, resource ceilings, concurrency/Sendable review, Linux live transport tests.
 
 ## Exact seam contracts to stabilize early
 
@@ -795,5 +812,5 @@ License warning: these live under the Open BSV-licensed upstream. Use the Go ora
 - Network transport protocols must use `async throws`, injected clocks/session timeouts, and `Sendable` request/response values.
 
 This inventory supports the approved modular architecture, including the
-completed `BSVServices`/`BSVAuth` dependency correction and the PushDrop,
-WIF, and address namespace adaptations.
+standalone message boundary and the PushDrop, WIF, and address namespace
+adaptations.

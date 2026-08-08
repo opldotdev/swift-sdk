@@ -3,9 +3,9 @@
 @_exported import BSVCrypto
 @_exported import BSVInterpreter
 @_exported import BSVKeys
+@_exported import BSVMessage
 @_exported import BSVNetwork
 @_exported import BSVSPV
 @_exported import BSVScript
-@_exported import BSVServices
 @_exported import BSVTransaction
 @_exported import BSVWallet

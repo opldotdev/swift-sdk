@@ -7,8 +7,8 @@ import BSVBigNum
 /// requires an explicit byte-count ceiling because the applicable limit is a
 /// consensus or policy decision made by the calling opcode/interpreter era.
 public struct ScriptNumber: Hashable, Sendable {
-    /// The pre-Genesis input limit used by most numeric opcodes.
-    public static let legacyMaximumByteCount = 4
+    /// The before-Genesis input limit used by most numeric opcodes.
+    public static let beforeGenesisMaximumByteCount = 4
 
     package let value: BigSigned
 

@@ -408,7 +408,7 @@ private struct FullSPVFixture {
             blockHeight: path.blockHeight
         )
         scriptConfiguration = try ScriptExecutionConfiguration(
-            era: .genesis,
+            era: .afterGenesis,
             flags: [.enableForkID],
             resourceLimits: .standard
         )

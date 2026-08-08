@@ -1,4 +1,7 @@
-import BSV
+import BSVCore
+import BSVCrypto
+import BSVCompat
+import BSVKeys
 import Foundation
 import Testing
 

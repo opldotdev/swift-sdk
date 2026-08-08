@@ -7,17 +7,19 @@ the pinned Go SDK during Phase 0.
 | --- | --- | --- |
 | Core | Bytes, endian encoding, VarInt, hashes, Base58 | Go tests and standard vectors |
 | Big numbers | Modular arithmetic for shares and bounded Script arithmetic | BRCs, Go differential cases, boundary/resource tests |
-| Crypto | AES, DRBG, secp256k1, ECDSA, recovery, ECDH, BRC-42, BRC-94, shares | Go vectors, BRCs, NIST/secp256k1 vectors |
-| Compatibility | WIF, addresses, BIP-32, BIP-39, BSM, ECIES | Go tests and published BIPs |
+| Crypto | SHA and HMAC, RIPEMD-160, AES, DRBG, KDF support, symmetric envelopes, secure randomness | Go vectors, BRCs, NIST vectors |
+| Keys | secp256k1 keys, ECDSA, recovery, ECDH, tweaks, BRC-42, BRC-94, BRC-140, Base58Check, WIF, addresses | Go vectors, BRCs, secp256k1 vectors |
+| Compatibility | BIP-32, BIP-39, BSM, ECIES | Go tests and published BIPs |
 | Script | Opcodes, parsing, ASM, templates, script numbers | Go reference tests and consensus behavior |
 | Interpreter | Era rules, stack, limits, signature checks, Chronicle operations | Go valid/invalid suites and node-derived vectors |
 | Transaction | Model, serialization, sighash, fees, BUMP, BEEF, Atomic BEEF | Go transaction fixtures |
 | SPV | Merkle paths, validation, chain trackers | Go tests and protocol specifications |
 | Network | Broadcasters, trackers, HTTP/transports | Go mocks and contract tests |
 | Wallet | BRC-100 interfaces, proto wallet, serializers, substrates | BRCs and Go wallet fixtures |
-| Messages/Auth | BRC-77, BRC-103, BRC-104, certificates, HTTP/WebSocket | BRCs and Go integration tests |
+| Messages | BRC-77 and BRC-78 portable messages | BRCs and Go integration tests |
+| Auth | BRC-103, BRC-104, certificates, HTTP/WebSocket | BRCs and Go integration tests |
 | Overlay | Topic/lookup services, SHIP/SLAP, admin token | BRCs and Go tests |
-| Services | Identity, registry, KV store, storage/UHRP | BRCs and Go tests |
+| Future named modules | Identity, registry, KV store, storage/UHRP | BRCs and Go tests |
 
 ## Matrix states
 

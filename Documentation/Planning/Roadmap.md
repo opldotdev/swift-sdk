@@ -68,12 +68,12 @@ canonical parsing and bounded offline interpolation.
 
 ## Phase 3: Key compatibility formats
 
-Accepted checkpoint: bounded WIF and legacy P2PKH addresses for mainnet and
-testnet, BIP-32 hierarchical deterministic keys, English BIP-39 mnemonics with
-the fixed standard PBKDF2 profile, Bitcoin Signed Message, and Electrum- and
-Bitcore-compatible ECIES.
+Accepted checkpoint: `BSVKeys` contains bounded WIF and P2PKH addresses for
+mainnet and testnet. The opt-in `BSVCompat` product contains BIP-32 hierarchical
+deterministic keys, English BIP-39 mnemonics with the fixed standard PBKDF2
+profile, Bitcoin Signed Message, and Electrum- and Bitcore-compatible ECIES.
 
-- WIF and legacy addresses. (Accepted)
+- WIF and P2PKH addresses. (Accepted)
 - BIP-32 and BIP-39. (Accepted)
 - Bitcoin Signed Message. (Accepted)
 - Electrum- and Bitcore-compatible ECIES. (Accepted)
@@ -179,9 +179,9 @@ policy.
 
 ## Phase 9: Messages and authentication
 
-Accepted checkpoint: `BSVAuth` provides canonical BRC-77 portable signed
+Accepted checkpoint: `BSVMessage` provides canonical BRC-77 portable signed
 messages and BRC-78 portable encrypted messages, including recipient-specific
-BRC-42 derivation and the BRC-77 anyone mode. It also supplies offline BRC-52
+BRC-42 derivation and the BRC-77 anyone mode. `BSVAuth` supplies offline BRC-52
 issue, acquire, project, and verify workflows.
 
 - BRC-77 portable signed messages. (Accepted)
@@ -193,8 +193,8 @@ issue, acquire, project, and verify workflows.
 
 ## Phase 10: Overlay and application services
 
-`BSVServices` is currently a placeholder module. It does not yet supply these
-service families.
+These service families are future work. The package does not expose an empty
+general services module. Each implemented family must use a clear module name.
 
 - Overlay topic and lookup services, SHIP/SLAP, and admin tokens.
 - Identity and registry features.

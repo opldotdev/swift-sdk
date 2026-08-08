@@ -1,4 +1,4 @@
-import BSVAuth
+import BSVMessage
 import BSVCore
 import BSVCrypto
 import BSVKeys

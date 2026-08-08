@@ -15,9 +15,9 @@ extension Script {
         )
     }
 
-    /// Creates the P2PKH locking script represented by a legacy address.
+    /// Creates the P2PKH locking script represented by an address.
     public static func payToPublicKeyHash(
-        _ address: LegacyAddress,
+        _ address: Address,
         maximumByteCount: Int
     ) throws -> Script {
         try payToPublicKeyHash(address.publicKeyHash, maximumByteCount: maximumByteCount)

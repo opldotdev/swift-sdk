@@ -32,7 +32,7 @@ public struct ARCStatus: RawRepresentable, Codable, Hashable, Sendable,
     public static let seenOnNetwork = Self(rawValue: "SEEN_ON_NETWORK")
     public static let mined = Self(rawValue: "MINED")
     public static let minedInStaleBlock = Self(rawValue: "MINED_IN_STALE_BLOCK")
-    /// A legacy Go SDK status that current ARC does not define.
+    /// A Go SDK compatibility status that current ARC does not define.
     public static let confirmed = Self(rawValue: "CONFIRMED")
     public static let doubleSpendAttempted = Self(rawValue: "DOUBLE_SPEND_ATTEMPTED")
     public static let seenInOrphanMempool = Self(rawValue: "SEEN_IN_ORPHAN_MEMPOOL")

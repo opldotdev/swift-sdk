@@ -123,7 +123,7 @@ post-implementation Fable gate.
    - Run the measurable macOS/Linux scale gates in ADR 0004 before accepting
      attaswift/BigInt; keep concrete types internal.
    - Depends on P1-C clearing its `Package.swift` ownership barrier.
-5. **Swift SDK: Base58Check, WIF, and legacy addresses**
+5. **Swift SDK: Base58Check, WIF, and P2PKH addresses**
    - First Phase 3 key-format packet; deliberately includes Base58Check rather
      than creating a one-file Phase 1 issue.
    - Depends on P1-B, P1-C, and Phase 2 key parsing for complete WIF validation.

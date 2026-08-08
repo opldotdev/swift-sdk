@@ -15,7 +15,7 @@ struct StandardScriptsTests {
         #expect(p2pkh.isPayToPublicKeyHash)
         #expect(p2pkh.publicKeyHash == hash.bytes)
 
-        let address = LegacyAddress(publicKeyHash: hash, network: .mainnet)
+        let address = Address(publicKeyHash: hash, network: .mainnet)
         #expect(try Script.payToPublicKeyHash(address, maximumByteCount: 25) == p2pkh)
 
         let p2sh = try Script.payToScriptHash(hash, maximumByteCount: 23)

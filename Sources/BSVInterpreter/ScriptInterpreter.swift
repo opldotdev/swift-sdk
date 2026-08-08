@@ -25,7 +25,7 @@ public enum ScriptInterpreter {
             }
         }
 
-        let evaluatesPayToScriptHash = configuration.era == .legacy
+        let evaluatesPayToScriptHash = configuration.era == .beforeGenesis
             && configuration.flags.contains(.payToScriptHash)
             && lockingScript.isPayToScriptHash
         if configuration.flags.contains(.signaturePushOnly) || evaluatesPayToScriptHash {

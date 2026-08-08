@@ -2,9 +2,9 @@ import BSVScript
 
 /// The consensus rule set used to evaluate a locking-script pair.
 public enum ScriptExecutionEra: String, Hashable, Sendable {
-    case legacy
-    case genesis
-    case chronicle
+    case beforeGenesis
+    case afterGenesis
+    case afterChronicle
 }
 
 /// Optional validation rules layered on top of the selected consensus era.
@@ -64,8 +64,8 @@ public struct ScriptResourceLimits: Hashable, Sendable {
         self.maximumScriptNumberByteCount = maximumScriptNumberByteCount
     }
 
-    /// A practical default that admits every legacy-consensus script and the
-    /// Go SDK's Genesis-era Script-number ceiling without unbounded allocation.
+    /// A practical default that admits every before-Genesis consensus script and the
+    /// Go SDK's after-Genesis Script-number ceiling without unbounded allocation.
     public static let standard = Self(
         maximumScriptByteCount: 32 * 1_024 * 1_024,
         maximumPushDataByteCount: 32 * 1_024 * 1_024,
@@ -129,15 +129,15 @@ package struct ScriptConsensusLimits: Sendable {
 
     static func forEra(_ era: ScriptExecutionEra) -> Self {
         switch era {
-        case .legacy:
+        case .beforeGenesis:
             Self(
                 maximumScriptByteCount: 10_000,
                 maximumPushDataByteCount: 520,
                 maximumStackItemCount: 1_000,
                 maximumOperationCountPerScript: 500,
-                maximumScriptNumberByteCount: ScriptNumber.legacyMaximumByteCount
+                maximumScriptNumberByteCount: ScriptNumber.beforeGenesisMaximumByteCount
             )
-        case .genesis:
+        case .afterGenesis:
             Self(
                 maximumScriptByteCount: Int(Int32.max),
                 maximumPushDataByteCount: Int(Int32.max),
@@ -145,7 +145,7 @@ package struct ScriptConsensusLimits: Sendable {
                 maximumOperationCountPerScript: Int(Int32.max),
                 maximumScriptNumberByteCount: 750_000
             )
-        case .chronicle:
+        case .afterChronicle:
             Self(
                 maximumScriptByteCount: Int(Int32.max),
                 maximumPushDataByteCount: Int(Int32.max),

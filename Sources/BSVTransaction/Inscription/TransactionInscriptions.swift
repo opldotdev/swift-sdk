@@ -23,7 +23,7 @@ public extension Transaction {
     /// Atomically appends one 1-satoshi BRC-307 inscription output.
     @discardableResult
     mutating func inscribe(
-        _ arguments: InscriptionArguments,
+        _ arguments: InscriptionArgs,
         inscriptionLimits: InscriptionLimits,
         transactionLimits: TransactionLimits
     ) throws -> Int {
@@ -46,7 +46,7 @@ public extension Transaction {
     /// outside the selected source output are rejected before any output mutation.
     @discardableResult
     mutating func inscribeSpecificOrdinal(
-        _ arguments: InscriptionArguments,
+        _ arguments: InscriptionArgs,
         inputIndex: Int,
         satoshiIndex: UInt64,
         precedingSatoshisLockingScript: Script,

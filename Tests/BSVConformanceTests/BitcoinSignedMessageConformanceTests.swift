@@ -1,4 +1,5 @@
 import BSVCore
+import BSVCompat
 import BSVKeys
 import Foundation
 import Testing
@@ -31,8 +32,8 @@ struct BitcoinSignedMessageConformanceTests {
         )
     }
 
-    @Test("bitcoinj compressed and uncompressed legacy vectors verify")
-    func upstreamLegacyP2PKHVectors() throws {
+    @Test("bitcoinj compressed and uncompressed BSM vectors verify")
+    func upstreamBSMVectors() throws {
         let fixture: BitcoinJBSMFixture = try loadFixture(
             "Permissive/BitcoinJ/BitcoinSignedMessage/legacy-p2pkh-vectors.json"
         )
@@ -43,7 +44,7 @@ struct BitcoinSignedMessageConformanceTests {
             let signature = try BitcoinMessageSignature(
                 base64Encoded: vector.signatureBase64
             )
-            let address = try LegacyAddress(vector.address)
+            let address = try Address(vector.address)
             let message = Array(vector.messageUTF8.utf8)
 
             #expect(signature.base64Encoded == vector.signatureBase64)
@@ -52,7 +53,7 @@ struct BitcoinSignedMessageConformanceTests {
 
             let recovered = try signature.recoverPublicKey(message: message)
             #expect(
-                LegacyAddress(
+                Address(
                     publicKey: recovered,
                     network: address.network,
                     compressed: vector.compressed

@@ -24,7 +24,7 @@ struct InterpreterConformanceTests {
                 name: "equality",
                 unlocking: "012a",
                 locking: "7687",
-                era: .legacy,
+                era: .beforeGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -32,7 +32,7 @@ struct InterpreterConformanceTests {
                 name: "conditional",
                 unlocking: "",
                 locking: "006300675168",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -40,7 +40,7 @@ struct InterpreterConformanceTests {
                 name: "stack duplication",
                 unlocking: "",
                 locking: "51526e51",
-                era: .legacy,
+                era: .beforeGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -48,7 +48,7 @@ struct InterpreterConformanceTests {
                 name: "alternative stack",
                 unlocking: "",
                 locking: "516b6c",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -56,39 +56,39 @@ struct InterpreterConformanceTests {
                 name: "minimal conditional",
                 unlocking: "",
                 locking: "51635168",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [.minimalIf],
                 goFlags: ["minimalIf"]
             ),
             Case(
-                name: "post genesis return tail",
+                name: "after-genesis return tail",
                 unlocking: "516a4c",
                 locking: "51",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
             Case(
-                name: "post genesis return preserves alternative stack",
+                name: "after-genesis return preserves alternative stack",
                 unlocking: "516b6a",
                 locking: "6c",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
             Case(
-                name: "hidden genesis version conditional",
+                name: "hidden after-genesis version conditional",
                 unlocking: "",
                 locking: "0063656851",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
             Case(
-                name: "returned genesis version conditional",
+                name: "returned after-genesis version conditional",
                 unlocking: "51",
                 locking: "51636a6568",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -96,7 +96,7 @@ struct InterpreterConformanceTests {
                 name: "split cat",
                 unlocking: "",
                 locking: "0461626364527f7e046162636487",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -104,7 +104,7 @@ struct InterpreterConformanceTests {
                 name: "num2bin",
                 unlocking: "",
                 locking: "017f5280027f0087",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -112,7 +112,7 @@ struct InterpreterConformanceTests {
                 name: "bin2num",
                 unlocking: "",
                 locking: "020100815187",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -120,7 +120,7 @@ struct InterpreterConformanceTests {
                 name: "bitwise and",
                 unlocking: "",
                 locking: "020ff00233cc840203c087",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -128,7 +128,7 @@ struct InterpreterConformanceTests {
                 name: "hash family",
                 unlocking: "",
                 locking: "00a600a700a800a900aa51",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -136,7 +136,7 @@ struct InterpreterConformanceTests {
                 name: "arithmetic family",
                 unlocking: "",
                 locking: "528b539c5253944f9c5354955c9c575296539c51",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -144,7 +144,7 @@ struct InterpreterConformanceTests {
                 name: "wide arithmetic",
                 unlocking: "",
                 locking: "090000000000000000010900000000000000000193090000000000000000029c",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -152,31 +152,31 @@ struct InterpreterConformanceTests {
                 name: "byte shifts",
                 unlocking: "",
                 locking: "02123454980223408702123454990201238751",
-                era: .genesis,
+                era: .afterGenesis,
                 flags: [],
                 goFlags: []
             ),
             Case(
-                name: "chronicle arithmetic right shift",
+                name: "after-chronicle arithmetic right shift",
                 unlocking: "",
                 locking: "538f51b701829c",
-                era: .chronicle,
+                era: .afterChronicle,
                 flags: [],
                 goFlags: []
             ),
             Case(
-                name: "legacy p2sh redeem",
+                name: "before-genesis p2sh redeem",
                 unlocking: "0151",
                 locking: "a914da1745e9b549bd0bfa1a569971c77eba30cd5a4b87",
-                era: .legacy,
+                era: .beforeGenesis,
                 flags: [.payToScriptHash],
                 goFlags: ["p2sh"]
             ),
             Case(
-                name: "legacy reenabled multiply",
+                name: "before-genesis reenabled multiply",
                 unlocking: "",
                 locking: "525395569c",
-                era: .legacy,
+                era: .beforeGenesis,
                 flags: [],
                 goFlags: []
             ),
@@ -197,7 +197,7 @@ struct InterpreterConformanceTests {
                     arguments: [
                         "unlockingScript": .string(testCase.unlocking),
                         "lockingScript": .string(testCase.locking),
-                        "era": .string(testCase.era.rawValue),
+                        "era": .string(goOracleEraValue(for: testCase.era)),
                         "flags": .array(testCase.goFlags.map(GoOracleJSON.string)),
                     ]
                 )
@@ -217,7 +217,7 @@ struct InterpreterConformanceTests {
                 "false",
                 "",
                 "00",
-                .legacy,
+                .beforeGenesis,
                 .consensus(.evaluatedFalse),
                 "evaluatedFalse"
             ),
@@ -225,7 +225,7 @@ struct InterpreterConformanceTests {
                 "empty",
                 "",
                 "",
-                .legacy,
+                .beforeGenesis,
                 .consensus(.emptyFinalStack),
                 "evaluatedFalse"
             ),
@@ -233,7 +233,7 @@ struct InterpreterConformanceTests {
                 "verify",
                 "",
                 "0069",
-                .legacy,
+                .beforeGenesis,
                 .consensus(.verifyFailed),
                 "verifyFailed"
             ),
@@ -241,15 +241,15 @@ struct InterpreterConformanceTests {
                 "unbalanced",
                 "",
                 "516351",
-                .genesis,
+                .afterGenesis,
                 .consensus(.unbalancedConditional),
                 "unbalancedConditional"
             ),
             (
-                "legacy return",
+                "before-genesis return",
                 "",
                 "6a",
-                .legacy,
+                .beforeGenesis,
                 .consensus(.earlyReturn),
                 "earlyReturn"
             ),
@@ -257,7 +257,7 @@ struct InterpreterConformanceTests {
                 "unknown 186",
                 "",
                 "ba",
-                .chronicle,
+                .afterChronicle,
                 .consensus(.reservedOpcode(Opcode(rawValue: 0xba))),
                 "reservedOpcode"
             ),
@@ -265,7 +265,7 @@ struct InterpreterConformanceTests {
                 "unknown 189",
                 "",
                 "bd",
-                .chronicle,
+                .afterChronicle,
                 .consensus(.reservedOpcode(Opcode(rawValue: 0xbd))),
                 "reservedOpcode"
             ),
@@ -273,15 +273,15 @@ struct InterpreterConformanceTests {
                 "unknown 254",
                 "",
                 "fe",
-                .chronicle,
+                .afterChronicle,
                 .consensus(.reservedOpcode(Opcode(rawValue: 0xfe))),
                 "reservedOpcode"
             ),
             (
-                "chronicle version conditional empty stack",
+                "after-chronicle version conditional empty stack",
                 "",
                 "65",
-                .chronicle,
+                .afterChronicle,
                 .consensus(.unbalancedConditional),
                 "unbalancedConditional"
             ),
@@ -311,7 +311,7 @@ struct InterpreterConformanceTests {
                     arguments: [
                         "unlockingScript": .string(testCase.1),
                         "lockingScript": .string(testCase.2),
-                        "era": .string(testCase.3.rawValue),
+                        "era": .string(goOracleEraValue(for: testCase.3)),
                     ]
                 )
                 #expect(!response.ok)
@@ -320,8 +320,8 @@ struct InterpreterConformanceTests {
         }
     }
 
-    @Test("Chronicle version opcodes match the pinned Go SDK")
-    func chronicleVersionDifferential() throws {
+    @Test("after-Chronicle version opcodes match the pinned Go SDK")
+    func afterChronicleVersionDifferential() throws {
         let unlocking = try Script(hex: "", maximumByteCount: 1_000)
         let lockingHex = "6204020000008804020000006551675068"
         let locking = try Script(hex: lockingHex, maximumByteCount: 1_000)
@@ -341,7 +341,7 @@ struct InterpreterConformanceTests {
             unlockingScript: unlocking,
             lockingScript: locking,
             configuration: ScriptExecutionConfiguration(
-                era: .chronicle,
+                era: .afterChronicle,
                 resourceLimits: .standard
             ),
             context: ScriptExecutionContext(
@@ -365,12 +365,12 @@ struct InterpreterConformanceTests {
         case .available(let client):
             defer { client.close() }
             let response = try client.request(
-                id: "script-chronicle-version",
+                id: "script-after-chronicle-version",
                 operation: "script.execute",
                 arguments: [
                     "unlockingScript": .string(""),
                     "lockingScript": .string(lockingHex),
-                    "era": .string("chronicle"),
+                    "era": .string(goOracleEraValue(for: .afterChronicle)),
                     "transactionVersion": .string("2"),
                 ]
             )
@@ -518,7 +518,7 @@ struct InterpreterConformanceTests {
                     unlockingScript: testCase.1.inputs[0].unlockingScript,
                     lockingScript: testCase.2,
                     configuration: ScriptExecutionConfiguration(
-                        era: .legacy,
+                        era: .beforeGenesis,
                         flags: testCase.4,
                         resourceLimits: .standard
                     ),
@@ -535,7 +535,7 @@ struct InterpreterConformanceTests {
                     arguments: [
                         "unlockingScript": .string(testCase.1.inputs[0].unlockingScript.hex),
                         "lockingScript": .string(testCase.2.hex),
-                        "era": .string("legacy"),
+                        "era": .string(goOracleEraValue(for: .beforeGenesis)),
                         "flags": .array(testCase.3.map(GoOracleJSON.string)),
                         "transaction": .string(Hex.encode(try testCase.1.serialized(limits: limits))),
                         "inputIndex": .string("0"),
@@ -596,5 +596,14 @@ struct InterpreterConformanceTests {
             try script.appendPushData(value, maximumScriptByteCount: 10_000)
         }
         return script
+    }
+}
+
+/// The existing Go-oracle JSON protocol predates the Swift public API naming.
+private func goOracleEraValue(for era: ScriptExecutionEra) -> String {
+    switch era {
+    case .beforeGenesis: "legacy"
+    case .afterGenesis: "genesis"
+    case .afterChronicle: "chronicle"
     }
 }

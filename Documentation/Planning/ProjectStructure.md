@@ -19,19 +19,22 @@ swift-sdk/
 │   ├── BSVBigNum/            # internal/SPI; no library product
 │   ├── BSVCrypto/
 │   ├── BSVKeys/
+│   ├── BSVMessage/
+│   ├── BSVCompat/            # opt-in compatibility feature module
 │   ├── BSVScript/
 │   ├── BSVTransaction/
 │   ├── BSVInterpreter/
 │   ├── BSVSPV/
 │   ├── BSVNetwork/
 │   ├── BSVWallet/
-│   ├── BSVAuth/
-│   └── BSVServices/
+│   └── BSVAuth/
 ├── Tests/
 │   ├── BSVCoreTests/
 │   ├── BSVBigNumTests/
 │   ├── BSVCryptoTests/
 │   ├── BSVKeysTests/
+│   ├── BSVMessageTests/
+│   ├── BSVCompatTests/
 │   ├── BSVScriptTests/
 │   ├── BSVTransactionTests/
 │   ├── BSVInterpreterTests/
@@ -39,7 +42,6 @@ swift-sdk/
 │   ├── BSVNetworkTests/
 │   ├── BSVWalletTests/
 │   ├── BSVAuthTests/
-│   ├── BSVServicesTests/
 │   └── BSVConformanceTests/
 │       ├── Fixtures/         # permissive/public-domain sources only
 │       │   ├── Manifests/    # one provenance fragment per fixture group
@@ -52,12 +54,14 @@ swift-sdk/
 ## SwiftPM products
 
 - `BSV`: convenience umbrella.
+- `BSVCompat`: opt-in BSM, ECIES, BIP-32, and BIP-39 compatibility APIs.
 - One library product for every public feature module.
 - No public `BSVBigNum` product; lower-level implementation details remain
   replaceable.
 
-The feature modules are the stable import path. `Sources/BSV/Exports.swift` is
-the only file permitted to use `@_exported import`.
+The feature modules are the stable import path. Re-export declarations are
+confined to `Sources/BSV/Exports.swift`. `BSVCompat` consumers import dependency
+modules explicitly. The modern umbrella does not re-export `BSVCompat`.
 
 ## Source organization inside targets
 
@@ -75,6 +79,18 @@ BSVKeys/
 ├── Encoding/
 ├── Derivation/
 └── Sharing/
+
+BSVCompat/
+├── BSM/
+├── ECIES/
+├── HD/
+└── Mnemonic/
+
+BSVMessage/
+├── SignedMessage.swift
+├── EncryptedMessage.swift
+├── PortableMessageError.swift
+└── PortableMessageLimits.swift
 
 BSVTransaction/
 ├── Model/

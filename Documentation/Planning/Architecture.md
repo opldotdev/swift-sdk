@@ -16,40 +16,32 @@ platform integer width, implicit string conversion, or Foundation serialization.
 ## Proposed target graph
 
 ```text
-BSVCore
-  |
-  +--> BSVBigNum (internal or SPI)
-  |       |
-  |       +--> BSVCrypto
-  |       |       |
-  |       |       +--> BSVKeys
-  |       |                |
-  |       +--------------->+--> BSVScript
-  |                                  |
-  +--------------------------------->+--> BSVTransaction
-  |                                           |
-  +------------------------------------------>+--> BSVInterpreter
-  |                                                    |
-  +--------------------------------------------------->+--> BSVSPV
-  |                                                            |
-  +----------------------------------------------------------->+--> BSVNetwork
-  |                                                                     |
-  +-------------------------------------------------------------------->+--> BSVWallet
-  |                                                                              |
-  +----------------------------------------------------------------------------->+--> BSVAuth
-                                                                                           |
-                                                                                           +--> BSVServices
+BSVBigNum      -> BSVCore
+BSVCrypto      -> BSVCore, BSVBigNum
+BSVKeys        -> BSVCore, BSVBigNum, BSVCrypto
+BSVMessage     -> BSVCore, BSVCrypto, BSVKeys
+BSVScript      -> BSVCore, BSVBigNum, BSVCrypto, BSVKeys
+BSVTransaction -> BSVCore, BSVCrypto, BSVKeys, BSVScript
+BSVInterpreter -> BSVCore, BSVBigNum, BSVCrypto, BSVKeys, BSVScript, BSVTransaction
+BSVSPV         -> BSVCore, BSVTransaction, BSVInterpreter
+BSVNetwork     -> BSVCore, BSVTransaction
+BSVWallet      -> BSVCore, BSVCrypto, BSVKeys, BSVTransaction
+BSVAuth        -> BSVCore, BSVCrypto, BSVKeys, BSVTransaction, BSVWallet
 
 BSV (thin umbrella using @_exported import for public feature modules)
+
+BSVCompat (opt-in; depends on BSVCore, BSVCrypto, and BSVKeys)
 ```
 
-Arrows mean "is imported by." The target list is approved. A Phase 0 source
+Arrows point from each target to its direct imports. The target list is
+approved. A Phase 0 source
 audit confirmed that P256K 0.23.2 publicly returns compressed and uncompressed
-raw ECDH points, so no C shim target is required. Feature modules are the stable
+raw ECDH points, so no C shim target is required. Modern feature modules are the stable
 import surface. The `BSV` umbrella is a
 convenience layer; its use of the underscored `@_exported` attribute is confined
 to one file and recorded in an ADR so it can be replaced if Swift gains a
-supported re-export mechanism.
+supported re-export mechanism. `BSVCompat` is outside this umbrella and the
+modern dependency spine.
 
 ## Proposed responsibilities
 
@@ -101,13 +93,23 @@ Proposed dependencies:
   serialized key validation.
 - BRC-42 key derivation, BRC-94 proof behavior, Shamir shares, and backup
   formats.
-- Base58Check, WIF, legacy addresses, BIP-32, BIP-39, Bitcoin Signed Message,
-  and compatible ECIES formats.
+- Base58Check, WIF, P2PKH addresses, and network versions.
 - No transaction or script interpreter dependency.
 
 Proposed dependency:
 
 - `21-DOT-DEV/swift-secp256k1` 0.23.x (`P256K`).
+
+### BSVCompat
+
+- Bitcoin Signed Message compatibility APIs. New applications should use
+  BRC-77 `SignedMessage` from `BSVMessage`.
+- Electrum and Bitcore ECIES compatibility APIs. New applications should use
+  BRC-78 `EncryptedMessage` from `BSVMessage`.
+- BIP-32 extended keys. New protocol-key applications should use BRC-42.
+- BIP-39 mnemonic backup and import workflows.
+- An opt-in public product outside the `BSV` umbrella and modern dependency
+  spine.
 
 ### BSVScript
 
@@ -150,24 +152,29 @@ cyclic relationship.
 - BRC-100 wallet protocols, proto-wallet behavior, serializers, substrates,
   certificates used by wallets, and action/signing flows.
 
-### BSVAuth and BSVServices
+### BSVMessage
 
-- BRC-103/BRC-104 authentication, peer/client state, certificates, and HTTP or
+- Bounded BRC-77 portable signed messages.
+- Bounded BRC-78 portable encrypted messages.
+- No Wallet, Auth, Script, Transaction, or Network dependency.
+
+### BSVAuth
+
+- Offline certificate workflows.
+- Future BRC-103/BRC-104 authentication, peer/client state, and HTTP or
   WebSocket transports.
-- Overlay topic and lookup services, SHIP/SLAP, and admin tokens.
-- Identity, registry, key-value storage, UHRP/storage, and other high-level
-  services. Overlay and application services remain one target for the first
-  release and may split after their APIs stabilize.
-- `BSVServices` imports `BSVAuth` because identity and storage include
-  authenticated certificate/fetch flows in the Go baseline. This is a
-  one-directional high-level dependency, not a consensus-layer cycle.
+- No portable-message declarations or aliases.
+
+Future overlay, identity, registry, key-value, and storage work must use named
+modules after each public boundary is implemented. The package does not expose
+an empty general services module.
 
 Wallet-backed PushDrop unlocker factories live in `BSVWallet`. The underlying
 PushDrop encoding, locking script, and transaction-context signer live in
 `BSVTransaction`, preserving the rule that Transaction cannot import Wallet.
-Likewise, WIF, legacy addresses, network versions, and BIP-32 conveniences live
-in `BSVKeys` even where the Go SDK places them in EC, Script, or chaincfg
-packages.
+Likewise, WIF, P2PKH addresses, and network versions live in `BSVKeys` even
+where the Go SDK places them in EC, Script, or chaincfg packages. BIP-32 is in
+the opt-in `BSVCompat` module.
 
 ## Big-integer boundary
 

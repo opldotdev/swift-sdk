@@ -1,7 +1,7 @@
 import Crypto
 import CryptoExtras
 
-/// The fixed legacy PBKDF2 profile required by BIP-39.
+/// The fixed PBKDF2 profile required by BIP-39.
 ///
 /// This deliberately does not expose configurable rounds, digest selection, or
 /// output length. BIP-39 mandates parameters that are below contemporary
