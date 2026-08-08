@@ -4,8 +4,14 @@ import BSVScript
 
 /// A value-semantic legacy Bitcoin transaction.
 ///
-/// This type covers the canonical transaction wire format. BRC-30 extended
-/// format, BEEF, and signing preimages are separate layers built on this model.
+/// This type covers the canonical transaction wire format and the bounded
+/// BRC-30/BIP-239 Extended Format packet. BEEF and signing preimages are
+/// separate layers built on this model.
+///
+/// Extended Format source outputs are asserted metadata, not proof that the
+/// referenced UTXOs exist. That metadata remains outside equality, hashing,
+/// raw serialization, and transaction IDs. Consequently equal transactions
+/// can produce different Extended Format bytes.
 public struct Transaction: Hashable, Sendable {
     public var version: UInt32
     public var inputs: [TransactionInput]
@@ -27,6 +33,7 @@ public struct Transaction: Hashable, Sendable {
     /// Parses exactly one bounded transaction and rejects trailing bytes.
     public init(
         bytes: [UInt8],
+        format: TransactionWireFormat = .raw,
         limits: TransactionLimits,
         compactSizeCanonicality: CompactSizeCanonicality = .required
     ) throws {
@@ -40,6 +47,7 @@ public struct Transaction: Hashable, Sendable {
         var cursor = ByteCursor(bytes)
         try self.init(
             consuming: &cursor,
+            format: format,
             limits: limits,
             compactSizeCanonicality: compactSizeCanonicality
         )
@@ -57,12 +65,21 @@ public struct Transaction: Hashable, Sendable {
     /// Consumes one raw transaction from an enclosing package format.
     package init(
         consuming cursor: inout ByteCursor,
+        format: TransactionWireFormat = .raw,
         limits: TransactionLimits,
         compactSizeCanonicality: CompactSizeCanonicality = .required
     ) throws {
         let startPosition = cursor.position
         let version = try Self.read(.version, from: &cursor) {
             try $0.readUInt32LE()
+        }
+        if format == .extended {
+            let marker = try Self.read(.extendedFormatMarker, from: &cursor) {
+                try $0.read(count: Self.extendedFormatMarker.count)
+            }
+            guard marker == Self.extendedFormatMarker else {
+                throw TransactionError.invalidExtendedFormatMarker(actual: marker)
+            }
         }
         let inputCountValue = try Self.read(.inputCount, from: &cursor) {
             try $0.readCompactSize(canonicality: compactSizeCanonicality).value
@@ -78,7 +95,8 @@ public struct Transaction: Hashable, Sendable {
         }
 
         var inputs: [TransactionInput] = []
-        inputs.reserveCapacity(min(Int(inputCountValue), cursor.remaining / 41))
+        let minimumInputByteCount = format == .extended ? 50 : 41
+        inputs.reserveCapacity(min(Int(inputCountValue), cursor.remaining / minimumInputByteCount))
         for _ in 0..<Int(inputCountValue) {
             let transactionIDBytes = try Self.read(.previousTransactionID, from: &cursor) {
                 try $0.read(count: 32)
@@ -95,6 +113,28 @@ public struct Transaction: Hashable, Sendable {
             let sequence = try Self.read(.sequence, from: &cursor) {
                 try $0.readUInt32LE()
             }
+            let sourceOutput: TransactionOutput?
+            if format == .extended {
+                let sourceSatoshis = try Self.read(.sourceSatoshis, from: &cursor) {
+                    try $0.readUInt64LE()
+                }
+                let sourceScriptBytes = try Self.read(.sourceLockingScript, from: &cursor) {
+                    try $0.readVarBytes(
+                        maximumLength: limits.maximumScriptByteCount,
+                        canonicality: compactSizeCanonicality
+                    ).bytes
+                }
+                sourceOutput = TransactionOutput(
+                    satoshis: sourceSatoshis,
+                    lockingScript: try Script(
+                        bytes: sourceScriptBytes,
+                        maximumByteCount: Int(limits.maximumScriptByteCount)
+                    ),
+                    isChange: false
+                )
+            } else {
+                sourceOutput = nil
+            }
             inputs.append(TransactionInput(
                 previousOutput: Outpoint(
                     transactionID: try TransactionID(wireBytes: transactionIDBytes),
@@ -104,7 +144,9 @@ public struct Transaction: Hashable, Sendable {
                     bytes: scriptBytes,
                     maximumByteCount: Int(limits.maximumScriptByteCount)
                 ),
-                sequence: sequence
+                sequence: sequence,
+                sourceOutput: sourceOutput,
+                estimatedUnlockingScriptByteCount: nil
             ))
         }
 
@@ -159,6 +201,7 @@ public struct Transaction: Hashable, Sendable {
     /// Parses lowercase or uppercase hexadecimal within the same byte limit.
     public init(
         hex: String,
+        format: TransactionWireFormat = .raw,
         limits: TransactionLimits,
         compactSizeCanonicality: CompactSizeCanonicality = .required
     ) throws {
@@ -177,6 +220,7 @@ public struct Transaction: Hashable, Sendable {
             )
             try self.init(
                 bytes: bytes,
+                format: format,
                 limits: limits,
                 compactSizeCanonicality: compactSizeCanonicality
             )
@@ -186,15 +230,29 @@ public struct Transaction: Hashable, Sendable {
     }
 
     /// Serializes using canonical CompactSize prefixes after a complete size preflight.
-    public func serialized(limits: TransactionLimits) throws -> [UInt8] {
-        let byteCount = try serializedByteCount(limits: limits)
+    public func serialized(
+        format: TransactionWireFormat = .raw,
+        limits: TransactionLimits
+    ) throws -> [UInt8] {
+        let byteCount = try serializedByteCount(format: format, limits: limits)
         var writer = ByteWriter(capacity: byteCount)
         writer.writeUInt32LE(version)
+        if format == .extended {
+            writer.write(Self.extendedFormatMarker)
+        }
         writer.writeCompactSize(UInt64(inputs.count))
-        for input in inputs {
+        for (inputIndex, input) in inputs.enumerated() {
             writer.write(input.previousOutput.wireBytes)
             writer.writeVarBytes(input.unlockingScript.bytes)
             writer.writeUInt32LE(input.sequence)
+            if format == .extended {
+                // Complete preflight above guarantees this metadata is present.
+                guard let sourceOutput = input.sourceOutput else {
+                    throw TransactionError.missingSourceOutput(inputIndex: inputIndex)
+                }
+                writer.writeUInt64LE(sourceOutput.satoshis)
+                writer.writeVarBytes(sourceOutput.lockingScript.bytes)
+            }
         }
         writer.writeCompactSize(UInt64(outputs.count))
         for output in outputs {
@@ -205,8 +263,11 @@ public struct Transaction: Hashable, Sendable {
         return writer.bytes
     }
 
-    public func hex(limits: TransactionLimits) throws -> String {
-        Hex.encode(try serialized(limits: limits))
+    public func hex(
+        format: TransactionWireFormat = .raw,
+        limits: TransactionLimits
+    ) throws -> String {
+        Hex.encode(try serialized(format: format, limits: limits))
     }
 
     public func transactionID(limits: TransactionLimits) throws -> TransactionID {
@@ -217,15 +278,20 @@ public struct Transaction: Hashable, Sendable {
         )
     }
 
-    public func serializedByteCount(limits: TransactionLimits) throws -> Int {
+    public func serializedByteCount(
+        format: TransactionWireFormat = .raw,
+        limits: TransactionLimits
+    ) throws -> Int {
         try serializedByteCount(
             unlockingScriptByteCounts: inputs.map { $0.unlockingScript.byteCount },
+            format: format,
             limits: limits
         )
     }
 
     package func serializedByteCount(
         unlockingScriptByteCounts: [Int],
+        format: TransactionWireFormat = .raw,
         limits: TransactionLimits
     ) throws -> Int {
         guard UInt64(inputs.count) <= limits.maximumInputCount else {
@@ -243,8 +309,16 @@ public struct Transaction: Hashable, Sendable {
         guard unlockingScriptByteCounts.count == inputs.count else {
             throw TransactionError.serializedSizeOverflow
         }
+        if format == .extended {
+            for (inputIndex, input) in inputs.enumerated() where input.sourceOutput == nil {
+                throw TransactionError.missingSourceOutput(inputIndex: inputIndex)
+            }
+        }
 
         var total = 4
+        if format == .extended {
+            try Self.add(Self.extendedFormatMarker.count, to: &total)
+        }
         try Self.add(CompactSize.encodedLength(of: UInt64(inputs.count)), to: &total)
         for (inputIndex, scriptByteCount) in unlockingScriptByteCounts.enumerated() {
             guard scriptByteCount >= 0 else {
@@ -266,6 +340,18 @@ public struct Transaction: Hashable, Sendable {
                 to: &total
             )
             try Self.add(scriptByteCount, to: &total)
+            if format == .extended {
+                guard let sourceOutput = inputs[inputIndex].sourceOutput else {
+                    throw TransactionError.missingSourceOutput(inputIndex: inputIndex)
+                }
+                try Self.validate(script: sourceOutput.lockingScript, limits: limits)
+                try Self.add(8, to: &total)
+                try Self.add(
+                    CompactSize.encodedLength(of: UInt64(sourceOutput.lockingScript.byteCount)),
+                    to: &total
+                )
+                try Self.add(sourceOutput.lockingScript.byteCount, to: &total)
+            }
         }
         try Self.add(CompactSize.encodedLength(of: UInt64(outputs.count)), to: &total)
         for output in outputs {
@@ -343,4 +429,6 @@ public struct Transaction: Hashable, Sendable {
         guard !overflow else { throw TransactionError.serializedSizeOverflow }
         total = next
     }
+
+    private static let extendedFormatMarker: [UInt8] = [0, 0, 0, 0, 0, 0xef]
 }

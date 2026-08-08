@@ -13,9 +13,12 @@
 
 ## Executive findings
 
-The current Swift target graph is broadly right, but full parity exposes three boundary problems:
+The current Swift target graph is broadly right. Full parity exposed three
+boundary problems; the first has since been resolved:
 
-1. `BSVServices` cannot currently implement all of `identity` and `storage`: both import auth packages, while `Package.swift` gives `BSVServices` no dependency on `BSVAuth`. Add `BSVAuth` to `BSVServices`, or extract a certificate/authenticated-fetch protocol below both. Adding the dependency is the faithful low-risk choice.
+1. Resolved: `BSVServices` now depends on `BSVAuth`, allowing future identity
+   and storage implementations to consume certificate and authenticated-fetch
+   capabilities without a target cycle.
 2. Go `transaction/template/pushdrop` depends on `wallet`, but Swift `BSVTransaction` must remain below `BSVWallet`. Keep PushDrop data encoding/locking and transaction-context signing in `BSVTransaction`; move the wallet-backed unlocker/factory into `BSVWallet`.
 3. Go places WIF methods in `primitives/ec`, addresses in `script`, and BIP-32 depends on both `script` and `chaincfg`. Mirroring those namespaces would create Swift cycles. Keep secp keys in `BSVCrypto`; add WIF/address/BIP-32 conveniences in `BSVKeys`, with extensions on crypto key types where useful.
 
@@ -488,7 +491,7 @@ Edges: all auth subpackages, EC, script, P2PKH, wallet; stdlib HTTP.
 
 ### Overlay and high-level services
 
-All map to `BSVServices`, subject to adding a dependency on `BSVAuth`.
+All map to `BSVServices`, which now depends on `BSVAuth`.
 
 #### `overlay`
 
@@ -567,7 +570,7 @@ Public:
 
 Edges: auth HTTP client, base58, overlay/lookup, hash, transaction, PushDrop, util, wallet.
 
-This package proves `BSVServices -> BSVAuth` is required unless authenticated fetch is abstracted.
+This package motivated the now-established `BSVServices -> BSVAuth` edge.
 
 ### Internal/test-support packages
 
@@ -773,7 +776,7 @@ License warning: these live under the Open BSV-licensed upstream. Use the Go ora
 10. `BSVNetwork`: concrete chain trackers, headers client, ARC/TAAL/WOC broadcasters, HTTP seam, Linux networking tests.
 11. `BSVWallet`: BRC-100 models/protocols, key deriver/cache, ProtoWallet, wallet-backed PushDrop, serializers, wire/JSON substrates.
 12. `BSVAuth`: BRC-77 messages, certificates, nonce/certificate utilities, peer/session state, BRC-104 payloads, HTTP/WebSocket/auth-fetch.
-13. `BSVServices`: overlay/admin/lookup/topic, identity, registry, KV store, UHRP storage. First amend `Package.swift` so Services can import Auth, or document the extracted interface alternative.
+13. `BSVServices`: overlay/admin/lookup/topic, identity, registry, KV store, UHRP storage. The required dependency on `BSVAuth` is already present.
 14. Hardening: differential oracle for every codec, explicit Go-error-to-Swift-error tables, malformed/truncation fuzzing, resource ceilings, concurrency/Sendable review, Linux live transport tests.
 
 ## Exact seam contracts to stabilize early
@@ -791,4 +794,6 @@ License warning: these live under the Open BSV-licensed upstream. Use the Go ora
 - Wallet capability protocols should retain the Go split (`PublicKey`, cipher, HMAC, signature, certificates, full wallet) so auth/services can accept the narrowest dependency.
 - Network transport protocols must use `async throws`, injected clocks/session timeouts, and `Sendable` request/response values.
 
-This inventory supports the approved modular architecture, with the required `BSVServices`/`BSVAuth` dependency correction and PushDrop/WIF/address namespace adaptations.
+This inventory supports the approved modular architecture, including the
+completed `BSVServices`/`BSVAuth` dependency correction and the PushDrop,
+WIF, and address namespace adaptations.

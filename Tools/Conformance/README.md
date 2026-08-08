@@ -176,12 +176,21 @@ final generic defense and does not echo recovered values or request material.
 | `transaction.beef.verify` | `{bytes,allowTransactionIDOnly,validRoots:[{blockHeight,root}]}` | `{valid}` after pinned Go structural and chain-root verification |
 | `spv.verify` | `{bytes,validRoots:[{blockHeight,root}],satoshisPerKilobyte?}` | `{valid}` after pinned Go BRC-67 ancestry, root-fee, and Script verification of a v1 BEEF root transaction |
 | `transaction.decode` | `{bytes}` | `{bytes,version,inputs,outputs,lockTime,txid}` |
+| `transaction.ef.decode` | `{bytes}` | `{bytes,rawBytes,txid,version,inputs,outputs,lockTime,sources:[{satoshis,lockingScript}]}` for a literal-marker BRC-30/BIP-239 packet |
+| `transaction.ef.encode` | `{bytes,sources:[{satoshis,lockingScript}]}` | `{bytes,rawBytes,txid}` after attaching one asserted source output per raw input |
 | `transaction.fee` | `{bytes,satoshisPerKilobyte,unlockingByteCounts}` | `{fee}` using actual nonempty scripts or one decimal-string/null estimate per input |
 | `transaction.merklepath.combine` | `{left,right}` | `{bytes}` for the combined canonical BRC-74 path |
 | `transaction.merklepath.decode` | `{bytes}` | `{bytes,blockHeight,treeHeight}` for canonical BRC-74 binary |
 | `transaction.merklepath.root` | `{bytes,txid}` | `{root}` using display-order txid/root strings |
 | `transaction.p2pkh.sign` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash,privateKey}` | `{unlockingScript}` using the pinned Go signer |
 | `transaction.sighash` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash}` | `{preimage,digest}` for canonical legacy or replay-protected signature-hash flags |
+
+Extended Format oracle requests use literal six-byte `0000000000ef` markers,
+lowercase hex, canonical unsigned-decimal source amounts, and exactly one source
+entry per raw input. A non-allocating complete-packet scan and request/response
+size preflight run before the pinned Go parser. The Extended Format known answer
+in this repository was authored for the Swift SDK under its MIT license; it was
+not copied from the pinned Go SDK or BRC examples.
 
 Stable error categories are `invalidEncoding`, `invalidCharacter`,
 `invalidLength`, `truncated`, `trailingData`, `noncanonical`, `overflow`,

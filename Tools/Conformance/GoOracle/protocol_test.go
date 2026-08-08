@@ -45,3 +45,38 @@ func TestServeRejectsOverlongInput(t *testing.T) {
 		t.Fatal("expected overlong error")
 	}
 }
+
+func TestServeDoesNotEchoOversizedRequestID(t *testing.T) {
+	requestID := strings.Repeat("x", maxLineBytes-1024)
+	requestBytes, err := json.Marshal(request{
+		Schema: protocolSchema,
+		ID:     requestID,
+		Op:     "metadata",
+		Args:   json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requestBytes)+1 > maxLineBytes {
+		t.Fatalf("test request unexpectedly exceeds line bound: %d", len(requestBytes)+1)
+	}
+
+	var output bytes.Buffer
+	if err := serve(
+		strings.NewReader(string(requestBytes)+"\n"),
+		json.NewEncoder(&output),
+		metadata{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if output.Len() >= 1024 {
+		t.Fatalf("oversized ID was reflected into response: %d bytes", output.Len())
+	}
+	var res response
+	if err := json.Unmarshal(output.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.OK || res.ID != "" || res.Error == nil || res.Error.Category != "resourceLimit" {
+		t.Fatalf("unexpected oversized-ID response: %#v", res)
+	}
+}

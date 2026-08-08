@@ -65,6 +65,39 @@ func TestKnownStandardValues(t *testing.T) {
 			"bytes": "01000000000000000000", "inputs": "0", "lockTime": "0",
 			"outputs": "0", "txid": "d21633ba23f70118185227be58a63527675641ad37967e2aa461559f577aec43", "version": "1",
 		}},
+		{"transaction.ef.encode", `{"bytes":"1234567801` +
+			"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" +
+			`1122334402aabba1b2c3d4010900000000000000026a000a0b0c0d","sources":[` +
+			`{"satoshis":"72623859790382856","lockingScript":"5100ac"}]}`, map[string]string{
+			"bytes": "123456780000000000ef01" +
+				"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" +
+				"1122334402aabba1b2c3d40807060504030201035100ac" +
+				"010900000000000000026a000a0b0c0d",
+			"rawBytes": "1234567801" +
+				"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" +
+				"1122334402aabba1b2c3d4010900000000000000026a000a0b0c0d",
+			"txid": "de97cec94973a1a135e976aad1fdf5414b77415469b3327b5df63bb99f16f9e9",
+		}},
+		{"transaction.ef.decode", `{"bytes":"123456780000000000ef01` +
+			"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" +
+			`1122334402aabba1b2c3d40807060504030201035100ac` +
+			`010900000000000000026a000a0b0c0d"}`, map[string]any{
+			"bytes": "123456780000000000ef01" +
+				"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" +
+				"1122334402aabba1b2c3d40807060504030201035100ac" +
+				"010900000000000000026a000a0b0c0d",
+			"rawBytes": "1234567801" +
+				"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" +
+				"1122334402aabba1b2c3d4010900000000000000026a000a0b0c0d",
+			"txid":     "de97cec94973a1a135e976aad1fdf5414b77415469b3327b5df63bb99f16f9e9",
+			"version":  "2018915346",
+			"inputs":   "1",
+			"outputs":  "1",
+			"lockTime": "218893066",
+			"sources": []map[string]string{{
+				"satoshis": "72623859790382856", "lockingScript": "5100ac",
+			}},
+		}},
 		{"transaction.beef.decode", `{"bytes":"0200beef000102` + strings.Repeat("00", 32) + `"}`, map[string]string{
 			"atomicSubject": "", "bumps": "0", "newestTxid": strings.Repeat("00", 32),
 			"transactions": "1", "version": "4022206466",
@@ -203,12 +236,92 @@ func TestCompleteOperationRegistry(t *testing.T) {
 		"digest32.parse", "drbg.generate", "ecies.bitcore.decrypt", "ecies.bitcore.encrypt", "ecies.electrum.decrypt", "ecies.electrum.encrypt", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "keyshares.recover", "keyshares.split", "metadata",
 		"portable.encrypted.decrypt", "portable.encrypted.encrypt", "portable.signed.sign", "portable.signed.verify",
-		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.execute", "scriptnum.decode", "scriptnum.encode", "spv.verify", "symmetric.decrypt", "symmetric.encrypt", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
+		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.execute", "scriptnum.decode", "scriptnum.encode", "spv.verify", "symmetric.decrypt", "symmetric.encrypt", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.ef.decode", "transaction.ef.encode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
 	}
 	if !reflect.DeepEqual(operations, expected) {
 		t.Fatalf("registry mismatch\n got: %v\nwant: %v", operations, expected)
+	}
+}
+
+func TestExtendedFormatProtocolValidation(t *testing.T) {
+	raw := "0100000001" + strings.Repeat("00", 32) + "0000000000ffffffff0000000000"
+	ef := "010000000000000000ef01" + strings.Repeat("00", 32) +
+		"0000000000ffffffff0000000000000000000000000000"
+	cases := []struct {
+		name, op, args, category string
+	}{
+		{"encode exact args", "transaction.ef.encode", `{"bytes":"01000000000000000000","sources":[],"extra":true}`, "invalidEncoding"},
+		{"decode exact args", "transaction.ef.decode", `{"bytes":"010000000000000000ef000000000000","extra":true}`, "invalidEncoding"},
+		{"source count short", "transaction.ef.encode", `{"bytes":"` + raw + `","sources":[]}`, "invalidLength"},
+		{"source count long", "transaction.ef.encode", `{"bytes":"01000000000000000000","sources":[{"satoshis":"0","lockingScript":""}]}`, "invalidLength"},
+		{"uppercase raw hex", "transaction.ef.encode", `{"bytes":"0100000000000000000A","sources":[]}`, "invalidEncoding"},
+		{"uppercase source hex", "transaction.ef.encode", `{"bytes":"` + raw + `","sources":[{"satoshis":"0","lockingScript":"AA"}]}`, "invalidEncoding"},
+		{"leading-zero source amount", "transaction.ef.encode", `{"bytes":"` + raw + `","sources":[{"satoshis":"00","lockingScript":""}]}`, "invalidEncoding"},
+		{"overflowing source amount", "transaction.ef.encode", `{"bytes":"` + raw + `","sources":[{"satoshis":"18446744073709551616","lockingScript":""}]}`, "overflow"},
+		{"encode rejects EF input", "transaction.ef.encode", `{"bytes":"` + ef + `","sources":[{"satoshis":"0","lockingScript":""}]}`, "invalidEncoding"},
+		{"raw collision stays outside parity", "transaction.ef.encode", `{"bytes":"010000000000000000ef","sources":[]}`, "invalidEncoding"},
+		{"decode requires literal marker", "transaction.ef.decode", `{"bytes":"010000000000000000ee000000000000"}`, "invalidEncoding"},
+		{"decode marker truncation", "transaction.ef.decode", `{"bytes":"010000000000000000"}`, "invalidLength"},
+		{"decode trailing bytes", "transaction.ef.decode", `{"bytes":"010000000000000000ef00000000000000"}`, "trailingData"},
+		{"hostile input count", "transaction.ef.decode", `{"bytes":"010000000000000000efffffffffffffffffff"}`, "resourceLimit"},
+		{"hostile script length", "transaction.ef.decode", `{"bytes":"010000000000000000ef01` + strings.Repeat("00", 36) + `ffffffffffffffffff0000000000"}`, "invalidLength"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := execute(testRequest(tc.op, tc.args), metadata{})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if got := normalizeError(err).Category; got != tc.category {
+				t.Fatalf("got %s, want %s (%v)", got, tc.category, err)
+			}
+		})
+	}
+}
+
+func TestTransactionDecodePreflightsHostileDeclarations(t *testing.T) {
+	cases := []struct {
+		name, bytes, category string
+	}{
+		{"hostile input count", "01000000ffffffffffffffffff", "resourceLimit"},
+		{"hostile unlocking length", "0100000001" + strings.Repeat("00", 36) + "ffffffffffffffffff0000000000", "invalidLength"},
+		{"hostile output count", "0100000000ffffffffffffffffff", "resourceLimit"},
+		{"trailing raw transaction", "0100000000000000000000", "trailingData"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := execute(
+				testRequest("transaction.decode", `{"bytes":"`+tc.bytes+`"}`),
+				metadata{},
+			)
+			if err == nil {
+				t.Fatal("expected bounded preflight rejection")
+			}
+			if got := normalizeError(err).Category; got != tc.category {
+				t.Fatalf("got %s, want %s (%v)", got, tc.category, err)
+			}
+		})
+	}
+}
+
+func TestExtendedFormatDecodeRejectsManySourceObjectsBeforePinnedGo(t *testing.T) {
+	const inputCount = 5000
+	// A minimal EF input is 50 bytes: raw input 41, source amount 8, and an
+	// empty source-script prefix. The request remains below 1 MiB, while the
+	// decoded JSON sources array would exceed the response-line bound.
+	packet := "010000000000000000ef" + "fd8813" +
+		strings.Repeat("00", inputCount*50) + "00" + "00000000"
+	_, err := execute(
+		testRequest("transaction.ef.decode", `{"bytes":"`+packet+`"}`),
+		metadata{},
+	)
+	if err == nil {
+		t.Fatal("expected response resource limit")
+	}
+	if got := normalizeError(err).Category; got != "resourceLimit" {
+		t.Fatalf("got %s, want resourceLimit (%v)", got, err)
 	}
 }
 
@@ -1261,6 +1374,8 @@ func TestEveryOperationHasDeterministicSuccess(t *testing.T) {
 		testRequest("script.asm.encode", `{"bytes":"0051b3ff"}`),
 		testRequest("script.asm.names", `{}`),
 		testRequest("transaction.decode", `{"bytes":"01000000000000000000"}`),
+		testRequest("transaction.ef.encode", `{"bytes":"01000000000000000000","sources":[]}`),
+		testRequest("transaction.ef.decode", `{"bytes":"010000000000000000ef000000000000"}`),
 		testRequest("transaction.fee", `{"bytes":"01000000000000000000","satoshisPerKilobyte":"100","unlockingByteCounts":[]}`),
 		testRequest("transaction.p2pkh.sign", `{"bytes":"0100000001`+strings.Repeat("00", 32)+`0000000000ffffffff0100000000000000000000000000","inputIndex":"0","sourceSatoshis":"0","sourceScript":"","signatureHash":"65","privateKey":"`+strings.Repeat("00", 31)+`01"}`),
 		testRequest("transaction.sighash", `{"bytes":"0100000001`+strings.Repeat("00", 32)+`0000000000ffffffff0100000000000000000000000000","inputIndex":"0","sourceSatoshis":"0","sourceScript":"","signatureHash":"65"}`),

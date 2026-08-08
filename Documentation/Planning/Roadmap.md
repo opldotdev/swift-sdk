@@ -1,10 +1,12 @@
 # Delivery roadmap
 
-Status: P0 complete; foundational P1/P2 crypto and BIP-32/BIP-39 plus legacy
-P3 key-format packets accepted after independent and Fable review. BigNum,
-initial Script, bounded legacy transactions, BRC-74 Merkle paths, and BEEF
-v1/v2 plus Atomic BEEF foundations are accepted. The first network, wallet,
-and portable-message checkpoints in Phases 7, 8, and 9 are also accepted.
+Status: P0 complete; foundational P1/P2 crypto and P3 key formats are accepted
+after independent and Fable review. BigNum, Script, bounded raw and Extended
+Format transactions, BRC-74 Merkle paths, and BEEF v1/v2 plus Atomic BEEF are
+accepted. The first network, wallet, and portable-message checkpoints in
+Phases 7, 8, and 9 are also accepted. Work proceeds by dependency and can land
+out of phase order; an accepted checkpoint does not imply every earlier phase
+is complete.
 
 Each milestone ends with passing conformance tests, an updated compatibility
 matrix, and an advisor review at architectural or security-sensitive boundaries.
@@ -15,8 +17,8 @@ Milestone completion is based on behavior, not file count.
 - Approve the target graph and dependency policy.
 - Record the completed P256K raw-point ECDH audit; no C shim is required.
 - Resolve fixture licensing and provenance before copying upstream material.
-- Create `Package.swift`, formatting/lint configuration, CI for Apple and Linux,
-  documentation conventions, and ADR templates.
+- Create `Package.swift`, CI for Apple and Linux, documentation conventions,
+  and ADR templates.
 - Add upstream provenance manifests and fixture license directories.
 - Establish Swift Testing/XCTest conventions, deterministic randomness, and a
   pinned-Go-SDK differential-test harness as a primary conformance mechanism.
@@ -78,15 +80,19 @@ Bitcore-compatible ECIES.
 
 ## Phase 4: Script and transaction models
 
-In progress: bounded signed-magnitude Script numbers, raw opcode identity,
-PUSHDATA parsing/building, standard structural classifiers, and the legacy
-transaction wire model are implemented with permissive fixtures, pinned-Go
-differentials, and Fable review.
+Accepted checkpoint: bounded signed-magnitude Script numbers, raw opcode
+identity, PUSHDATA parsing/building, standard structural classifiers, raw
+transactions, and explicit BRC-30/BIP-239 Extended Format transactions are
+implemented with permissive fixtures, pinned-Go differentials, and Fable
+review. Extended Format carries each input's source output; raw serialization,
+transaction IDs, equality, and hashing remain unchanged. Parsing requires an
+explicit wire format so marker-like raw transactions are never auto-detected.
 
 - Transaction value/graph semantics and ADR. (Accepted)
 - Script representation, parsing, ASM, opcodes, and templates that do not sign.
 - Resource-bounded script numbers and era configuration.
 - Transaction model, parsing, serialization, IDs, and outpoints. (Accepted)
+- Extended Format parsing and serialization with source outputs. (Accepted)
 - Fee models and checked equal change distribution. (Accepted)
 - ForkID sighash variants and P2PKH transaction signing. (Accepted)
 
@@ -95,8 +101,8 @@ differentials, and Fable review.
 Accepted checkpoint: the bounded interpreter now covers stack/control flow,
 splice, bitwise, arbitrary-precision arithmetic, hashing, P2SH, legacy and
 ForkID `CHECKSIG`, `CHECKMULTISIG`, CLTV/CSV, and Chronicle version/slice/shift
-rules. Exact pinned-Go stack, failure, full-transaction signature, and script
-cleanup differentials cover the consensus-sensitive paths.
+rules. A selected pinned-Go corpus covers stack, failure, full-transaction
+signature, and script-cleanup behavior on consensus-sensitive paths.
 
 - Stack and control flow. (Accepted)
 - Arithmetic, bitwise, splice, and crypto opcodes. (Accepted)
@@ -155,7 +161,8 @@ interactive permission policy.
 - BRC-100 crypto protocol types and capability protocols. (Accepted)
 - ProtoWallet key derivation, public-key, encryption, HMAC, and signing flows.
   (Accepted)
-- Bounded Go-compatible request/result JSON. (Accepted)
+- Bounded Go-compatible request/result JSON for the seven cryptographic calls.
+  (Accepted)
 - Persistent wallet state, request/response substrates, and permission policy.
   (Future)
 - Wallet certificate flows. (Future)

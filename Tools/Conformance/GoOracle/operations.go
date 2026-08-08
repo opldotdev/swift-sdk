@@ -1024,6 +1024,9 @@ func execute(req request, meta metadata) (result any, err error) {
 		if err != nil {
 			return nil, err
 		}
+		if _, err := preflightTransactionPacket(data, false); err != nil {
+			return nil, err
+		}
 		tx, err := transaction.NewTransactionFromBytes(data)
 		if err != nil {
 			return nil, err
@@ -1035,6 +1038,122 @@ func execute(req request, meta metadata) (result any, err error) {
 			"outputs":  strconv.Itoa(len(tx.Outputs)),
 			"txid":     tx.TxID().String(),
 			"version":  strconv.FormatUint(uint64(tx.Version), 10),
+		}, nil
+	case "transaction.ef.encode":
+		var args struct {
+			Bytes   string `json:"bytes"`
+			Sources []struct {
+				Satoshis      string `json:"satoshis"`
+				LockingScript string `json:"lockingScript"`
+			} `json:"sources"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		rawBytes, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		if len(rawBytes) >= 10 && bytes.Equal(rawBytes[4:10], extendedTransactionMarker) {
+			return nil, categorizedError{"invalidEncoding", "bytes must be a raw transaction, not Extended Format"}
+		}
+		summary, err := preflightTransactionPacket(rawBytes, false)
+		if err != nil {
+			return nil, err
+		}
+		if len(args.Sources) != summary.inputCount {
+			return nil, categorizedError{"invalidLength", "sources must contain exactly one entry per input"}
+		}
+		sourceScripts := make([][]byte, len(args.Sources))
+		sourceSatoshis := make([]uint64, len(args.Sources))
+		estimatedEFLength := len(rawBytes) + len(extendedTransactionMarker)
+		for index, source := range args.Sources {
+			satoshis, parseErr := decimalUint(source.Satoshis, 64)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			lockingScript, parseErr := protocolHex(source.LockingScript)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			increment := 8 + varIntLength(uint64(len(lockingScript))) + len(lockingScript)
+			if increment > maxLineBytes-estimatedEFLength {
+				return nil, categorizedError{"resourceLimit", "Extended Format result exceeds protocol bounds"}
+			}
+			estimatedEFLength += increment
+			sourceScripts[index] = lockingScript
+			sourceSatoshis[index] = satoshis
+		}
+		if !hexResponseFits(estimatedEFLength, len(rawBytes), 0, 0) {
+			return nil, categorizedError{"resourceLimit", "Extended Format result exceeds protocol bounds"}
+		}
+		tx, err := transaction.NewTransactionFromBytes(rawBytes)
+		if err != nil {
+			return nil, err
+		}
+		for index := range args.Sources {
+			tx.Inputs[index].SetSourceTxOutput(&transaction.TransactionOutput{
+				Satoshis:      sourceSatoshis[index],
+				LockingScript: scriptpkg.NewFromBytes(sourceScripts[index]),
+			})
+		}
+		extendedBytes, err := tx.EF()
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{
+			"bytes":    hex.EncodeToString(extendedBytes),
+			"rawBytes": hex.EncodeToString(tx.Bytes()),
+			"txid":     tx.TxID().String(),
+		}, nil
+	case "transaction.ef.decode":
+		var args struct {
+			Bytes string `json:"bytes"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		extendedBytes, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		summary, err := preflightTransactionPacket(extendedBytes, true)
+		if err != nil {
+			return nil, err
+		}
+		if !hexResponseFits(
+			len(extendedBytes), summary.rawByteCount, summary.sourceScriptByteCount, summary.inputCount,
+		) {
+			return nil, categorizedError{"resourceLimit", "Extended Format result exceeds protocol bounds"}
+		}
+		tx, err := transaction.NewTransactionFromBytes(extendedBytes)
+		if err != nil {
+			return nil, err
+		}
+		canonicalEF, err := tx.EF()
+		if err != nil {
+			return nil, err
+		}
+		sources := make([]map[string]string, len(tx.Inputs))
+		for index, input := range tx.Inputs {
+			source := input.SourceTxOutput()
+			if source == nil || source.LockingScript == nil {
+				return nil, categorizedError{"internal", "pinned Go omitted a preflighted source output"}
+			}
+			sources[index] = map[string]string{
+				"satoshis":      strconv.FormatUint(source.Satoshis, 10),
+				"lockingScript": hex.EncodeToString(*source.LockingScript),
+			}
+		}
+		return map[string]any{
+			"bytes":    hex.EncodeToString(canonicalEF),
+			"rawBytes": hex.EncodeToString(tx.Bytes()),
+			"txid":     tx.TxID().String(),
+			"version":  strconv.FormatUint(uint64(tx.Version), 10),
+			"inputs":   strconv.Itoa(len(tx.Inputs)),
+			"outputs":  strconv.Itoa(len(tx.Outputs)),
+			"lockTime": strconv.FormatUint(uint64(tx.LockTime), 10),
+			"sources":  sources,
 		}, nil
 	case "transaction.beef.decode":
 		var args struct {
@@ -2014,6 +2133,193 @@ func decimalUint(text string, bits int) (uint64, error) {
 		return 0, categorizedError{"overflow", "integer is outside requested width"}
 	}
 	return value, nil
+}
+
+var extendedTransactionMarker = []byte{0, 0, 0, 0, 0, 0xef}
+
+type transactionPacketSummary struct {
+	inputCount            int
+	rawByteCount          int
+	sourceScriptByteCount int
+}
+
+// preflightTransactionPacket validates complete transaction syntax without
+// allocating from attacker-controlled counts or lengths. Only after this scan
+// succeeds may an EF operation call the pinned SDK parser.
+func preflightTransactionPacket(data []byte, extended bool) (transactionPacketSummary, error) {
+	index := 0
+	skip := func(count int) error {
+		if count < 0 || count > len(data)-index {
+			return categorizedError{"invalidLength", "transaction packet is truncated"}
+		}
+		index += count
+		return nil
+	}
+	readVarInt := func() (uint64, error) { return 0, nil }
+	readVarInt = func() (uint64, error) {
+		if err := skip(1); err != nil {
+			return 0, err
+		}
+		prefix := data[index-1]
+		width := 0
+		switch prefix {
+		case 0xfd:
+			width = 2
+		case 0xfe:
+			width = 4
+		case 0xff:
+			width = 8
+		default:
+			return uint64(prefix), nil
+		}
+		if err := skip(width); err != nil {
+			return 0, err
+		}
+		start := index - width
+		switch width {
+		case 2:
+			return uint64(binary.LittleEndian.Uint16(data[start:index])), nil
+		case 4:
+			return uint64(binary.LittleEndian.Uint32(data[start:index])), nil
+		default:
+			return binary.LittleEndian.Uint64(data[start:index]), nil
+		}
+	}
+	skipVarBytes := func() (int, error) { return 0, nil }
+	skipVarBytes = func() (int, error) {
+		length, err := readVarInt()
+		if err != nil {
+			return 0, err
+		}
+		if length > uint64(len(data)-index) {
+			return 0, categorizedError{"invalidLength", "transaction script is truncated"}
+		}
+		lengthInt := int(length)
+		if err := skip(lengthInt); err != nil {
+			return 0, err
+		}
+		return lengthInt, nil
+	}
+
+	if err := skip(4); err != nil {
+		return transactionPacketSummary{}, err
+	}
+	if extended {
+		if len(data)-index < len(extendedTransactionMarker) {
+			return transactionPacketSummary{}, categorizedError{"invalidLength", "Extended Format marker is truncated"}
+		}
+		if !bytes.Equal(data[index:index+len(extendedTransactionMarker)], extendedTransactionMarker) {
+			return transactionPacketSummary{}, categorizedError{"invalidEncoding", "Extended Format marker is not literal"}
+		}
+		index += len(extendedTransactionMarker)
+	}
+	inputCount, err := readVarInt()
+	if err != nil {
+		return transactionPacketSummary{}, err
+	}
+	minimumInputLength := uint64(41)
+	if extended {
+		minimumInputLength = 50
+	}
+	if inputCount > uint64(len(data)-index)/minimumInputLength {
+		return transactionPacketSummary{}, categorizedError{"resourceLimit", "input count exceeds remaining packet capacity"}
+	}
+	summary := transactionPacketSummary{inputCount: int(inputCount)}
+	for input := uint64(0); input < inputCount; input++ {
+		if err := skip(36); err != nil {
+			return transactionPacketSummary{}, err
+		}
+		if _, err := skipVarBytes(); err != nil {
+			return transactionPacketSummary{}, err
+		}
+		if err := skip(4); err != nil {
+			return transactionPacketSummary{}, err
+		}
+		if extended {
+			if err := skip(8); err != nil {
+				return transactionPacketSummary{}, err
+			}
+			scriptLength, err := skipVarBytes()
+			if err != nil {
+				return transactionPacketSummary{}, err
+			}
+			summary.sourceScriptByteCount += scriptLength
+		}
+	}
+	outputCount, err := readVarInt()
+	if err != nil {
+		return transactionPacketSummary{}, err
+	}
+	if outputCount > uint64(len(data)-index)/9 {
+		return transactionPacketSummary{}, categorizedError{"resourceLimit", "output count exceeds remaining packet capacity"}
+	}
+	for output := uint64(0); output < outputCount; output++ {
+		if err := skip(8); err != nil {
+			return transactionPacketSummary{}, err
+		}
+		if _, err := skipVarBytes(); err != nil {
+			return transactionPacketSummary{}, err
+		}
+	}
+	if err := skip(4); err != nil {
+		return transactionPacketSummary{}, err
+	}
+	if index != len(data) {
+		return transactionPacketSummary{}, categorizedError{"trailingData", "transaction packet has trailing bytes"}
+	}
+	rawAdjustment := 0
+	if extended {
+		rawAdjustment = len(extendedTransactionMarker) + extendedMetadataMinimumByteCount(
+			inputCount, summary.sourceScriptByteCount,
+		)
+	}
+	summary.rawByteCount = len(data) - rawAdjustment
+	return summary, nil
+}
+
+func extendedMetadataMinimumByteCount(inputCount uint64, sourceScriptBytes int) int {
+	// Every extended input adds eight satoshi bytes, one VarInt prefix of at
+	// least one byte, and its source script payload. Nonminimal source prefixes
+	// only make this conservative raw-size estimate larger than the true value.
+	count := int(inputCount)
+	return count*9 + sourceScriptBytes
+}
+
+func varIntLength(value uint64) int {
+	switch {
+	case value <= 0xfc:
+		return 1
+	case value <= 0xffff:
+		return 3
+	case value <= 0xffff_ffff:
+		return 5
+	default:
+		return 9
+	}
+}
+
+func hexResponseFits(packetBytes, rawBytes, sourceScriptBytes, sourceCount int) bool {
+	if packetBytes < 0 || rawBytes < 0 || sourceScriptBytes < 0 || sourceCount < 0 {
+		return false
+	}
+	// Reserve keys, punctuation, IDs, and scalar fields, then account for two
+	// hex characters per binary byte. Each decoded source object additionally
+	// needs keys/punctuation and up to 20 decimal UInt64 digits; 96 bytes is a
+	// conservative per-entry bound. All additions are checked against the line
+	// ceiling before they are performed.
+	estimated := 4096
+	for _, byteCount := range []int{packetBytes, rawBytes, sourceScriptBytes} {
+		if byteCount > (maxLineBytes-estimated)/2 {
+			return false
+		}
+		estimated += byteCount * 2
+	}
+	const sourceJSONOverhead = 96
+	if sourceCount > (maxLineBytes-estimated)/sourceJSONOverhead {
+		return false
+	}
+	estimated += sourceCount * sourceJSONOverhead
+	return estimated <= maxLineBytes
 }
 
 func protocolForkIDFlag(text string) (sighashpkg.Flag, error) {

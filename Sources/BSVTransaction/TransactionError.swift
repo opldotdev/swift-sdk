@@ -3,11 +3,14 @@ import BSVCore
 /// The wire field being decoded when a transaction failed structurally.
 public enum TransactionField: String, Equatable, Sendable {
     case version
+    case extendedFormatMarker
     case inputCount
     case previousTransactionID
     case previousOutputIndex
     case unlockingScript
     case sequence
+    case sourceSatoshis
+    case sourceLockingScript
     case outputCount
     case satoshis
     case lockingScript
@@ -26,6 +29,7 @@ public enum TransactionError: Error, Equatable, Sendable {
     case outputCountExceedsLimit(actual: UInt64, maximum: UInt64)
     case countNotRepresentable(UInt64)
     case scriptTooLarge(actual: UInt64, maximum: UInt64)
+    case invalidExtendedFormatMarker(actual: [UInt8])
     case malformed(field: TransactionField, offset: Int, cause: BinaryDecodingError)
     case invalidHex(TextEncodingError)
     case serializedSizeOverflow

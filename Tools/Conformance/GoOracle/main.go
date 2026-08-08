@@ -77,7 +77,9 @@ func serve(input io.Reader, encoder *json.Encoder, meta metadata) error {
 		case req.ID == "":
 			res = failure(req.ID, "invalidEncoding", "id must be a non-empty string")
 		case len(req.ID) > 256:
-			res = failure(req.ID, "resourceLimit", "id exceeds 256 bytes")
+			// Never reflect attacker-controlled oversized IDs into the bounded
+			// response line. An empty ID identifies this framing-level failure.
+			res = failure("", "resourceLimit", "id exceeds 256 bytes")
 		case req.Op == "":
 			res = failure(req.ID, "invalidEncoding", "op must be a non-empty string")
 		default:

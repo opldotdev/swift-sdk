@@ -143,6 +143,8 @@ print(account.neutered.serialized)
   CHECKMULTISIG, CLTV/CSV, and Chronicle behavior under explicit resource limits
 - Bounded legacy transaction parsing and canonical serialization, outpoints,
   transaction IDs, coinbase recognition, and checked satoshi totals
+- Explicit, bounded BRC-30/BIP-239 Extended Format parsing and serialization,
+  including source outputs while preserving raw transaction IDs
 - Bounded BRC-74 BUMP binary and strict JSON codecs, Merkle-root computation,
   duplicate branches, compound paths, and conflict-checked proof merging
 - Bounded BRC-62/BRC-96 BEEF v1/v2 and BRC-95 Atomic BEEF codecs with ordered
@@ -151,10 +153,12 @@ print(account.neutered.serialized)
   resolution, checked fees, and Script execution through the `BSVSPV` façade
 - Immutable BEEF graph merge, proof propagation, BRC-96 txid-only projection,
   and known-ID trimming with stable parent-before-child ordering
-- Bounded cross-platform HTTP, unauthenticated WhatsOnChain chain tracking,
-  and one-shot transaction broadcasting with local transaction-ID verification
+- Unauthenticated WhatsOnChain chain tracking and one-shot transaction
+  broadcasting over a bounded cross-platform HTTP implementation, with local
+  transaction-ID verification
 - Offline BRC-100 wallet key derivation, encryption, HMAC, signatures, public
-  keys, and bounded Go-compatible JSON through `BSVWallet`
+  keys, and bounded Go-compatible JSON for those seven cryptographic calls
+  through `BSVWallet`
 - Canonical BRC-77 signed and BRC-78 encrypted portable messages through
   `BSVAuth`
 - Redacted default descriptions and reflection for private keys, symmetric keys,
