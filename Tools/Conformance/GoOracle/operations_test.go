@@ -578,6 +578,191 @@ func TestWalletWireResultGrammarPreflightRejectsBeforePinnedDecoder(t *testing.T
 	}
 }
 
+func walletWireNegativeOne() []byte {
+	return []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+}
+
+func TestWalletWireActionRequestGrammarAndPinnedRoundTrip(t *testing.T) {
+	negativeOne := walletWireNegativeOne()
+	listActions := walletWireTestBytes(
+		[]byte{0, 0xff}, make([]byte, 6), negativeOne, negativeOne, []byte{0xff},
+	)
+	for index := 2; index < 8; index++ {
+		listActions[index] = 0xff
+	}
+	listOutputs := walletWireTestBytes(
+		[]byte{0, 0, 0xff, 0xff, 0xff, 0xff, 0xff}, negativeOne, negativeOne, []byte{0xff},
+	)
+	valid := []struct {
+		call byte
+		data []byte
+	}{
+		{1, walletWireTestBytes([]byte{0}, negativeOne, negativeOne, negativeOne, negativeOne, negativeOne, negativeOne, []byte{0})},
+		{2, []byte{0, 0, 0}},
+		{3, []byte{1, 2, 3}},
+		{4, listActions},
+		{5, []byte{1, 0, 0, 0, 0, 0xff}},
+		{6, listOutputs},
+		{7, append([]byte{0}, make([]byte, 33)...)},
+	}
+	for _, test := range valid {
+		if err := walletWirePreflightRequestParameters(test.call, test.data); err != nil {
+			t.Fatalf("call %d preflight failed: %v", test.call, err)
+		}
+		canonical, err := walletWireReencodeRequestParameters(test.call, test.data)
+		if err != nil {
+			t.Fatalf("call %d pinned reencode failed: %v", test.call, err)
+		}
+		if !bytes.Equal(canonical, test.data) {
+			t.Fatalf("call %d changed\n got %x\nwant %x", test.call, canonical, test.data)
+		}
+	}
+	if allocations := testing.AllocsPerRun(1000, func() {
+		if err := walletWirePreflightRequestParameters(2, valid[1].data); err != nil {
+			panic(err)
+		}
+	}); allocations != 0 {
+		t.Fatalf("action request grammar preflight allocated %.2f times per run", allocations)
+	}
+
+	hostile := []struct {
+		name     string
+		call     byte
+		data     []byte
+		category string
+	}{
+		{"create hostile input count", 1, walletWireTestBytes([]byte{0}, negativeOne, []byte{0xfd, 0x11, 0x27}), "resourceLimit"},
+		{"create empty input slice", 1, walletWireTestBytes(
+			[]byte{0}, negativeOne, []byte{0}, negativeOne, negativeOne, negativeOne, negativeOne, []byte{0},
+		), "invalidArgument"},
+		{"create empty output locking script", 1, walletWireTestBytes(
+			[]byte{0}, negativeOne, negativeOne, []byte{1, 0, 0, 0}, negativeOne, negativeOne,
+			[]byte{0}, negativeOne, negativeOne, negativeOne, []byte{0},
+		), "invalidArgument"},
+		{"create invalid options", 1, walletWireTestBytes([]byte{0}, negativeOne, negativeOne, negativeOne, negativeOne, negativeOne, negativeOne, []byte{2}), "invalidEncoding"},
+		{"duplicate spend index", 2, walletWireTestBytes(
+			[]byte{2, 1, 0}, negativeOne, []byte{1, 0}, negativeOne, []byte{0, 0},
+		), "invalidArgument"},
+		{"absent list labels", 4, negativeOne, "invalidArgument"},
+		{"present empty list label", 4, []byte{1, 0}, "invalidArgument"},
+		{"invalid internalize protocol", 5, []byte{1, 0, 1, 0, 3}, "invalidEncoding"},
+		{"invalid output query mode", 6, []byte{0, 0, 3}, "invalidEncoding"},
+		{"truncated relinquish outpoint", 7, append([]byte{0}, make([]byte, 31)...), "truncated"},
+	}
+	for _, test := range hostile {
+		t.Run(test.name, func(t *testing.T) {
+			walletWireTestCategory(t, walletWirePreflightRequestParameters(test.call, test.data), test.category)
+		})
+	}
+}
+
+func TestWalletWireActionResultGrammarAndPinnedRoundTrip(t *testing.T) {
+	negativeOne := walletWireNegativeOne()
+	valid := []struct {
+		call byte
+		data []byte
+	}{
+		{1, walletWireTestBytes([]byte{0, 1}, make([]byte, 32), []byte{0}, negativeOne, []byte{0, 0})},
+		{2, walletWireTestBytes([]byte{1}, make([]byte, 32), []byte{0, 0})},
+		{3, nil},
+		{4, []byte{0}},
+		{5, nil},
+		{6, walletWireTestBytes([]byte{0}, negativeOne)},
+		{7, nil},
+	}
+	for _, test := range valid {
+		if err := walletWirePreflightResultPayload(test.call, test.data); err != nil {
+			t.Fatalf("call %d preflight failed: %v", test.call, err)
+		}
+		canonical, err := walletWireReencodeResultPayload(test.call, test.data)
+		if err != nil {
+			t.Fatalf("call %d pinned reencode failed: %v", test.call, err)
+		}
+		if !bytes.Equal(canonical, test.data) {
+			t.Fatalf("call %d changed\n got %x\nwant %x", test.call, canonical, test.data)
+		}
+	}
+
+	hostile := []struct {
+		name     string
+		call     byte
+		data     []byte
+		category string
+	}{
+		{"create absent transaction ID", 1, []byte{0, 0}, "invalidArgument"},
+		{"create signable union", 1, walletWireTestBytes([]byte{0, 1}, make([]byte, 32), []byte{0}, negativeOne, []byte{0, 1}), "invalidArgument"},
+		{"sign absent transaction ID", 2, []byte{0}, "invalidArgument"},
+		{"empty result trailing", 3, []byte{0}, "trailingData"},
+		{"list action hostile count", 4, []byte{0xfd, 0x11, 0x27}, "resourceLimit"},
+		{"list action mid-value truncation", 4, walletWireTestBytes([]byte{1}, make([]byte, 16)), "truncated"},
+		{"list action invalid send-with status", 2, walletWireTestBytes(
+			[]byte{1}, make([]byte, 32), []byte{0, 1}, make([]byte, 32), []byte{4},
+		), "invalidEncoding"},
+		{"list action present empty label", 4, walletWireTestBytes(
+			[]byte{1}, make([]byte, 32), []byte{0, 1, 0, 0, 1, 0},
+		), "invalidArgument"},
+		{"list action absent source locking script", 4, walletWireTestBytes(
+			[]byte{1}, make([]byte, 32), []byte{0, 1, 0, 0}, negativeOne, []byte{0, 0, 1},
+			make([]byte, 32), []byte{0, 0}, negativeOne,
+		), "invalidArgument"},
+		{"list action absent unlocking script", 4, walletWireTestBytes(
+			[]byte{1}, make([]byte, 32), []byte{0, 1, 0, 0}, negativeOne, []byte{0, 0, 1},
+			make([]byte, 32), []byte{0, 0, 1, 0x51}, negativeOne,
+		), "invalidArgument"},
+		{"list action absent output locking script", 4, walletWireTestBytes(
+			[]byte{1}, make([]byte, 32), []byte{0, 1, 0, 0}, negativeOne, []byte{0, 0},
+			negativeOne, []byte{1, 0, 0}, negativeOne,
+		), "invalidArgument"},
+		{"list output empty optional BEEF", 6, []byte{0, 0}, "invalidArgument"},
+		{"list output hostile count", 6, []byte{0xfd, 0x11, 0x27}, "resourceLimit"},
+	}
+	for _, test := range hostile {
+		t.Run(test.name, func(t *testing.T) {
+			walletWireTestCategory(t, walletWirePreflightResultPayload(test.call, test.data), test.category)
+		})
+	}
+}
+
+func TestWalletWireActionAdapterRejectsLossyFormsBeforePinnedGo(t *testing.T) {
+	negativeOne := walletWireNegativeOne()
+	actionPrefix := walletWireTestBytes(
+		[]byte{0, 1}, make([]byte, 32), []byte{0, 1, 0, 0}, negativeOne, []byte{0, 0},
+	)
+	inputPrefix := walletWireTestBytes(
+		actionPrefix, []byte{1}, make([]byte, 32), []byte{0, 0},
+	)
+	cases := []struct {
+		name      string
+		operation string
+		call      byte
+		data      []byte
+	}{
+		{"empty create inputs", "wallet.wire.request.reencode", 1, walletWireTestBytes(
+			[]byte{1, 0, 0}, negativeOne, []byte{0}, negativeOne, negativeOne, negativeOne, negativeOne, []byte{0},
+		)},
+		{"empty create output script", "wallet.wire.request.reencode", 1, walletWireTestBytes(
+			[]byte{1, 0, 0}, negativeOne, negativeOne, []byte{1, 0, 0, 0}, negativeOne,
+			negativeOne, []byte{0}, negativeOne, negativeOne, negativeOne, []byte{0},
+		)},
+		{"present empty label", "wallet.wire.request.reencode", 4, []byte{4, 0, 1, 0}},
+		{"absent action source script", "wallet.wire.result.reencode", 4, walletWireTestBytes(inputPrefix, negativeOne)},
+		{"absent action unlocking script", "wallet.wire.result.reencode", 4, walletWireTestBytes(inputPrefix, []byte{1, 0x51}, negativeOne)},
+		{"absent action output script", "wallet.wire.result.reencode", 4, walletWireTestBytes(
+			actionPrefix, negativeOne, []byte{1, 0, 0}, negativeOne,
+		)},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			args := fmt.Sprintf(
+				`{"call":"%d","bytes":"%s"}`,
+				test.call, hex.EncodeToString(test.data),
+			)
+			_, err := execute(testRequest(test.operation, args), metadata{})
+			walletWireTestCategory(t, err, "invalidArgument")
+		})
+	}
+}
+
 func TestExtendedFormatProtocolValidation(t *testing.T) {
 	raw := "0100000001" + strings.Repeat("00", 32) + "0000000000ffffffff0000000000"
 	ef := "010000000000000000ef01" + strings.Repeat("00", 32) +

@@ -120,8 +120,8 @@ short BRC-78 heuristic behind stable typed errors; panic recovery remains only a
 final generic defense and does not echo recovered values or request material.
 
 Wallet-wire operations accept a selected decimal `call` and lowercase even
-hex `bytes`. They are bounded before invoking pinned Go and cover only calls 8,
-11 through 16, and 23 through 28. Request operations require the frame's call
+hex `bytes`. They are bounded before invoking pinned Go and cover calls 1
+through 8, 11 through 16, and 23 through 28. Request operations require the frame's call
 byte to match the selected call and validate the one-byte originator span and
 UTF-8. Result operations preflight canonical, fully consumed error frames.
 `inspect` returns only call/kind and byte counts; `reencode` parses and emits
@@ -211,8 +211,8 @@ digits, or hyphens. This intentionally rejects the Go-accepted prefixes `A`,
 | `wallet.wire.result.inspect` | `{call,bytes}` | success/failure kind and bounded byte counts after complete call-aware preflight and pinned typed parsing |
 | `wallet.wire.result.reencode` | `{call,bytes}` | `{bytes}` after complete call-aware preflight, pinned typed parsing, and canonical re-encoding |
 
-Wallet-wire operations are limited to calls 8, 11 through 16, and 23 through
-28. Before any selected pinned serializer runs, the oracle scans the applicable
+Wallet-wire operations are limited to calls 1 through 8, 11 through 16, and 23
+through 28. Before any selected pinned serializer runs, the oracle scans the applicable
 request or success-result grammar using byte indexes: canonical CompactSize,
 bounded counts before slicing, exact fixed fields and discriminators, checked
 UInt32 heights, bounded DER structure, fixed-width secp256k1 scalar range and

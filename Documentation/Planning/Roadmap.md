@@ -175,9 +175,11 @@ policy.
 - Strict bounded wallet-wire framing and typed binary codecs for the seven
   cryptographic calls plus authentication, height/header, network, and version
   queries. (Accepted)
+- Strict bounded wallet-wire action and output-query codecs for calls 1 through
+  7, with explicit BEEF limits. (Accepted)
 - Offline BRC-52 certificate values, keyrings, and binary codecs. (Accepted)
-- Action/certificate wallet-wire codecs, transport substrates, persistent
-  wallet state, remote execution, and permission policy.
+- Certificate wallet-wire codecs, transport substrates, persistent wallet
+  state, remote execution, and permission policy.
   (Future)
 - Chain-aware certificate revocation checks. (Future)
 

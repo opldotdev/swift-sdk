@@ -55,9 +55,10 @@ accepts it and emits explicit false on re-encoding. Malformed inputs fail with
 redacted typed errors rather than being normalized, truncated, ignored, or
 used to allocate without a bound. Raw
 request framing still recognizes all defined calls 1 through 28, but the typed
-API is intentionally closed to calls 8, 11 through 16, and 23 through 28.
-Action, certificate, transport, wallet behavior, persistence, and permission
-policy remain outside this checkpoint. The hostile Go matrix specifically
+key/query API is intentionally closed to calls 8, 11 through 16, and 23 through
+28. COMP-046 adds the separate typed action subset. Certificate, transport,
+wallet behavior, persistence, and permission policy remain outside this
+checkpoint. The hostile Go matrix specifically
 covers FD/FE/FF CompactSize widths including
 MaxUInt64, noncanonical and truncated encodings, bounded-versus-short declared
 counts, fixed-field truncations, invalid discriminators, UInt32 overflow, DER

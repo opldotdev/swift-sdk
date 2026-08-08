@@ -33,12 +33,17 @@ public enum WalletActionStatus: String, CaseIterable, Codable, Sendable {
 }
 
 /// How an application-supplied input will be unlocked.
-public enum WalletInputUnlocking: Equatable, Sendable {
+public enum WalletInputUnlocking:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     case script([UInt8])
     case scriptLength(UInt32)
+    public var description: String { "<redacted wallet input unlocking>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletCreateActionInput: Equatable, Sendable {
+public struct WalletCreateActionInput:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let outpoint: Outpoint
     public let inputDescription: String
     public let unlocking: WalletInputUnlocking
@@ -76,9 +81,13 @@ public struct WalletCreateActionInput: Equatable, Sendable {
         self.inputDescription = inputDescription
         self.sequenceNumber = sequenceNumber
     }
+    public var description: String { "<redacted create-action input>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletCreateActionOutput: Equatable, Sendable {
+public struct WalletCreateActionOutput:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let lockingScript: [UInt8]
     public let satoshis: UInt64
     public let outputDescription: String
@@ -117,6 +126,9 @@ public struct WalletCreateActionOutput: Equatable, Sendable {
         self.customInstructions = customInstructions
         self.tags = tags
     }
+    public var description: String { "<redacted create-action output>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
 public struct WalletCreateActionOptions: Equatable, Sendable {
@@ -174,7 +186,8 @@ public struct WalletCreateActionOptions: Equatable, Sendable {
     }
 }
 
-public struct WalletCreateActionRequest: Equatable, Sendable {
+public struct WalletCreateActionRequest:
+    Equatable, Sendable, CustomDebugStringConvertible, CustomReflectable {
     public let description: String
     public let inputBEEF: BEEF?
     public let inputs: [WalletCreateActionInput]?
@@ -220,6 +233,8 @@ public struct WalletCreateActionRequest: Equatable, Sendable {
         self.labels = labels
         self.options = options
     }
+    public var debugDescription: String { "<redacted create-action request>" }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
 public struct WalletSendWithResult: Equatable, Sendable {
@@ -244,7 +259,8 @@ public struct WalletSignableTransaction:
     public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletCreateActionResult: Equatable, Sendable {
+public struct WalletCreateActionResult:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let transactionID: TransactionID?
     public let transaction: AtomicBEEF?
     public let noSendChange: [Outpoint]?
@@ -283,9 +299,13 @@ public struct WalletCreateActionResult: Equatable, Sendable {
         self.sendWithResults = sendWithResults
         self.signableTransaction = signableTransaction
     }
+    public var description: String { "<redacted create-action result>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletSignActionSpend: Equatable, Sendable {
+public struct WalletSignActionSpend:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let unlockingScript: [UInt8]
     public let sequenceNumber: UInt32?
     public init(
@@ -297,6 +317,9 @@ public struct WalletSignActionSpend: Equatable, Sendable {
         self.unlockingScript = unlockingScript
         self.sequenceNumber = sequenceNumber
     }
+    public var description: String { "<redacted sign-action spend>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
 public struct WalletSignActionOptions: Equatable, Sendable {
@@ -347,7 +370,8 @@ public struct WalletSignActionRequest:
     public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletSignActionResult: Equatable, Sendable {
+public struct WalletSignActionResult:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let transactionID: TransactionID?
     public let transaction: AtomicBEEF?
     public let sendWithResults: [WalletSendWithResult]?
@@ -369,6 +393,9 @@ public struct WalletSignActionResult: Equatable, Sendable {
         self.transaction = transaction
         self.sendWithResults = sendWithResults
     }
+    public var description: String { "<redacted sign-action result>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
 public struct WalletAbortActionRequest:
@@ -385,7 +412,8 @@ public struct WalletAbortActionResult: Equatable, Sendable {
     public init(aborted: Bool) { self.aborted = aborted }
 }
 
-public struct WalletActionInput: Equatable, Sendable {
+public struct WalletActionInput:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let sourceOutpoint: Outpoint
     public let sourceSatoshis: UInt64
     public let sourceLockingScript: [UInt8]?
@@ -421,9 +449,13 @@ public struct WalletActionInput: Equatable, Sendable {
         self.inputDescription = inputDescription
         self.sequenceNumber = sequenceNumber
     }
+    public var description: String { "<redacted wallet action input>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletActionOutput: Equatable, Sendable {
+public struct WalletActionOutput:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let satoshis: UInt64
     public let lockingScript: [UInt8]?
     public let spendable: Bool
@@ -462,9 +494,13 @@ public struct WalletActionOutput: Equatable, Sendable {
         self.outputDescription = outputDescription
         self.basket = basket
     }
+    public var description: String { "<redacted wallet action output>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletAction: Equatable, Sendable {
+public struct WalletAction:
+    Equatable, Sendable, CustomDebugStringConvertible, CustomReflectable {
     public let transactionID: TransactionID
     public let satoshis: Int64
     public let status: WalletActionStatus
@@ -513,6 +549,8 @@ public struct WalletAction: Equatable, Sendable {
         self.inputs = inputs
         self.outputs = outputs
     }
+    public var debugDescription: String { "<redacted wallet action>" }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
 public struct WalletListActionsRequest: Equatable, Sendable {
@@ -553,7 +591,8 @@ public struct WalletListActionsRequest: Equatable, Sendable {
     }
 }
 
-public struct WalletListActionsResult: Equatable, Sendable {
+public struct WalletListActionsResult:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let totalActions: UInt32
     public let actions: [WalletAction]
     public init(
@@ -566,9 +605,13 @@ public struct WalletListActionsResult: Equatable, Sendable {
         self.totalActions = totalActions
         self.actions = actions
     }
+    public var description: String { "<redacted list-actions result; total=\(totalActions)>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletOutput: Equatable, Sendable {
+public struct WalletOutput:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let satoshis: UInt64
     public let lockingScript: [UInt8]?
     public let spendable: Bool
@@ -599,6 +642,9 @@ public struct WalletOutput: Equatable, Sendable {
         self.outpoint = outpoint
         self.labels = labels
     }
+    public var description: String { "<redacted wallet output>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
 public struct WalletListOutputsRequest: Equatable, Sendable {
@@ -637,7 +683,8 @@ public struct WalletListOutputsRequest: Equatable, Sendable {
     }
 }
 
-public struct WalletListOutputsResult: Equatable, Sendable {
+public struct WalletListOutputsResult:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let totalOutputs: UInt32
     public let beef: BEEF?
     public let outputs: [WalletOutput]
@@ -653,6 +700,9 @@ public struct WalletListOutputsResult: Equatable, Sendable {
         self.beef = beef
         self.outputs = outputs
     }
+    public var description: String { "<redacted list-outputs result; total=\(totalOutputs)>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
 public struct WalletRelinquishOutputRequest: Equatable, Sendable {
@@ -723,7 +773,8 @@ public enum WalletInternalizeProtocol: String, CaseIterable, Codable, Sendable {
     }
 }
 
-public enum WalletInternalizeRemittance: Equatable, Sendable {
+public enum WalletInternalizeRemittance:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     case walletPayment(WalletPaymentRemittance)
     case basketInsertion(WalletBasketInsertion)
     public var `protocol`: WalletInternalizeProtocol {
@@ -740,9 +791,13 @@ public enum WalletInternalizeRemittance: Equatable, Sendable {
             0
         }
     }
+    public var description: String { "<redacted internalize remittance>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletInternalizeOutput: Equatable, Sendable {
+public struct WalletInternalizeOutput:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let outputIndex: UInt32
     public let remittance: WalletInternalizeRemittance
     public init(outputIndex: UInt32, remittance: WalletInternalizeRemittance) {
@@ -767,9 +822,13 @@ public struct WalletInternalizeOutput: Equatable, Sendable {
             )
         }
     }
+    public var description: String { "<redacted internalize output>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletInternalizeActionRequest: Equatable, Sendable {
+public struct WalletInternalizeActionRequest:
+    Equatable, Sendable, CustomDebugStringConvertible, CustomReflectable {
     public let transaction: AtomicBEEF
     public let description: String
     public let labels: [String]
@@ -793,6 +852,8 @@ public struct WalletInternalizeActionRequest: Equatable, Sendable {
         self.seekPermission = seekPermission
         self.outputs = outputs
     }
+    public var debugDescription: String { "<redacted internalize-action request>" }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
 public struct WalletInternalizeActionResult: Equatable, Sendable {

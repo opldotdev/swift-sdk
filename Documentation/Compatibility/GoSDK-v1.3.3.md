@@ -419,14 +419,16 @@ Public functions, organized completely:
 Edges: chainhash, EC, transaction, util, wallet. This codec is a prime differential-oracle boundary.
 
 Swift checkpoint: strict bounded request/result frames and typed payload codecs
-are accepted for calls 8, 11 through 16, and 23 through 28. Raw request frames
-recognize every defined call 1 through 28, but the typed enum is closed to this
-13-call key/query set. Canonical CompactSize, exact discriminators and fixed
+are accepted for action calls 1 through 7, key calls 8 and 11 through 16, and
+queries 23 through 28. Canonical CompactSize, exact discriminators and fixed
 results, checked UInt32 conversion, complete error frames, and redacted bounded
-remote errors follow COMP-045. Go's absent `forSelf` value is accepted and
-normalized to the required Swift value `false`; canonical Swift output uses
-the explicit false byte. Action and certificate payload codecs remain future
-packets rather than partial public cases.
+remote errors follow COMP-045 and COMP-046. Go's absent `forSelf` value is
+accepted and normalized to the required Swift value `false`; canonical Swift
+output uses the explicit false byte. Action codecs require explicit BEEF limits
+and a payload-bounded writer. They reject nil/empty collisions and the three
+list-action script sentinels that the pinned Go writer emits but its reader
+cannot consume. They add no wallet execution, transport, storage, or permission
+policy.
 
 #### `wallet/substrates` → `BSVWallet`, concrete HTTP in `BSVNetwork` if factored
 

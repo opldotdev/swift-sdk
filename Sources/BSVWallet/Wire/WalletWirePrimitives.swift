@@ -3,9 +3,23 @@ import BSVKeys
 
 struct WalletWireWriter {
     private(set) var bytes: [UInt8] = []
+    private let maximumByteCount: Int?
+    private var rejectedAppend: (actual: Int, maximum: Int)?
 
-    mutating func writeByte(_ value: UInt8) { bytes.append(value) }
-    mutating func writeBytes(_ value: [UInt8]) { bytes.append(contentsOf: value) }
+    init(maximumByteCount: Int? = nil) {
+        self.maximumByteCount = maximumByteCount
+        rejectedAppend = nil
+    }
+
+    mutating func writeByte(_ value: UInt8) {
+        guard permitAppend(count: 1) else { return }
+        bytes.append(value)
+    }
+
+    mutating func writeBytes(_ value: [UInt8]) {
+        guard permitAppend(count: value.count) else { return }
+        bytes.append(contentsOf: value)
+    }
 
     mutating func writeCompactSize(_ value: UInt64) {
         switch value {
@@ -36,9 +50,10 @@ struct WalletWireWriter {
     }
 
     mutating func writeString(_ value: String) throws {
-        let encoded = Array(value.utf8)
-        try writeCount(encoded.count)
-        writeBytes(encoded)
+        let count = value.utf8.count
+        try writeCount(count)
+        guard permitAppend(count: count) else { return }
+        bytes.append(contentsOf: value.utf8)
     }
 
     mutating func writeOptionalBoolean(_ value: Bool?) {
@@ -49,8 +64,52 @@ struct WalletWireWriter {
         }
     }
 
+    mutating func writeOptionalUInt32(_ value: UInt32?) {
+        writeCompactSize(value.map(UInt64.init) ?? UInt64.max)
+    }
+
+    mutating func writeOptionalVarBytes(_ value: [UInt8]?) throws {
+        guard let value else {
+            writeCompactSize(UInt64.max)
+            return
+        }
+        try writeVarBytes(value)
+    }
+
+    mutating func writeOptionalString(_ value: String?) throws {
+        guard let value, !value.isEmpty else {
+            writeCompactSize(UInt64.max)
+            return
+        }
+        try writeString(value)
+    }
+
+    mutating func requireWithinLimit(kind: String) throws {
+        if let rejectedAppend {
+            throw WalletWireError.byteLimitExceeded(
+                kind: kind,
+                actual: rejectedAppend.actual,
+                maximum: rejectedAppend.maximum
+            )
+        }
+    }
+
     private mutating func writeLittleEndian(_ value: UInt64, count: Int) {
         for shift in 0..<count { writeByte(UInt8(truncatingIfNeeded: value >> (shift * 8))) }
+    }
+
+    private mutating func permitAppend(count: Int) -> Bool {
+        guard rejectedAppend == nil else { return false }
+        guard let maximumByteCount else { return true }
+        let (actual, overflow) = bytes.count.addingReportingOverflow(count)
+        guard !overflow, actual <= maximumByteCount else {
+            rejectedAppend = (
+                actual: overflow ? Int.max : actual,
+                maximum: maximumByteCount
+            )
+            return false
+        }
+        return true
     }
 }
 
@@ -139,6 +198,33 @@ struct WalletWireReader {
         case 0xFF: return nil
         case let value: throw WalletWireError.invalidDiscriminator(kind: kind, value: value)
         }
+    }
+
+    mutating func readOptionalUInt32(kind: String) throws -> UInt32? {
+        let value = try readCompactSize()
+        if value == UInt64.max { return nil }
+        guard let decoded = UInt32(exactly: value) else { throw WalletWireError.uint32Overflow }
+        return decoded
+    }
+
+    mutating func readOptionalVarBytes(maximum: Int, kind: String) throws -> [UInt8]? {
+        let value = try readCompactSize()
+        if value == UInt64.max { return nil }
+        guard value <= UInt64(Int.max), value <= UInt64(maximum) else {
+            throw WalletWireError.countLimitExceeded(kind: kind, actual: value, maximum: maximum)
+        }
+        return try readBytes(count: Int(value))
+    }
+
+    mutating func readOptionalString(maximum: Int, kind: String) throws -> String? {
+        guard let encoded = try readOptionalVarBytes(maximum: maximum, kind: kind) else { return nil }
+        guard !encoded.isEmpty else {
+            throw WalletWireError.nonRoundTrippableValue(kind: "empty optional \(kind)")
+        }
+        guard let value = String(bytes: encoded, encoding: .utf8) else {
+            throw WalletWireError.invalidUTF8(kind: kind)
+        }
+        return value
     }
 
     mutating func readOptionalReason(maximum: Int) throws -> String? {

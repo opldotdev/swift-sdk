@@ -1617,6 +1617,7 @@ var walletWireSecp256k1HalfOrder = [32]byte{
 }
 
 var walletWireCalls = map[byte]bool{
+	1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true,
 	8: true, 11: true, 12: true, 13: true, 14: true, 15: true, 16: true,
 	23: true, 24: true, 25: true, 26: true, 27: true, 28: true,
 }
@@ -1631,7 +1632,7 @@ func walletWireArguments(raw json.RawMessage) (byte, []byte, error) {
 	}
 	callValue, err := decimalUint(args.Call, 8)
 	if err != nil || callValue == 0 || callValue > 28 || !walletWireCalls[byte(callValue)] {
-		return 0, nil, categorizedError{"invalidEncoding", "call is not a supported wallet-wire key/query call"}
+		return 0, nil, categorizedError{"invalidEncoding", "call is not a supported wallet-wire call"}
 	}
 	if len(args.Bytes) > walletWireMaximumBytes*2 {
 		return 0, nil, categorizedError{"resourceLimit", "wallet-wire input exceeds operation limit"}
@@ -2021,9 +2022,784 @@ func (s *walletWireScanner) readSignaturePayload(rejectEmpty bool) error {
 	}
 }
 
+const walletWireMaximumCollectionCount = 10000
+
+func (s *walletWireScanner) readOptionalUint32(kind string) error {
+	value, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if value != math.MaxUint64 && value > math.MaxUint32 {
+		return categorizedError{"invalidArgument", "wallet-wire " + kind + " exceeds UInt32"}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readRequiredUint32(kind string) error {
+	value, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if value > math.MaxUint32 {
+		return categorizedError{"invalidArgument", "wallet-wire " + kind + " exceeds UInt32"}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readOptionalVarBytes(maximum uint64, kind string, rejectEmpty bool) ([]byte, bool, error) {
+	count, err := s.readCompactSize()
+	if err != nil {
+		return nil, false, err
+	}
+	if count == math.MaxUint64 {
+		return nil, false, nil
+	}
+	if rejectEmpty && count == 0 {
+		return nil, false, categorizedError{"invalidArgument", "wallet-wire empty optional " + kind + " is not round-trippable"}
+	}
+	value, err := s.take(count, maximum, kind)
+	return value, true, err
+}
+
+func (s *walletWireScanner) readOptionalText(maximum uint64, kind string) error {
+	value, present, err := s.readOptionalVarBytes(maximum, kind, true)
+	if err != nil || !present {
+		return err
+	}
+	if !utf8.Valid(value) {
+		return categorizedError{"invalidEncoding", "wallet-wire " + kind + " is not UTF-8"}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readStringSlice(kind string, optional bool) error {
+	count, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if count == math.MaxUint64 {
+		if optional {
+			return nil
+		}
+		return categorizedError{"invalidArgument", "wallet-wire absent " + kind + " is not representable"}
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire " + kind + " count exceeds operation limit"}
+	}
+	if count > uint64(s.remaining()) {
+		return categorizedError{"truncated", "wallet-wire " + kind + " are truncated"}
+	}
+	for index := uint64(0); index < count; index++ {
+		length, err := s.readCompactSize()
+		if err != nil {
+			return err
+		}
+		if length == math.MaxUint64 {
+			continue
+		}
+		if length == 0 {
+			return categorizedError{"invalidArgument", "wallet-wire empty " + kind + " entry is noncanonical"}
+		}
+		value, err := s.take(length, walletWireMaximumTextBytes, kind)
+		if err != nil {
+			return err
+		}
+		if !utf8.Valid(value) {
+			return categorizedError{"invalidEncoding", "wallet-wire " + kind + " entry is not UTF-8"}
+		}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readTransactionIDs(kind string) error {
+	count, err := s.readCompactSize()
+	if err != nil || count == math.MaxUint64 {
+		return err
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire " + kind + " count exceeds operation limit"}
+	}
+	if count > uint64(s.remaining()/32) {
+		return categorizedError{"truncated", "wallet-wire " + kind + " are truncated"}
+	}
+	_, err = s.takeFixed(int(count)*32, kind)
+	return err
+}
+
+func (s *walletWireScanner) readActionOutpoint() error {
+	if _, err := s.takeFixed(32, "outpoint transaction ID"); err != nil {
+		return err
+	}
+	return s.readRequiredUint32("outpoint index")
+}
+
+func (s *walletWireScanner) readOutpointCollection(kind string) error {
+	count, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if count == math.MaxUint64 {
+		return categorizedError{"invalidArgument", "wallet-wire nested absent " + kind + " is not round-trippable"}
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire " + kind + " count exceeds operation limit"}
+	}
+	if count > uint64(s.remaining()/33) {
+		return categorizedError{"truncated", "wallet-wire " + kind + " are truncated"}
+	}
+	for index := uint64(0); index < count; index++ {
+		if err := s.readActionOutpoint(); err != nil {
+			return err
+		}
+	}
+	return s.requireEnd()
+}
+
+func (s *walletWireScanner) readCreateInputs() error {
+	count, err := s.readCompactSize()
+	if err != nil || count == math.MaxUint64 {
+		return err
+	}
+	if count == 0 {
+		return categorizedError{"invalidArgument", "wallet-wire empty create-action inputs are not round-trippable"}
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire input count exceeds operation limit"}
+	}
+	for index := uint64(0); index < count; index++ {
+		if err := s.readActionOutpoint(); err != nil {
+			return err
+		}
+		_, present, err := s.readOptionalVarBytes(walletWireMaximumBytes, "unlocking script", true)
+		if err != nil {
+			return err
+		}
+		if !present {
+			if err := s.readRequiredUint32("unlocking script length"); err != nil {
+				return err
+			}
+		}
+		if _, err := s.readText(walletWireMaximumTextBytes, true, "input description"); err != nil {
+			return err
+		}
+		if err := s.readOptionalUint32("sequence number"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readCreateOutputs() error {
+	count, err := s.readCompactSize()
+	if err != nil || count == math.MaxUint64 {
+		return err
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire output count exceeds operation limit"}
+	}
+	for index := uint64(0); index < count; index++ {
+		script, err := s.readVarBytes(walletWireMaximumBytes, "locking script")
+		if err != nil {
+			return err
+		}
+		if len(script) == 0 {
+			return categorizedError{"invalidArgument", "wallet-wire empty create-action locking script is not round-trippable"}
+		}
+		if _, err := s.readCompactSize(); err != nil {
+			return err
+		}
+		if _, err := s.readText(walletWireMaximumTextBytes, true, "output description"); err != nil {
+			return err
+		}
+		if err := s.readOptionalText(walletWireMaximumTextBytes, "basket"); err != nil {
+			return err
+		}
+		if err := s.readOptionalText(walletWireMaximumTextBytes, "custom instructions"); err != nil {
+			return err
+		}
+		if err := s.readStringSlice("tags", false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readCreateOptions() error {
+	flag, err := s.readByte("create options")
+	if err != nil {
+		return err
+	}
+	if flag == 0 {
+		return nil
+	}
+	if flag != 1 {
+		return categorizedError{"invalidEncoding", "wallet-wire create options discriminator is invalid"}
+	}
+	if err := s.readOptionalBool("sign-and-process flag"); err != nil {
+		return err
+	}
+	if err := s.readOptionalBool("delayed-broadcast flag"); err != nil {
+		return err
+	}
+	trust, err := s.readByte("trust-self flag")
+	if err != nil {
+		return err
+	}
+	if trust != 1 && trust != 0xff {
+		return categorizedError{"invalidEncoding", "wallet-wire trust-self discriminator is invalid"}
+	}
+	if err := s.readTransactionIDs("known transaction IDs"); err != nil {
+		return err
+	}
+	if err := s.readOptionalBool("return-transaction-ID-only flag"); err != nil {
+		return err
+	}
+	if err := s.readOptionalBool("no-send flag"); err != nil {
+		return err
+	}
+	change, present, err := s.readOptionalVarBytes(walletWireMaximumBytes, "no-send change", true)
+	if err != nil {
+		return err
+	}
+	if present {
+		nested := walletWireScanner{data: change}
+		if err := nested.readOutpointCollection("no-send change"); err != nil {
+			return err
+		}
+	}
+	if err := s.readTransactionIDs("send-with transaction IDs"); err != nil {
+		return err
+	}
+	return s.readOptionalBool("randomize-outputs flag")
+}
+
+func (s *walletWireScanner) readCreateActionRequest() error {
+	if _, err := s.readText(walletWireMaximumTextBytes, true, "action description"); err != nil {
+		return err
+	}
+	if _, _, err := s.readOptionalVarBytes(walletWireMaximumBytes, "input BEEF", true); err != nil {
+		return err
+	}
+	if err := s.readCreateInputs(); err != nil {
+		return err
+	}
+	if err := s.readCreateOutputs(); err != nil {
+		return err
+	}
+	if err := s.readOptionalUint32("lock time"); err != nil {
+		return err
+	}
+	if err := s.readOptionalUint32("version"); err != nil {
+		return err
+	}
+	if err := s.readStringSlice("labels", true); err != nil {
+		return err
+	}
+	return s.readCreateOptions()
+}
+
+func (s *walletWireScanner) readSignOptions() error {
+	flag, err := s.readByte("sign options")
+	if err != nil {
+		return err
+	}
+	if flag == 0 {
+		return nil
+	}
+	if flag != 1 {
+		return categorizedError{"invalidEncoding", "wallet-wire sign options discriminator is invalid"}
+	}
+	if err := s.readOptionalBool("delayed-broadcast flag"); err != nil {
+		return err
+	}
+	if err := s.readOptionalBool("return-transaction-ID-only flag"); err != nil {
+		return err
+	}
+	if err := s.readOptionalBool("no-send flag"); err != nil {
+		return err
+	}
+	return s.readTransactionIDs("send-with transaction IDs")
+}
+
+func (s *walletWireScanner) readSignActionRequest() error {
+	count, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire spend count exceeds operation limit"}
+	}
+	var prior uint64
+	for index := uint64(0); index < count; index++ {
+		inputIndex, err := s.readCompactSize()
+		if err != nil {
+			return err
+		}
+		if inputIndex > math.MaxUint32 {
+			return categorizedError{"invalidArgument", "wallet-wire spend index exceeds UInt32"}
+		}
+		if index > 0 && inputIndex <= prior {
+			return categorizedError{"invalidArgument", "wallet-wire spend indexes are not strictly sorted"}
+		}
+		prior = inputIndex
+		if _, err := s.readVarBytes(walletWireMaximumBytes, "unlocking script"); err != nil {
+			return err
+		}
+		if err := s.readOptionalUint32("sequence number"); err != nil {
+			return err
+		}
+	}
+	if _, err := s.readVarBytes(walletWireMaximumBytes, "reference"); err != nil {
+		return err
+	}
+	return s.readSignOptions()
+}
+
+func (s *walletWireScanner) readListActionsRequest() error {
+	if err := s.readStringSlice("labels", false); err != nil {
+		return err
+	}
+	mode, err := s.readByte("label query mode")
+	if err != nil {
+		return err
+	}
+	if mode != 1 && mode != 2 && mode != 0xff {
+		return categorizedError{"invalidEncoding", "wallet-wire label query mode is invalid"}
+	}
+	for index := 0; index < 6; index++ {
+		if err := s.readOptionalBool("list-actions include flag"); err != nil {
+			return err
+		}
+	}
+	position := s.position
+	limit, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if limit != math.MaxUint64 && (limit == 0 || limit > wallet.MaxActionsLimit) {
+		return categorizedError{"invalidArgument", "wallet-wire action limit is outside 1...10000"}
+	}
+	_ = position
+	if err := s.readOptionalUint32("offset"); err != nil {
+		return err
+	}
+	return s.readOptionalBool("seek-permission flag")
+}
+
+func (s *walletWireScanner) readInternalizeActionRequest() error {
+	if _, err := s.readVarBytes(walletWireMaximumBytes, "Atomic BEEF"); err != nil {
+		return err
+	}
+	count, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire internalize output count exceeds operation limit"}
+	}
+	for index := uint64(0); index < count; index++ {
+		if err := s.readRequiredUint32("output index"); err != nil {
+			return err
+		}
+		protocol, err := s.readByte("internalize protocol")
+		if err != nil {
+			return err
+		}
+		switch protocol {
+		case 1:
+			key, err := s.takeFixed(33, "sender identity key")
+			if err != nil {
+				return err
+			}
+			if key[0] != 2 && key[0] != 3 {
+				return categorizedError{"invalidEncoding", "wallet-wire sender identity key is invalid"}
+			}
+			if _, err := s.readVarBytes(walletWireMaximumBytes, "derivation prefix"); err != nil {
+				return err
+			}
+			if _, err := s.readVarBytes(walletWireMaximumBytes, "derivation suffix"); err != nil {
+				return err
+			}
+		case 2:
+			if _, err := s.readText(walletWireMaximumTextBytes, true, "basket"); err != nil {
+				return err
+			}
+			if err := s.readOptionalText(walletWireMaximumTextBytes, "custom instructions"); err != nil {
+				return err
+			}
+			if err := s.readStringSlice("tags", false); err != nil {
+				return err
+			}
+		default:
+			return categorizedError{"invalidEncoding", "wallet-wire internalize protocol is invalid"}
+		}
+	}
+	if err := s.readStringSlice("labels", false); err != nil {
+		return err
+	}
+	if _, err := s.readText(walletWireMaximumTextBytes, true, "action description"); err != nil {
+		return err
+	}
+	return s.readOptionalBool("seek-permission flag")
+}
+
+func (s *walletWireScanner) readListOutputsRequest() error {
+	if _, err := s.readText(walletWireMaximumTextBytes, true, "basket"); err != nil {
+		return err
+	}
+	if err := s.readStringSlice("tags", false); err != nil {
+		return err
+	}
+	mode, err := s.readByte("tag query mode")
+	if err != nil {
+		return err
+	}
+	if mode != 1 && mode != 2 && mode != 0xff {
+		return categorizedError{"invalidEncoding", "wallet-wire tag query mode is invalid"}
+	}
+	include, err := s.readByte("output include")
+	if err != nil {
+		return err
+	}
+	if include != 1 && include != 2 && include != 0xff {
+		return categorizedError{"invalidEncoding", "wallet-wire output include is invalid"}
+	}
+	for index := 0; index < 3; index++ {
+		if err := s.readOptionalBool("list-outputs include flag"); err != nil {
+			return err
+		}
+	}
+	limit, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if limit != math.MaxUint64 && (limit == 0 || limit > wallet.MaxActionsLimit) {
+		return categorizedError{"invalidArgument", "wallet-wire output limit is outside 1...10000"}
+	}
+	if err := s.readOptionalUint32("offset"); err != nil {
+		return err
+	}
+	return s.readOptionalBool("seek-permission flag")
+}
+
+func (s *walletWireScanner) readRequiredGoTransactionID(kind string) error {
+	flag, err := s.readByte(kind)
+	if err != nil {
+		return err
+	}
+	if flag == 0 {
+		return categorizedError{"invalidArgument", "wallet-wire absent pinned Go transaction ID is not round-trippable"}
+	}
+	if flag != 1 {
+		return categorizedError{"invalidEncoding", "wallet-wire transaction ID discriminator is invalid"}
+	}
+	_, err = s.takeFixed(32, kind)
+	return err
+}
+
+func (s *walletWireScanner) readOptionalAtomicBEEF() error {
+	flag, err := s.readByte("transaction")
+	if err != nil {
+		return err
+	}
+	if flag == 0 {
+		return nil
+	}
+	if flag != 1 {
+		return categorizedError{"invalidEncoding", "wallet-wire transaction discriminator is invalid"}
+	}
+	_, err = s.readVarBytes(walletWireMaximumBytes, "Atomic BEEF")
+	return err
+}
+
+func (s *walletWireScanner) readSendWithResults() error {
+	count, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire send-with result count exceeds operation limit"}
+	}
+	if count > uint64(s.remaining()/33) {
+		return categorizedError{"truncated", "wallet-wire send-with results are truncated"}
+	}
+	for index := uint64(0); index < count; index++ {
+		if _, err := s.takeFixed(32, "send-with transaction ID"); err != nil {
+			return err
+		}
+		status, err := s.readByte("send-with status")
+		if err != nil {
+			return err
+		}
+		if status < 1 || status > 3 {
+			return categorizedError{"invalidEncoding", "wallet-wire send-with status is invalid"}
+		}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readNestedOutpoints(kind string) error {
+	value, present, err := s.readOptionalVarBytes(walletWireMaximumBytes, kind, true)
+	if err != nil || !present {
+		return err
+	}
+	nested := walletWireScanner{data: value}
+	return nested.readOutpointCollection(kind)
+}
+
+func (s *walletWireScanner) readCreateActionResult() error {
+	status, err := s.readByte("nested create-action status")
+	if err != nil {
+		return err
+	}
+	if status != 0 {
+		return categorizedError{"invalidEncoding", "wallet-wire nested create-action status is invalid"}
+	}
+	if err := s.readRequiredGoTransactionID("create-action transaction ID"); err != nil {
+		return err
+	}
+	if err := s.readOptionalAtomicBEEF(); err != nil {
+		return err
+	}
+	if err := s.readNestedOutpoints("no-send change"); err != nil {
+		return err
+	}
+	if err := s.readSendWithResults(); err != nil {
+		return err
+	}
+	flag, err := s.readByte("signable transaction")
+	if err != nil {
+		return err
+	}
+	if flag == 1 {
+		return categorizedError{"invalidArgument", "wallet-wire pinned Go signable result is not representable by the Swift ABI"}
+	}
+	if flag != 0 {
+		return categorizedError{"invalidEncoding", "wallet-wire signable transaction discriminator is invalid"}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readSignActionResult() error {
+	if err := s.readRequiredGoTransactionID("sign-action transaction ID"); err != nil {
+		return err
+	}
+	if err := s.readOptionalAtomicBEEF(); err != nil {
+		return err
+	}
+	return s.readSendWithResults()
+}
+
+func (s *walletWireScanner) readActionInputs() error {
+	count, err := s.readCompactSize()
+	if err != nil || count == math.MaxUint64 {
+		return err
+	}
+	if count == 0 {
+		return categorizedError{"invalidArgument", "wallet-wire empty action inputs are not round-trippable"}
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire action input count exceeds operation limit"}
+	}
+	for index := uint64(0); index < count; index++ {
+		if err := s.readActionOutpoint(); err != nil {
+			return err
+		}
+		if _, err := s.readCompactSize(); err != nil {
+			return err
+		}
+		_, sourcePresent, err := s.readOptionalVarBytes(walletWireMaximumBytes, "source locking script", true)
+		if err != nil {
+			return err
+		}
+		if !sourcePresent {
+			return categorizedError{"invalidArgument", "wallet-wire absent action source locking script is not readable by pinned Go"}
+		}
+		_, unlockingPresent, err := s.readOptionalVarBytes(walletWireMaximumBytes, "unlocking script", true)
+		if err != nil {
+			return err
+		}
+		if !unlockingPresent {
+			return categorizedError{"invalidArgument", "wallet-wire absent action unlocking script is not readable by pinned Go"}
+		}
+		if _, err := s.readText(walletWireMaximumTextBytes, true, "input description"); err != nil {
+			return err
+		}
+		if err := s.readRequiredUint32("sequence number"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readActionOutputs() error {
+	count, err := s.readCompactSize()
+	if err != nil || count == math.MaxUint64 {
+		return err
+	}
+	if count == 0 {
+		return categorizedError{"invalidArgument", "wallet-wire empty action outputs are not round-trippable"}
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire action output count exceeds operation limit"}
+	}
+	for index := uint64(0); index < count; index++ {
+		if err := s.readRequiredUint32("output index"); err != nil {
+			return err
+		}
+		if _, err := s.readCompactSize(); err != nil {
+			return err
+		}
+		_, scriptPresent, err := s.readOptionalVarBytes(walletWireMaximumBytes, "locking script", true)
+		if err != nil {
+			return err
+		}
+		if !scriptPresent {
+			return categorizedError{"invalidArgument", "wallet-wire absent action output locking script is not readable by pinned Go"}
+		}
+		spendable, err := s.readByte("spendable")
+		if err != nil {
+			return err
+		}
+		if spendable != 0 && spendable != 1 {
+			return categorizedError{"invalidEncoding", "wallet-wire spendable discriminator is invalid"}
+		}
+		if _, err := s.readText(walletWireMaximumTextBytes, true, "output description"); err != nil {
+			return err
+		}
+		if _, err := s.readText(walletWireMaximumTextBytes, true, "basket"); err != nil {
+			return err
+		}
+		if err := s.readStringSlice("tags", false); err != nil {
+			return err
+		}
+		if err := s.readOptionalText(walletWireMaximumTextBytes, "custom instructions"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readListActionsResult() error {
+	count, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire action count exceeds operation limit"}
+	}
+	for index := uint64(0); index < count; index++ {
+		if _, err := s.takeFixed(32, "action transaction ID"); err != nil {
+			return err
+		}
+		if _, err := s.readCompactSize(); err != nil {
+			return err
+		}
+		status, err := s.readByte("action status")
+		if err != nil {
+			return err
+		}
+		if status < 1 || status > 7 {
+			return categorizedError{"invalidEncoding", "wallet-wire action status is invalid"}
+		}
+		outgoing, err := s.readByte("is outgoing")
+		if err != nil {
+			return err
+		}
+		if outgoing != 0 && outgoing != 1 {
+			return categorizedError{"invalidEncoding", "wallet-wire is-outgoing discriminator is invalid"}
+		}
+		if _, err := s.readText(walletWireMaximumTextBytes, true, "action description"); err != nil {
+			return err
+		}
+		if err := s.readStringSlice("labels", true); err != nil {
+			return err
+		}
+		if err := s.readRequiredUint32("version"); err != nil {
+			return err
+		}
+		if err := s.readRequiredUint32("lock time"); err != nil {
+			return err
+		}
+		if err := s.readActionInputs(); err != nil {
+			return err
+		}
+		if err := s.readActionOutputs(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readListOutputsResult() error {
+	count, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire output count exceeds operation limit"}
+	}
+	if _, _, err := s.readOptionalVarBytes(walletWireMaximumBytes, "BEEF", true); err != nil {
+		return err
+	}
+	for index := uint64(0); index < count; index++ {
+		if err := s.readActionOutpoint(); err != nil {
+			return err
+		}
+		if _, err := s.readCompactSize(); err != nil {
+			return err
+		}
+		if _, _, err := s.readOptionalVarBytes(walletWireMaximumBytes, "locking script", true); err != nil {
+			return err
+		}
+		if err := s.readOptionalText(walletWireMaximumTextBytes, "custom instructions"); err != nil {
+			return err
+		}
+		if err := s.readStringSlice("tags", true); err != nil {
+			return err
+		}
+		if err := s.readStringSlice("labels", true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func walletWirePreflightRequestParameters(call byte, data []byte) error {
 	s := walletWireScanner{data: data}
 	switch call {
+	case 1:
+		if err := s.readCreateActionRequest(); err != nil {
+			return err
+		}
+	case 2:
+		if err := s.readSignActionRequest(); err != nil {
+			return err
+		}
+	case 3:
+		if len(data) > walletWireMaximumBytes {
+			return categorizedError{"resourceLimit", "wallet-wire reference exceeds operation limit"}
+		}
+		s.position = len(data)
+	case 4:
+		if err := s.readListActionsRequest(); err != nil {
+			return err
+		}
+	case 5:
+		if err := s.readInternalizeActionRequest(); err != nil {
+			return err
+		}
+	case 6:
+		if err := s.readListOutputsRequest(); err != nil {
+			return err
+		}
+	case 7:
+		if _, err := s.readText(walletWireMaximumTextBytes, true, "basket"); err != nil {
+			return err
+		}
+		if err := s.readActionOutpoint(); err != nil {
+			return err
+		}
 	case 8:
 		identity, err := s.readByte("identity-key flag")
 		if err != nil {
@@ -2123,6 +2899,24 @@ func walletWirePreflightRequestParameters(call byte, data []byte) error {
 func walletWirePreflightResultPayload(call byte, data []byte) error {
 	s := walletWireScanner{data: data}
 	switch call {
+	case 1:
+		if err := s.readCreateActionResult(); err != nil {
+			return err
+		}
+	case 2:
+		if err := s.readSignActionResult(); err != nil {
+			return err
+		}
+	case 3, 5, 7:
+		// These successful action results have an empty payload.
+	case 4:
+		if err := s.readListActionsResult(); err != nil {
+			return err
+		}
+	case 6:
+		if err := s.readListOutputsResult(); err != nil {
+			return err
+		}
 	case 8:
 		key, err := s.takeFixed(33, "public key")
 		if err != nil {
@@ -2228,6 +3022,48 @@ func walletWireCompactSize(data []byte, position *int) (uint64, error) {
 
 func walletWireReencodeRequestParameters(call byte, data []byte) ([]byte, error) {
 	switch call {
+	case 1:
+		value, err := walletserializer.DeserializeCreateActionArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeCreateActionArgs(value)
+	case 2:
+		value, err := walletserializer.DeserializeSignActionArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeSignActionArgs(value)
+	case 3:
+		value, err := walletserializer.DeserializeAbortActionArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeAbortActionArgs(value)
+	case 4:
+		value, err := walletserializer.DeserializeListActionsArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeListActionsArgs(value)
+	case 5:
+		value, err := walletserializer.DeserializeInternalizeActionArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeInternalizeActionArgs(value)
+	case 6:
+		value, err := walletserializer.DeserializeListOutputsArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeListOutputsArgs(value)
+	case 7:
+		value, err := walletserializer.DeserializeRelinquishOutputArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeRelinquishOutputArgs(value)
 	case 8:
 		value, err := walletserializer.DeserializeGetPublicKeyArgs(data)
 		if err != nil {
@@ -2288,6 +3124,48 @@ func walletWireReencodeRequestParameters(call byte, data []byte) ([]byte, error)
 
 func walletWireReencodeResultPayload(call byte, data []byte) ([]byte, error) {
 	switch call {
+	case 1:
+		value, err := walletserializer.DeserializeCreateActionResult(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeCreateActionResult(value)
+	case 2:
+		value, err := walletserializer.DeserializeSignActionResult(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeSignActionResult(value)
+	case 3:
+		value, err := walletserializer.DeserializeAbortActionResult(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeAbortActionResult(value)
+	case 4:
+		value, err := walletserializer.DeserializeListActionsResult(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeListActionsResult(value)
+	case 5:
+		value, err := walletserializer.DeserializeInternalizeActionResult(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeInternalizeActionResult(value)
+	case 6:
+		value, err := walletserializer.DeserializeListOutputsResult(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeListOutputsResult(value)
+	case 7:
+		value, err := walletserializer.DeserializeRelinquishOutputResult(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeRelinquishOutputResult(value)
 	case 8:
 		value, err := walletserializer.DeserializeGetPublicKeyResult(data)
 		if err != nil {
