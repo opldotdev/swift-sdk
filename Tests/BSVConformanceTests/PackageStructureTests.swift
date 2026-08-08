@@ -1,15 +1,23 @@
 import BSV
+import BSVKVStore
 import BSVMessage
+import BSVRegistry
+import BSVStorage
 import Foundation
 import Testing
 
 @Suite("Package boundaries")
 struct PackageStructureTests {
-    @Test("BSVMessage and BSVOverlay are public and part of the modern umbrella")
-    func messageAndOverlayProductAndUmbrella() throws {
+    @Test("feature cores are public umbrella modules")
+    func publicProductsAndUmbrella() throws {
         func requireType<T>(_: T.Type) {}
         requireType(SignedMessage.self)
         requireType(EncryptedMessage.self)
+        requireType(KVStoreToken.self)
+        requireType(UHRPURL.self)
+        requireType(RegistryDefinition.self)
+        requireType(DisplayableIdentity.self)
+        requireType(OverlayAdminToken.self)
 
         let manifest = try text(at: "Package.swift")
         let exports = try text(at: "Sources/BSV/Exports.swift")
@@ -22,11 +30,19 @@ struct PackageStructureTests {
         let list = manifest[modernModules.lowerBound..<dependencyMap.lowerBound]
 
         #expect(list.contains("\"BSVMessage\""))
+        #expect(list.contains("\"BSVKVStore\""))
+        #expect(list.contains("\"BSVStorage\""))
         #expect(list.contains("\"BSVOverlay\""))
+        #expect(list.contains("\"BSVRegistry\""))
+        #expect(list.contains("\"BSVIdentity\""))
         #expect(!list.contains("\"BSVServices\""))
         #expect(manifest.contains("modernPublicModules.map { module in"))
         #expect(exports.contains("@_exported import BSVMessage"))
+        #expect(exports.contains("@_exported import BSVKVStore"))
+        #expect(exports.contains("@_exported import BSVStorage"))
         #expect(exports.contains("@_exported import BSVOverlay"))
+        #expect(exports.contains("@_exported import BSVRegistry"))
+        #expect(exports.contains("@_exported import BSVIdentity"))
     }
 
     @Test("portable messages have one source owner")
@@ -58,6 +74,7 @@ struct PackageStructureTests {
         #expect(exports.contains("BSVOverlay"))
         #expect(overlaySource.contains("public struct TaggedBEEF"))
         #expect(overlaySource.contains("public protocol LookupFacilitator"))
+        #expect(overlaySource.contains("public enum OverlayAdminTokenCodec"))
         #expect(!manifest.contains("BSVServices"))
         #expect(!exports.contains("BSVServices"))
         #expect(try swiftSource(below: "Sources/BSVServices").isEmpty)
@@ -84,7 +101,22 @@ struct PackageStructureTests {
         try expectTarget(
             "BSVOverlay",
             in: manifest,
-            dependencies: ["BSVCore", "BSVTransaction"]
+            dependencies: ["BSVCore", "BSVCrypto", "BSVKeys", "BSVScript", "BSVTransaction"]
+        )
+        try expectTarget(
+            "BSVKVStore",
+            in: manifest,
+            dependencies: ["BSVKeys", "BSVScript"]
+        )
+        try expectTarget(
+            "BSVStorage",
+            in: manifest,
+            dependencies: ["BSVCore", "BSVCrypto", "BSVKeys"]
+        )
+        try expectTarget(
+            "BSVRegistry",
+            in: manifest,
+            dependencies: ["BSVCore", "BSVKeys", "BSVOverlay", "BSVScript", "BSVTransaction", "BSVWallet"]
         )
         try expectTarget(
             "BSVWallet",
@@ -96,14 +128,23 @@ struct PackageStructureTests {
             in: manifest,
             dependencies: ["BSVCore", "BSVCrypto", "BSVKeys", "BSVTransaction", "BSVWallet"]
         )
+        try expectTarget(
+            "BSVIdentity",
+            in: manifest,
+            dependencies: ["BSVCore", "BSVKeys", "BSVScript", "BSVTransaction", "BSVWallet"]
+        )
     }
 
-    @Test("README describes the message module and omits services")
+    @Test("README describes public feature modules and omits services")
     func readmeModuleBoundary() throws {
         let readme = try text(at: "README.md")
         #expect(readme.contains("`BSVMessage`"))
+        #expect(readme.contains("`BSVKVStore`"))
+        #expect(readme.contains("`BSVStorage`"))
         #expect(readme.contains("`SignedMessage` from `BSVMessage`"))
         #expect(readme.contains("`EncryptedMessage` from `BSVMessage`"))
+        #expect(readme.contains("`BSVIdentity`"))
+        #expect(readme.contains("`BSVRegistry`"))
         #expect(!readme.contains("BSVServices"))
     }
 

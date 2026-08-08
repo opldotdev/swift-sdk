@@ -8,13 +8,17 @@ let modernPublicModules = [
     "BSVKeys",
     "BSVMessage",
     "BSVScript",
+    "BSVKVStore",
+    "BSVStorage",
     "BSVTransaction",
     "BSVInterpreter",
     "BSVSPV",
     "BSVNetwork",
     "BSVOverlay",
+    "BSVRegistry",
     "BSVWallet",
     "BSVAuth",
+    "BSVIdentity",
 ]
 
 let modernPublicModuleDependencies = modernPublicModules.map {
@@ -94,6 +98,14 @@ let package = Package(
             dependencies: ["BSVCore", "BSVBigNum", "BSVCrypto", "BSVKeys"]
         ),
         .target(
+            name: "BSVKVStore",
+            dependencies: ["BSVKeys", "BSVScript"]
+        ),
+        .target(
+            name: "BSVStorage",
+            dependencies: ["BSVCore", "BSVCrypto", "BSVKeys"]
+        ),
+        .target(
             name: "BSVTransaction",
             dependencies: ["BSVCore", "BSVCrypto", "BSVKeys", "BSVScript"]
         ),
@@ -118,7 +130,11 @@ let package = Package(
         ),
         .target(
             name: "BSVOverlay",
-            dependencies: ["BSVCore", "BSVTransaction"]
+            dependencies: ["BSVCore", "BSVCrypto", "BSVKeys", "BSVScript", "BSVTransaction"]
+        ),
+        .target(
+            name: "BSVRegistry",
+            dependencies: ["BSVCore", "BSVKeys", "BSVOverlay", "BSVScript", "BSVTransaction", "BSVWallet"]
         ),
         .target(
             name: "BSVWallet",
@@ -139,6 +155,10 @@ let package = Package(
                 "BSVTransaction",
                 "BSVWallet",
             ]
+        ),
+        .target(
+            name: "BSVIdentity",
+            dependencies: ["BSVCore", "BSVKeys", "BSVScript", "BSVTransaction", "BSVWallet"]
         ),
         .testTarget(
             name: "BSVCoreTests",
@@ -174,6 +194,14 @@ let package = Package(
             exclude: ["README.md"]
         ),
         .testTarget(
+            name: "BSVKVStoreTests",
+            dependencies: ["BSVKVStore", "BSVKeys", "BSVScript"]
+        ),
+        .testTarget(
+            name: "BSVStorageTests",
+            dependencies: ["BSVStorage", "BSVCore", "BSVCrypto", "BSVKeys"]
+        ),
+        .testTarget(
             name: "BSVTransactionTests",
             dependencies: ["BSVTransaction", "BSVCore", "BSVCrypto", "BSVScript"],
             exclude: ["README.md"]
@@ -198,7 +226,14 @@ let package = Package(
         ),
         .testTarget(
             name: "BSVOverlayTests",
-            dependencies: ["BSVOverlay", "BSVCore", "BSVTransaction"]
+            dependencies: ["BSVOverlay", "BSVCrypto", "BSVKeys", "BSVScript", "BSVCore", "BSVTransaction"]
+        ),
+        .testTarget(
+            name: "BSVRegistryTests",
+            dependencies: [
+                "BSVRegistry", "BSVCore", "BSVKeys", "BSVOverlay", "BSVScript", "BSVTransaction",
+                "BSVWallet",
+            ]
         ),
         .testTarget(
             name: "BSVWalletTests",
@@ -211,6 +246,12 @@ let package = Package(
                 "BSVAuth", "BSVWallet", "BSVTransaction", "BSVKeys", "BSVCrypto", "BSVCore",
             ],
             exclude: ["README.md"]
+        ),
+        .testTarget(
+            name: "BSVIdentityTests",
+            dependencies: [
+                "BSVIdentity", "BSVWallet", "BSVTransaction", "BSVScript", "BSVKeys", "BSVCore",
+            ]
         ),
         .testTarget(
             name: "BSVConformanceTests",

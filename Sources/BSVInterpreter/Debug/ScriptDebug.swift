@@ -32,7 +32,14 @@ public struct ScriptDebugLimits: Hashable, Sendable {
         self.maximumStackItemByteCount = maximumStackItemByteCount
     }
 
-    public static let standard = try! Self()
+    private init(standard: Void) {
+        maximumEventCount = 10_000
+        maximumStackItemCount = 64
+        maximumStackByteCount = 16 * 1_024
+        maximumStackItemByteCount = 1_024
+    }
+
+    public static let standard = Self(standard: ())
 }
 
 public enum ScriptDebugConfigurationError: Error, Equatable, Sendable {

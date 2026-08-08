@@ -206,22 +206,33 @@ issue, acquire, project, and verify workflows.
 - BRC-103 peer authentication and bounded session, nonce, and replay protection.
   (Accepted)
 - Transport-neutral BRC-104 request and response payloads. (Accepted)
+- Bounded transport-neutral BRC-104 authenticated HTTP framing. (Accepted)
 - BRC-103 certificate exchange. (Future)
-- BRC-104 authenticated HTTP and WebSocket transports. (Future)
+- Concrete BRC-104 HTTP and WebSocket transports, AuthFetch policy, and
+  automatic payment. (Future)
 
 ## Phase 10: Overlay and application services
 
 Accepted checkpoint: `BSVOverlay` provides bounded SHIP and SLAP values and
-transport-neutral topic and lookup facilitator protocols. It does not include
-HTTP, resolver policy, persistence, or wallet-backed admin tokens. The package
-does not expose an empty general services module. Each implemented family uses
-a clear module name.
+transport-neutral topic and lookup facilitator protocols, plus strict signed
+administration-token verification. It does not include HTTP, resolver policy,
+persistence, or wallet-backed token construction or spending. The package does
+not expose an empty general services module. Each implemented family uses a
+clear module name. `BSVIdentity` provides bounded parsing, wallet-backed
+resolution, and public disclosure through an injected broadcaster.
 
 - Bounded overlay topic and lookup values and facilitator protocols. (Accepted)
-- Overlay HTTP transport, resolver and broadcaster policy, and admin tokens.
+- Strict signed overlay administration-token verification. (Accepted)
+- Overlay HTTP transport, resolver and broadcaster policy, and wallet-backed
+  administration-token construction or spending. (Future)
+- Transport-neutral identity core. (Accepted)
+- Transport-neutral registry core. (Accepted)
+- Transport-neutral one-field key-value token core. (Accepted)
+- Transport-neutral UHRP identifier and content core. (Accepted)
+- Registry lookup transport, discovery, wallet publication, and revocation.
   (Future)
-- Identity and registry features.
-- Key-value and storage/UHRP features.
+- Wallet-backed key-value orchestration and storage discovery, download, and
+  upload features. (Future)
 - Remaining Go SDK utility and compatibility APIs.
 
 ## Phase 11: Parity hardening and release

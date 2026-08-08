@@ -21,13 +21,17 @@ BSVCrypto      -> BSVCore, BSVBigNum
 BSVKeys        -> BSVCore, BSVBigNum, BSVCrypto
 BSVMessage     -> BSVCore, BSVCrypto, BSVKeys
 BSVScript      -> BSVCore, BSVBigNum, BSVCrypto, BSVKeys
+BSVKVStore     -> BSVKeys, BSVScript
+BSVStorage     -> BSVCore, BSVCrypto, BSVKeys
 BSVTransaction -> BSVCore, BSVCrypto, BSVKeys, BSVScript
 BSVInterpreter -> BSVCore, BSVBigNum, BSVCrypto, BSVKeys, BSVScript, BSVTransaction
 BSVSPV         -> BSVCore, BSVCrypto, BSVTransaction, BSVInterpreter
 BSVNetwork     -> BSVCore, BSVTransaction, BSVSPV
-BSVOverlay     -> BSVCore, BSVTransaction
+BSVOverlay     -> BSVCore, BSVCrypto, BSVKeys, BSVScript, BSVTransaction
+BSVRegistry    -> BSVCore, BSVKeys, BSVOverlay, BSVScript, BSVTransaction, BSVWallet
 BSVWallet      -> BSVCore, BSVCrypto, BSVKeys, BSVScript, BSVTransaction
 BSVAuth        -> BSVCore, BSVCrypto, BSVKeys, BSVTransaction, BSVWallet
+BSVIdentity    -> BSVCore, BSVKeys, BSVScript, BSVTransaction, BSVWallet
 
 BSV (thin umbrella using @_exported import for public feature modules)
 
@@ -167,9 +171,47 @@ cyclic relationship.
   WebSocket transports.
 - No portable-message declarations or aliases.
 
-Future overlay, identity, registry, key-value, and storage work must use named
-modules after each public boundary is implemented. The package does not expose
-an empty general services module.
+### BSVOverlay
+
+- Bounded SHIP and SLAP values, acknowledgments, and transport-neutral
+  facilitator protocols.
+- Strict signed administration-token verification for later caller-selected
+  discovery policy.
+- No HTTP, resolver defaults, wallet construction or spending, persistence, or
+  type-erased response values.
+
+### BSVIdentity
+
+- Bounded identity parsing and resolution on the typed wallet ABI.
+- Public certificate disclosure through caller-supplied verifier, wallet, and
+  broadcaster capabilities.
+- No HTTP, overlay discovery, persistence, fallback wallet, or test stubs.
+
+### BSVRegistry
+
+- Bounded immutable basket, protocol, and certificate definitions with strict
+  before-compatibility PushDrop encoding and decoding.
+- Transport-neutral, typed lookup and publication boundaries with no default
+  tracker, wallet orchestration, HTTP, or persistence.
+
+### BSVKVStore
+
+- Bounded, immutable one-field key-value PushDrop tokens using Go's explicit
+  lock-before compatibility layout.
+- Locator values for a future wallet basket/tag adapter; locator text is not
+  claimed to be committed by the locking script.
+- No wallet action orchestration, persistence, BEEF, encryption, overlay, or
+  network policy.
+
+### BSVStorage
+
+- Bounded UHRP identifiers with the Go and TypeScript Base58Check layout.
+- Bounded content values and a transport-neutral provider protocol.
+- No HTTP, upload/download client, discovery, auth, wallet, or persistence.
+
+Future wallet-backed key-value work must use named modules after
+each public boundary is implemented. The package does not expose an empty
+general services module.
 
 Wallet-backed PushDrop unlocker factories live in `BSVWallet`. The underlying
 PushDrop encoding, locking script, and transaction-context signer live in

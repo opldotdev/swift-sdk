@@ -530,11 +530,22 @@ Edges: certificates/utils, EC, wallet. Uses locks/atomics/time/logging. Peer/ses
 
 Public: authenticated HTTP header constants and included-header allowlists.
 
+Swift status: accepted. `BRC104HTTPHeaderName` defines the authenticated HTTP
+header names. `BRC104HTTPFrameCodec` converts signed general messages to and
+from bounded transport-neutral request and response frames. It requires
+canonical values, one value for each authentication header, and exact response
+request-ID correlation. It rejects certificate-exchange headers because the
+current auth model has no typed nonempty certificate-request value.
+
 #### `auth/authpayload` → `BSVAuth`
 
 Public: serialize/deserialize authenticated HTTP request/response payloads; simplified response; header inclusion policy; base-URL and sender-key options.
 
 Edges: BRC-104, EC, util; stdlib HTTP/URL.
+
+Swift status: the bounded request and response payload codecs and the
+transport-neutral HTTP frame codec are accepted. Concrete HTTP objects, base
+URL selection, and body streaming remain transport concerns.
 
 #### `auth/transports` → `BSVAuth`
 
@@ -547,25 +558,37 @@ Public:
 
 Edges: auth, authpayload, BRC-104, utils, EC; external `x/net/websocket`.
 
+Swift status: future. The accepted HTTP frame codec does not execute network
+requests or maintain callback state.
+
 #### `auth/clients/authhttp` → `BSVAuth`
 
 Public: `AuthFetch`, `AuthPeer`, request/options models; constructor/options; authenticated `Fetch`, certificate request, received-certificate drain, logger.
+
+Swift status: future. Endpoint policy, fallback, retry, cancellation, payment
+approval, payment limits, and certificate exchange must be explicit before a
+client is added. Confirmed Go defects are recorded separately as GO-053 through
+GO-060.
 
 Edges: all auth subpackages, EC, script, P2PKH, wallet; stdlib HTTP.
 
 ### Overlay and high-level services
 
 The transport-neutral overlay core is implemented in `BSVOverlay`. HTTP
-facilitators, resolver policy, admin tokens, and persistence remain separate
-named packets; the module does not map to an empty general services module.
+facilitators, resolver policy, wallet-backed administration-token construction
+and spending, and persistence remain separate named packets; the module does
+not map to an empty general services module.
 
 #### `overlay` → `BSVOverlay`
 
-Public protocol models: networks, protocol names/IDs for SHIP/SLAP, `TaggedBEEF`, `Steak`, admittance instructions, applied transaction, typed topic data, metadata, bounded topic/service/host values. Edges: Core, Transaction.
+Public protocol models: networks, protocol names/IDs for SHIP/SLAP, `TaggedBEEF`, `Steak`, admittance instructions, applied transaction, typed topic data, metadata, bounded topic/service/host values, and strict signed administration-token decoding. Edges: Core, Crypto, Keys, Script, Transaction.
 
-#### `overlay/admin-token`
+#### `overlay/admin-token` → `BSVOverlay` verification core
 
-Public: `OverlayAdminToken`, lock/unlock; `OverlayAdminTokenData`, decode. Edges: overlay, script, PushDrop, wallet.
+Public: `OverlayAdminTokenLimits`, `OverlayAdminToken`, typed SHIP/SLAP subjects,
+and `OverlayAdminTokenCodec.decode`. The decoder verifies exact bounded
+before-compatibility PushDrop fields and the appended signature. Wallet-backed
+lock and unlock construction remain future work.
 
 #### `overlay/lookup` → `BSVOverlay` core
 
@@ -588,53 +611,73 @@ Public:
 
 Edges: overlay, admin token, lookup, transaction, util; HTTP.
 
-#### `identity`
+#### `identity` → `BSVIdentity`
 
 Public:
 
-- `Client`: resolve by identity key/attributes, reveal attributes.
-- `IdentityClientOptions`, originator/field constrained strings.
-- `DisplayableIdentity`, parser, defaults and known identity types.
-- `CertificateVerifier`, default verifier.
-- `TransactionCreator`.
-- `TestableIdentityClient`, mock verifier, injected broadcaster/transaction creator.
+- Generic `IdentityClient`: bounded resolution by identity key or attributes and
+  public attribute disclosure through an injected broadcaster.
+- `IdentityClientOptions`, `IdentityLimits`, `IdentityError`, and typed operation
+  failures.
+- `DisplayableIdentity`, `IdentityParser`, default fallback, and nine known
+  identity types.
+- Explicit verifier input, exact proved-keyring checks, canonical compressed-key
+  hex, and Go-compatible disclosure JSON and PushDrop layout.
 
-Edges: auth certificates, overlay/topic, EC, transaction, PushDrop, util, wallet.
+Edges: core, keys, transaction, PushDrop, wallet.
 
-Test-only judgment: `MockCertificateVerifier` and `TestableIdentityClient` should be test support, despite export.
+Not ported: fallback wallets, HTTP or overlay construction, persistence,
+`DefaultCertificateVerifier`, `TransactionCreator`, `MockCertificateVerifier`,
+and `TestableIdentityClient`. Confirmed defects are GO-011 through GO-020.
 
-#### `registry`
-
-Public:
-
-- `RegistryClientInterface`; `RegistryClient`.
-- Register/revoke/list-own and resolve basket/protocol/certificate definitions.
-- Definition protocol and models: basket/protocol/certificate data and queries, field descriptor, registry record/token data, result types and definition enum.
-- Broadcaster factory/configuration and overlay network selection.
-
-Edges: overlay lookup/topic, script, transaction, PushDrop, wallet.
-
-Public test leakage: `MockRegistry` and `NewMockRegistry` live in production and import `testing`/`testify`; do not port into the Swift product.
-
-#### `kvstore`
-
-Public: `KVStoreInterface`, `LocalKVStore`, config/options, `KeyValue`, default payment amount, validation/corruption/wallet errors; async Get/Set/Remove semantics.
-
-Edges: transaction, PushDrop, util, wallet.
-
-#### `storage`
+#### `registry` → `BSVRegistry` core
 
 Public:
 
-- UHRP helpers: normalize/validate, URL from hash/file, hash from URL.
-- `StorageDownloaderInterface`, `StorageDownloader`, config/result; resolve and download.
-- `StorageUploaderInterface`, `Uploader`, config; publish/find/list/renew.
-- Upload/download/file/metadata/result models and status/errors.
+- Closed basket, protocol, and certificate definition kinds; bounded immutable
+  metadata, certificate descriptors, operators, records, tokens, and queries.
+- Strict Go-compatible `beforeCompatibility` PushDrop fields, canonical
+  protocol and byte-sorted certificate JSON, and typed registry limits.
+- Narrow `RegistryLookup` and `RegistryPublisher` protocols with no default
+  transport or wallet implementation.
 
-Edges: auth HTTP client, base58, overlay/lookup, hash, transaction, PushDrop, util, wallet.
+Edges: core, keys, overlay values, script, transaction, PushDrop, wallet.
 
-This package will need a direct Auth dependency when its named Swift module is
-implemented.
+Not ported: `RegistryClient`, factory setters, default network or tracker,
+HTTP/overlay lookup or topic broadcasting, wallet register/revoke/list-own
+orchestration, persistence, and the production `MockRegistry`. Confirmed
+defects are GO-021 through GO-026.
+
+#### `kvstore` → `BSVKVStore` token core
+
+Public:
+
+- Immutable, bounded `KVStoreLimits`, `KVStoreLocator`, `KVStoreToken`, and
+  `KVStoreTokenCodec` values.
+- Strict one-field PushDrop encoding and decoding in the pinned Go
+  `beforeCompatibility` layout; raw byte values remain raw bytes.
+
+Edges: keys, PushDrop.
+
+Not ported: `KVStoreInterface`, `LocalKVStore`, wallet output/action/signing or
+encryption operations, BEEF lookup, newest-value selection, persistence,
+retention, overlay discovery, and network transport. Confirmed defects are
+GO-027 through GO-035.
+
+#### `storage` → `BSVStorage` UHRP core
+
+Public:
+
+- Bounded `UHRPLimits`, canonical `UHRPURL`, and redacted `StorageContent`
+  values using the Go and TypeScript Base58Check UHRP representation.
+- A narrow `UHRPContentProvider` async protocol for transport-selected content.
+
+Edges: core, crypto, keys.
+
+Not ported: `StorageDownloader`, `Uploader`, all HTTP and auth-fetch paths,
+overlay lookup/discovery, default network selection, wallet actions, service
+metadata JSON, persistence, and production mocks. Confirmed defects are
+GO-036 through GO-041.
 
 ### Internal/test-support packages
 
@@ -842,8 +885,11 @@ License warning: these live under the Open BSV-licensed upstream. Use the Go ora
 10. `BSVNetwork`: concrete chain trackers, headers client, ARC/TAAL/WOC broadcasters, HTTP seam, Linux networking tests.
 11. `BSVWallet`: BRC-100 models/protocols, key deriver/cache, ProtoWallet, wallet-backed PushDrop, serializers, wire/JSON substrates.
 12. `BSVMessage`: BRC-77 and BRC-78 portable messages.
-13. `BSVAuth`: certificates, strict BRC-103 peer/session state, and bounded BRC-104 payloads. HTTP, WebSocket, auth-fetch, and certificate exchange remain future work.
-14. Future named modules: overlay/admin/lookup/topic, identity, registry, KV store, and UHRP storage.
+13. `BSVAuth`: certificates, strict BRC-103 peer/session state, bounded BRC-104 payloads, and bounded transport-neutral authenticated HTTP framing. Concrete HTTP, WebSocket, auth-fetch, automatic payment, and certificate exchange remain future work.
+14. `BSVOverlay`, `BSVIdentity`, `BSVRegistry`, `BSVKVStore`, and `BSVStorage`
+    cores are accepted. Future named work includes overlay/admin/lookup/topic
+    transports, registry orchestration, wallet-backed KV store, and UHRP
+    storage.
 15. Hardening: differential oracle for every codec, explicit Go-error-to-Swift-error tables, malformed/truncation fuzzing, resource ceilings, concurrency/Sendable review, Linux live transport tests.
 
 ## Exact seam contracts to stabilize early

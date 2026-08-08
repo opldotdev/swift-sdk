@@ -2,11 +2,15 @@
 @_exported import BSVCore
 @_exported import BSVCrypto
 @_exported import BSVInterpreter
+@_exported import BSVIdentity
 @_exported import BSVKeys
+@_exported import BSVKVStore
 @_exported import BSVMessage
 @_exported import BSVNetwork
 @_exported import BSVOverlay
+@_exported import BSVRegistry
 @_exported import BSVSPV
 @_exported import BSVScript
+@_exported import BSVStorage
 @_exported import BSVTransaction
 @_exported import BSVWallet
