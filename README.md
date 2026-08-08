@@ -16,13 +16,14 @@
 
 Swift BSV SDK provides idiomatic, memory-safe Swift APIs for Bitcoin data,
 wire encodings, hashing, symmetric cryptography, secp256k1 keys, signatures,
-hierarchical deterministic keys, mnemonics, and legacy key formats. It is
+hierarchical deterministic keys, mnemonics, legacy key formats, and bounded
+Bitcoin Script parsing. It is
 designed for behavioral and wire-format compatibility with the BSV SDK family
 while embracing Swift value semantics, explicit resource bounds, and
 structured errors.
 
 The package can be imported through the `BSV` umbrella library or through its
-focused `BSVCore`, `BSVCrypto`, and `BSVKeys` libraries.
+focused `BSVCore`, `BSVCrypto`, `BSVKeys`, and `BSVScript` libraries.
 
 ## Installation
 
@@ -78,6 +79,12 @@ print(base58)
 let digest = BSVHashing.sha256d(decoded.bytes)
 let checked = Base58Check.encode(digest.bytes)
 print(checked)
+
+let script = try Script(
+    hex: "76a914000000000000000000000000000000000000000088ac",
+    maximumByteCount: 25
+)
+print(script.isPayToPublicKeyHash)
 ```
 
 Low-level decoders that can expand input require an explicit maximum output
@@ -118,6 +125,8 @@ print(account.neutered.serialized)
   PBKDF2-HMAC-SHA512 seed derivation
 - BIP-32 extended private and public keys, child derivation, canonical paths,
   and xprv/xpub/tprv/tpub serialization
+- Bounded Bitcoin Script bytes, raw opcode identity, PUSHDATA parsing and
+  construction, signed-magnitude Script numbers, and standard script classifiers
 - Redacted default descriptions for mnemonics and extended private keys, with
   explicitly named properties for intentional secret export
 - Swift 6 value semantics, structured errors, and `Sendable` public values

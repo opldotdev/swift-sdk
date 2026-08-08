@@ -1,0 +1,23 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "script-number-btcd-v0.24.2",
+  "source": {
+    "url": "https://github.com/btcsuite/btcd",
+    "revision": "v0.24.2"
+  },
+  "license": {
+    "identifier": "ISC",
+    "file": "Licenses/btcd-isc.txt",
+    "sha256": "73b368e7df1c52ce72711298096da6dd1509a9e261b53f864d721992b3da3eb7"
+  },
+  "notes": "Permissive Bitcoin Script signed-magnitude cases selected from BTCD's script number tests; no Open BSV fixture or oracle output is committed.",
+  "files": [
+    {
+      "originalPath": "txscript/scriptnum_test.go",
+      "localPath": "Permissive/BTCD/ScriptNumber/script-number.json",
+      "sha256": "7e9de04d60ed17c6af36c574c15d146955748f98828d885807b1e3a948ac9986",
+      "transformation": "Selected neutral integer and byte-image pairs from TestScriptNumBytes and TestMakeScriptNum; represented integers as decimal strings and byte arrays as lowercase hexadecimal JSON strings; omitted Go identifiers, test logic, errors, and generated outputs.",
+      "notes": "Covers zero, sign-bit boundaries, multi-byte values, Int64 boundaries, negative zero, and redundant positive and negative encodings."
+    }
+  ]
+}

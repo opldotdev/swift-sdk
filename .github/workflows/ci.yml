@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Swift ${{ matrix.swift }} / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+        swift: ["6.1"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Install Swift
+        uses: swift-actions/setup-swift@7591e4f04c00624cb043783da51a7fd6ee0a6bf6
+        with:
+          swift-version: ${{ matrix.swift }}
+      - name: Test
+        run: swift test --disable-sandbox
+      - name: Verify public API dependency isolation
+        run: Tools/Conformance/check-public-api.sh
+
+  big-number-linux-scale:
+    name: BigNum Linux scale gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    container:
+      image: swift:6.1-jammy
+      options: --memory=768m --memory-swap=768m
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Run release scale and allocation gates
+        env:
+          BSV_BIG_NUM_SCALE: "1"
+        run: swift test -c release --disable-sandbox --filter BigNumScaleTests

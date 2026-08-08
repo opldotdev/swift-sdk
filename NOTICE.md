@@ -6,6 +6,8 @@ Runtime dependencies retain their own licenses:
 - Apple Swift Crypto: Apache License 2.0.
 - 21-DOT-DEV swift-secp256k1 and Bitcoin Core libsecp256k1: see the resolved
   dependency source for exact notices.
+- attaswift BigInt: MIT License. The dependency is isolated behind the internal
+  `BSVBigNum` target and pinned exactly in `Package.resolved`.
 
 The BSV Go SDK is a behavioral compatibility reference and optional external
 conformance oracle. Its source and fixtures are not included in this repository

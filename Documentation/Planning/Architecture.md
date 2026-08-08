@@ -184,8 +184,10 @@ be tested in Phase 1 for:
 - Linux and Apple parity.
 - No trapping conversions to native Swift integers.
 
-`attaswift/BigInt` is a candidate, not an approved dependency. A dedicated ADR
-and performance/resource test suite are required before selection.
+`attaswift/BigInt` 5.7.0 is exact-pinned behind the internal `BSVBigNum` target.
+The adapter, signed-magnitude codec, public-symbol isolation check, and macOS
+750 KB/32 MiB resource gates pass. Acceptance remains provisional until the
+memory-capped Linux Swift 6.1 CI gate recorded in ADR 0004 passes.
 
 ## Transaction graph semantics
 

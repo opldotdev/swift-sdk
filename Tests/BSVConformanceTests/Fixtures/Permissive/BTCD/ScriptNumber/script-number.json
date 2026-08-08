@@ -1,0 +1,32 @@
+{
+  "canonical": [
+    { "value": "0", "hex": "" },
+    { "value": "1", "hex": "01" },
+    { "value": "-1", "hex": "81" },
+    { "value": "127", "hex": "7f" },
+    { "value": "-127", "hex": "ff" },
+    { "value": "128", "hex": "8000" },
+    { "value": "-128", "hex": "8080" },
+    { "value": "129", "hex": "8100" },
+    { "value": "-129", "hex": "8180" },
+    { "value": "256", "hex": "0001" },
+    { "value": "-256", "hex": "0081" },
+    { "value": "32767", "hex": "ff7f" },
+    { "value": "-32767", "hex": "ffff" },
+    { "value": "32768", "hex": "008000" },
+    { "value": "-32768", "hex": "008080" },
+    { "value": "2147483647", "hex": "ffffff7f" },
+    { "value": "-2147483647", "hex": "ffffffff" },
+    { "value": "9223372036854775807", "hex": "ffffffffffffff7f" },
+    { "value": "-9223372036854775807", "hex": "ffffffffffffffff" }
+  ],
+  "nonMinimal": [
+    { "value": "0", "hex": "00", "canonicalHex": "" },
+    { "value": "0", "hex": "80", "canonicalHex": "" },
+    { "value": "1", "hex": "0100", "canonicalHex": "01" },
+    { "value": "127", "hex": "7f00", "canonicalHex": "7f" },
+    { "value": "128", "hex": "800000", "canonicalHex": "8000" },
+    { "value": "256", "hex": "000100", "canonicalHex": "0001" },
+    { "value": "32767", "hex": "ff7f00", "canonicalHex": "ff7f" }
+  ]
+}

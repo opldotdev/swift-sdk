@@ -43,6 +43,10 @@ let package = Package(
             url: "https://github.com/21-DOT-DEV/swift-secp256k1.git",
             exact: "0.23.2"
         ),
+        .package(
+            url: "https://github.com/attaswift/BigInt.git",
+            exact: "5.7.0"
+        ),
     ],
     targets: [
         .target(
@@ -52,7 +56,10 @@ let package = Package(
         .target(name: "BSVCore"),
         .target(
             name: "BSVBigNum",
-            dependencies: ["BSVCore"]
+            dependencies: [
+                "BSVCore",
+                .product(name: "BigInt", package: "BigInt"),
+            ]
         ),
         .target(
             name: "BSVCrypto",
@@ -144,8 +151,18 @@ let package = Package(
             exclude: ["README.md"]
         ),
         .testTarget(
+            name: "BSVBigNumTests",
+            dependencies: ["BSVBigNum"],
+            exclude: ["README.md"]
+        ),
+        .testTarget(
             name: "BSVKeysTests",
             dependencies: ["BSVKeys", "BSVCrypto", "BSVCore"],
+            exclude: ["README.md"]
+        ),
+        .testTarget(
+            name: "BSVScriptTests",
+            dependencies: ["BSVScript"],
             exclude: ["README.md"]
         ),
         .testTarget(

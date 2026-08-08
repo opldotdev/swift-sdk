@@ -103,10 +103,11 @@ without mirroring directory names or Go package prefixes.
 - Tests that await a prerequisite record the exact blocked compatibility row;
   broad disabled suites are not allowed.
 
-## Files intentionally absent from the first skeleton
+## Dependency boundaries retained from the first skeleton
 
 - Copied Open BSV-licensed or unlicensed BRC fixtures.
-- A BigInt package dependency, pending the Phase 1 ADR and scale experiments.
+- BigInt is now exact-pinned only in `BSVBigNum`; no public symbol may expose
+  its concrete types, and ADR 0004 owns its resource and Linux release gates.
 - A secp256k1 C shim target; the P256K audit proved it unnecessary.
 - Network implementation dependencies beyond Foundation, pending the Linux
   WebSocket spike.

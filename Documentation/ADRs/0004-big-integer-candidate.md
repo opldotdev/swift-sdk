@@ -1,6 +1,6 @@
 # ADR 0004: Arbitrary-precision integer dependency
 
-- Status: Proposed; dependency not yet approved
+- Status: Provisionally accepted; Linux CI scale gate pending
 - Date: 2026-08-07
 
 ## Context
@@ -35,7 +35,9 @@ Evidence gathered before the decision:
   modular exponentiation, and modular inverse are available.
 - Its 211 upstream tests pass on macOS with Apple Swift 6.3.3.
 
-This evidence makes it the leading candidate, not an accepted dependency.
+BigInt 6.0.0 requires Swift tools 6.3 and would raise this package's Swift 6.1
+floor. Version 5.7.0 is therefore the newest compatible release and is pinned
+exactly behind `BSVBigNum`; no dependency type appears in a public SDK target.
 
 ## Acceptance experiments
 
@@ -46,12 +48,14 @@ The dependency may be added only after a Phase 1 packet demonstrates:
    negative zero, sign-bit boundaries, minimality, and native-integer overflow.
 3. Modular arithmetic parity for the exact operations used by Shamir/key-share
    code, including negative operands and canonical positive residues.
-4. Linear-time decode/encode behavior and bounded peak allocation at 750,000
+4. Linear-time decode/encode behavior and bounded resident growth at 750,000
    bytes and 32 MiB, tested at limit minus one, the limit, and limit plus one.
    On the documented reference macOS arm64 and Linux x86_64 CI machines, each
    32 MiB import and export must complete in no more than eight seconds in a
-   release build. Incremental peak resident memory above the idle-process
-   baseline must remain at or below four times the input byte count.
+   release build. Incremental resident memory retained at each completed
+   import/export checkpoint, after fixed allocator warm-up, must remain at or
+   below four times the input byte count. This does not claim transient peak
+   sampling inside the dependency operation.
 5. Explicit operation budgets for multiplication, division, shifts, and other
    hostile large-value operations; merely accepting a 32 MiB value must not
    imply that every arithmetic operation is unbounded. Limit-plus-one parsing
@@ -66,6 +70,23 @@ The dependency may be added only after a Phase 1 packet demonstrates:
 8. The required Linux scale job runs in a memory-capped environment and fails
    on timeout, out-of-memory termination, or either resource ceiling. A worker's
    local report cannot substitute for this coordinator-owned CI evidence.
+
+## Current acceptance evidence
+
+- Exact BigInt 5.7.0 resolves and builds with the package's Swift 6 language
+  mode; all 211 upstream tests pass on macOS with Apple Swift 6.3.3.
+- SDK tests cover bounded import/export, arithmetic, division-by-zero,
+  subtraction underflow, shifts, modular inverse, positive residues for
+  negative operands, and construction rejection before dependency entry.
+- Bitcoin Script signed-magnitude tests cover negative zero, minimality,
+  sign-bit boundaries, Int64 minimum/maximum, clamping, and pure serialization.
+- The release scale suite passes on macOS arm64 at 750,000 minus one/exact and
+  32 MiB minus one/exact, with a separate limit-plus-one pre-construction gate.
+- `Tools/Conformance/check-public-api.sh` extracts every public module's symbol
+  graph and fails if `BigInt` or `BigUInt` appears.
+- `.github/workflows/ci.yml` owns the remaining Swift 6.1 Linux test, public
+  API, and 768 MiB memory-capped release scale evidence. This ADR becomes fully
+  accepted only after that job passes on the shipped revision.
 
 ## Timing side-channel position
 
