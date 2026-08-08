@@ -58,6 +58,7 @@ jobs:
         with:
           repository: bsv-blockchain/go-sdk
           ref: de26fdec57a945ddc06de5d5617f6c32374f3929
+          fetch-depth: 0
           fetch-tags: true
           path: go-sdk
       - name: Install Swift
