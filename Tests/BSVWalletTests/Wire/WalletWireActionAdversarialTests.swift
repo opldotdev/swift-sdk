@@ -18,9 +18,7 @@ struct WalletWireActionAdversarialTests {
 
     @Test func rejectsNoncanonicalAndHostileCountsBeforeCollectionWork() throws {
         let negativeOne = [UInt8](repeating: 0xff, count: 9)
-        let hostileInputs = [UInt8](arrayLiteral: 1, 0, 0)
-            + negativeOne
-            + [0xfd, 0x11, 0x27]
+        let hostileInputs = actionWireBytes([[1, 0, 0], negativeOne, [0xfd, 0x11, 0x27]])
         #expect(throws: WalletWireError.countLimitExceeded(
             kind: "inputs", actual: 10_001, maximum: 10_000
         )) {
@@ -39,11 +37,9 @@ struct WalletWireActionAdversarialTests {
 
     @Test func rejectsUnsortedSpendsAndInvalidDiscriminators() throws {
         let negativeOne = [UInt8](repeating: 0xff, count: 9)
-        let unsorted = [UInt8](arrayLiteral: 2, 0, 2, 2, 0)
-            + negativeOne
-            + [1, 0]
-            + negativeOne
-            + [0, 0]
+        let unsorted = actionWireBytes([
+            [2, 0, 2, 2, 0], negativeOne, [1, 0], negativeOne, [0, 0],
+        ])
         #expect(throws: WalletWireError.nonRoundTrippableValue(
             kind: "unsorted or duplicate spend index"
         )) {
@@ -63,7 +59,7 @@ struct WalletWireActionAdversarialTests {
     }
 
     @Test func rejectsTruncationAndTrailingBytesForEveryEmptyResult() throws {
-        let truncated = [UInt8](arrayLiteral: 7, 0, 0) + [UInt8](repeating: 0, count: 31)
+        let truncated = actionWireBytes([[7, 0, 0], [UInt8](repeating: 0, count: 31)])
         #expect(throws: WalletWireError.truncated) {
             try WalletWireCodec.decodeActionRequest(
                 truncated, beefLimits: actionBEEFLimits()
@@ -179,9 +175,9 @@ struct WalletWireActionAdversarialTests {
             try WalletWireCodec.decodeActionRequest(request, beefLimits: actionBEEFLimits())
         }
 
-        let result = [UInt8](arrayLiteral: 0, 1)
-            + [UInt8](repeating: 0, count: 32)
-            + [0, 1, 0, 0, 1, 0]
+        let result = actionWireBytes([
+            [0, 1], [UInt8](repeating: 0, count: 32), [0, 1, 0, 0, 1, 0],
+        ])
         #expect(throws: WalletWireError.nonRoundTrippableValue(
             kind: "zero-length labels entry"
         )) {
@@ -193,31 +189,36 @@ struct WalletWireActionAdversarialTests {
 
     @Test func rejectsPinnedGoUnreadableListActionScriptSentinels() throws {
         let absent = [UInt8](repeating: 0xff, count: 9)
-        let prefix = [UInt8](arrayLiteral: 0, 1) + [UInt8](repeating: 0, count: 32)
-            + [0, 1, 0, 0] + absent + [0, 0]
-        let inputPrefix = prefix + [1] + [UInt8](repeating: 0, count: 32) + [0, 0]
+        let prefix = actionWireBytes([
+            [0, 1], [UInt8](repeating: 0, count: 32), [0, 1, 0, 0], absent, [0, 0],
+        ])
+        let inputPrefix = actionWireBytes([
+            prefix, [1], [UInt8](repeating: 0, count: 32), [0, 0],
+        ])
         #expect(throws: WalletWireError.nonRoundTrippableValue(
             kind: "absent action source locking script"
         )) {
             try WalletWireCodec.decodeActionResult(
-                inputPrefix + absent, expectedCall: .listActions, beefLimits: actionBEEFLimits()
+                actionWireBytes([inputPrefix, absent]),
+                expectedCall: .listActions, beefLimits: actionBEEFLimits()
             )
         }
         #expect(throws: WalletWireError.nonRoundTrippableValue(
             kind: "absent action unlocking script"
         )) {
             try WalletWireCodec.decodeActionResult(
-                inputPrefix + [1, 0x51] + absent,
+                actionWireBytes([inputPrefix, [1, 0x51], absent]),
                 expectedCall: .listActions, beefLimits: actionBEEFLimits()
             )
         }
 
-        let outputPrefix = prefix + absent + [1, 0, 0]
+        let outputPrefix = actionWireBytes([prefix, absent, [1, 0, 0]])
         #expect(throws: WalletWireError.nonRoundTrippableValue(
             kind: "absent action output locking script"
         )) {
             try WalletWireCodec.decodeActionResult(
-                outputPrefix + absent, expectedCall: .listActions, beefLimits: actionBEEFLimits()
+                actionWireBytes([outputPrefix, absent]),
+                expectedCall: .listActions, beefLimits: actionBEEFLimits()
             )
         }
 
@@ -258,8 +259,9 @@ struct WalletWireActionAdversarialTests {
 
     @Test func rejectsRemainingHostileActionResultForms() throws {
         let absent = [UInt8](repeating: 0xff, count: 9)
-        let signable = [UInt8](arrayLiteral: 0, 0, 1)
-            + [UInt8](repeating: 0, count: 32) + [0] + absent + [0, 1]
+        let signable = actionWireBytes([
+            [0, 0, 1], [UInt8](repeating: 0, count: 32), [0], absent, [0, 1],
+        ])
         #expect(throws: WalletWireError.nonRoundTrippableValue(
             kind: "pinned Go signable create-action result"
         )) {
@@ -268,9 +270,10 @@ struct WalletWireActionAdversarialTests {
             )
         }
 
-        let invalidSendStatus = [UInt8](arrayLiteral: 0, 1)
-            + [UInt8](repeating: 0, count: 32) + [0, 1]
-            + [UInt8](repeating: 0, count: 32) + [4]
+        let invalidSendStatus = actionWireBytes([
+            [0, 1], [UInt8](repeating: 0, count: 32), [0, 1],
+            [UInt8](repeating: 0, count: 32), [4],
+        ])
         #expect(throws: WalletWireError.invalidDiscriminator(
             kind: "send-with status", value: 4
         )) {
@@ -279,7 +282,7 @@ struct WalletWireActionAdversarialTests {
             )
         }
 
-        let midAction = [UInt8](arrayLiteral: 0, 1) + [UInt8](repeating: 0, count: 16)
+        let midAction = actionWireBytes([[0, 1], [UInt8](repeating: 0, count: 16)])
         #expect(throws: WalletWireError.truncated) {
             try WalletWireCodec.decodeActionResult(
                 midAction, expectedCall: .listActions, beefLimits: actionBEEFLimits()

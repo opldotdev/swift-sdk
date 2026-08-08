@@ -104,7 +104,9 @@ struct WalletWireActionTests {
     }
 
     @Test func internalizeRequestRoundTripsBothRemittances() throws {
-        let sender = try PrivateKey([UInt8](repeating: 0, count: 31) + [1]).publicKey
+        var senderPrivateKeyBytes = [UInt8](repeating: 0, count: 32)
+        senderPrivateKeyBytes[31] = 1
+        let sender = try PrivateKey(senderPrivateKeyBytes).publicKey
         let request = try WalletInternalizeActionRequest(
             transaction: actionAtomicBEEF(),
             description: "internalize",
@@ -248,6 +250,10 @@ struct WalletWireActionTests {
 
 func actionTransactionID() throws -> TransactionID {
     try TransactionID(wireBytes: Array(0..<32))
+}
+
+func actionWireBytes(_ chunks: [[UInt8]]) -> [UInt8] {
+    chunks.flatMap { $0 }
 }
 
 func actionBEEFLimits() throws -> BEEFLimits {

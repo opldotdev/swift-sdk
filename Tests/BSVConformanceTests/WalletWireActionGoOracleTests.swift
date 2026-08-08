@@ -20,7 +20,9 @@ final class WalletWireActionGoOracleTests: XCTestCase {
         let beefLimits = try actionOracleBEEFLimits()
         let id = try TransactionID(wireBytes: Array(0..<32))
         let outpoint = Outpoint(transactionID: id, outputIndex: 253)
-        let sender = try PrivateKey([UInt8](repeating: 0, count: 31) + [1]).publicKey
+        var senderPrivateKeyBytes = [UInt8](repeating: 0, count: 32)
+        senderPrivateKeyBytes[31] = 1
+        let sender = try PrivateKey(senderPrivateKeyBytes).publicKey
         let requests: [WalletWireActionRequest] = [
             .createAction(try WalletCreateActionRequest(
                 description: "create",
@@ -141,12 +143,13 @@ final class WalletWireActionGoOracleTests: XCTestCase {
         XCTAssertFalse(response.ok)
         XCTAssertEqual(response.error?.category, "invalidArgument")
 
-        let unsortedSpends = [UInt8](arrayLiteral: 2, 2, 0)
-            + [UInt8](repeating: 0xff, count: 9)
-            + [1, 0]
-            + [UInt8](repeating: 0xff, count: 9)
-            + [0, 0]
-        let framed = [UInt8](arrayLiteral: WalletCall.signAction.rawValue, 0) + unsortedSpends
+        let unsortedSpends = oracleActionWireBytes([
+            [2, 2, 0], [UInt8](repeating: 0xff, count: 9), [1, 0],
+            [UInt8](repeating: 0xff, count: 9), [0, 0],
+        ])
+        let framed = oracleActionWireBytes([
+            [WalletCall.signAction.rawValue, 0], unsortedSpends,
+        ])
         let unsortedResponse = try oracleActionRequest(
             client, operation: "wallet.wire.request.reencode", call: .signAction,
             bytes: framed, sequence: &sequence
@@ -175,11 +178,12 @@ final class WalletWireActionGoOracleTests: XCTestCase {
         }
         emptyOutputScript.append(0)
         let emptyLabel = [UInt8](arrayLiteral: WalletCall.listActions.rawValue, 0, 1, 0)
-        for (call, bytes) in [
+        let invalidRequests: [(WalletCall, [UInt8])] = [
             (WalletCall.createAction, emptyInputs),
             (.createAction, emptyOutputScript),
             (.listActions, emptyLabel),
-        ] {
+        ]
+        for (call, bytes) in invalidRequests {
             let response = try oracleActionRequest(
                 client, operation: "wallet.wire.request.reencode", call: call,
                 bytes: bytes, sequence: &sequence
@@ -188,14 +192,16 @@ final class WalletWireActionGoOracleTests: XCTestCase {
             XCTAssertEqual(response.error?.category, "invalidArgument")
         }
 
-        let actionPrefix = [UInt8](arrayLiteral: 0, 1)
-            + [UInt8](repeating: 0, count: 32) + [0, 1, 0, 0]
-            + absent + [0, 0]
-        let inputPrefix = actionPrefix + [1] + [UInt8](repeating: 0, count: 32) + [0, 0]
-        let unreadableResults = [
-            inputPrefix + absent,
-            inputPrefix + [1, 0x51] + absent,
-            actionPrefix + absent + [1, 0, 0] + absent,
+        let actionPrefix = oracleActionWireBytes([
+            [0, 1], [UInt8](repeating: 0, count: 32), [0, 1, 0, 0], absent, [0, 0],
+        ])
+        let inputPrefix = oracleActionWireBytes([
+            actionPrefix, [1], [UInt8](repeating: 0, count: 32), [0, 0],
+        ])
+        let unreadableResults: [[UInt8]] = [
+            oracleActionWireBytes([inputPrefix, absent]),
+            oracleActionWireBytes([inputPrefix, [1, 0x51], absent]),
+            oracleActionWireBytes([actionPrefix, absent, [1, 0, 0], absent]),
         ]
         for bytes in unreadableResults {
             let response = try oracleActionRequest(
@@ -242,6 +248,10 @@ final class WalletWireActionGoOracleTests: XCTestCase {
             ]
         )
     }
+}
+
+private func oracleActionWireBytes(_ chunks: [[UInt8]]) -> [UInt8] {
+    chunks.flatMap { $0 }
 }
 
 private func actionOracleBEEFLimits() throws -> BEEFLimits {
