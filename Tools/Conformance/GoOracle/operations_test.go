@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -196,7 +197,7 @@ func TestScriptASMNamesAndArtifacts(t *testing.T) {
 func TestCompleteOperationRegistry(t *testing.T) {
 	expected := []string{
 		"base58.decode", "base58.encode", "base58check.decode", "base58check.encode",
-		"base64.decode", "base64.encode", "big.umod", "bytes.reverse", "digest32.display",
+		"base64.decode", "base64.encode", "big.umod", "brc42.private.derive", "brc42.public.derive", "brc94.generate", "brc94.verify", "bytes.reverse", "digest32.display",
 		"digest32.parse", "drbg.generate", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "metadata",
 		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.execute", "scriptnum.decode", "scriptnum.encode", "spv.verify", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
@@ -205,6 +206,76 @@ func TestCompleteOperationRegistry(t *testing.T) {
 	}
 	if !reflect.DeepEqual(operations, expected) {
 		t.Fatalf("registry mismatch\n got: %v\nwant: %v", operations, expected)
+	}
+}
+
+func TestBRC42BilateralDerivation(t *testing.T) {
+	senderPrivate := strings.Repeat("00", 31) + "07"
+	recipientPrivate := strings.Repeat("00", 31) + "13"
+	sender, err := protocolPrivateKey(senderPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient, err := protocolPrivateKey(recipientPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	privateResult, err := execute(testRequest(
+		"brc42.private.derive",
+		`{"recipientPrivateKey":"`+recipientPrivate+`","senderPublicKey":"`+
+			hex.EncodeToString(sender.PubKey().Compressed())+`","invoiceNumber":"independent-1"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicResult, err := execute(testRequest(
+		"brc42.public.derive",
+		`{"recipientPublicKey":"`+hex.EncodeToString(recipient.PubKey().Compressed())+
+			`","senderPrivateKey":"`+senderPrivate+`","invoiceNumber":"independent-1"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childPrivate, err := protocolPrivateKey(privateResult.(map[string]string)["privateKey"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := hex.EncodeToString(childPrivate.PubKey().Compressed())
+	want := publicResult.(map[string]string)["publicKey"]
+	if got != want {
+		t.Fatalf("private/public BRC-42 mismatch: got %s want %s", got, want)
+	}
+}
+
+func TestBRC94GeneratedProofVerifies(t *testing.T) {
+	proverPrivate := strings.Repeat("00", 31) + "0b"
+	counterpartyPrivate, err := protocolPrivateKey(strings.Repeat("00", 31) + "11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	counterpartyPublic := hex.EncodeToString(counterpartyPrivate.PubKey().Compressed())
+	generated, err := execute(testRequest(
+		"brc94.generate",
+		`{"proverPrivateKey":"`+proverPrivate+`","counterpartyPublicKey":"`+
+			counterpartyPublic+`"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := generated.(map[string]string)
+	verified, err := execute(testRequest(
+		"brc94.verify",
+		`{"proverPublicKey":"`+proof["proverPublicKey"]+`","counterpartyPublicKey":"`+
+			counterpartyPublic+`","sharedSecret":"`+proof["sharedSecret"]+
+			`","noncePublicKey":"`+proof["noncePublicKey"]+`","nonceSharedSecret":"`+
+			proof["nonceSharedSecret"]+`","response":"`+proof["response"]+`"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !verified.(map[string]bool)["valid"] {
+		t.Fatal("generated BRC-94 proof did not verify")
 	}
 }
 

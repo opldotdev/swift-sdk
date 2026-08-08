@@ -33,7 +33,7 @@ public struct ExtendedPrivateKey: Hashable, Sendable, CustomStringConvertible,
         self.network = network
     }
 
-    /// Parses an exact xprv/tprv Base58Check serialization.
+    /// Parses an exact 111-byte xprv/tprv Base58Check serialization.
     public init(_ serialized: String) throws {
         let payload = try BIP32Payload(serialized: serialized)
         guard payload.kind == .privateKey else {

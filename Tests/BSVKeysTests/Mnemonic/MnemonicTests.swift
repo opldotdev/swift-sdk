@@ -137,6 +137,15 @@ struct MnemonicTests {
         #expect(throws: MnemonicError.malformedPhrase) {
             try Mnemonic(String(repeating: "a", count: 4_097))
         }
+        #expect(throws: MnemonicError.malformedPhrase) {
+            try Mnemonic(String(repeating: "a", count: 1_000_000))
+        }
+
+        // U+FDFA expands from 3 UTF-8 bytes to 33 under NFKD. The raw input is
+        // below the cap, while its normalized form exceeds it.
+        #expect(throws: MnemonicError.malformedPhrase) {
+            try Mnemonic(String(repeating: "\u{fdfa}", count: 128))
+        }
     }
 
     private func fullwidth(_ value: String) -> String {

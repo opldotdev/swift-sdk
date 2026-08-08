@@ -10,7 +10,7 @@ public struct ExtendedPublicKey: Hashable, Sendable, CustomStringConvertible {
     public let childNumber: UInt32
     public let network: BitcoinNetwork
 
-    /// Parses an exact xpub/tpub Base58Check serialization.
+    /// Parses an exact 111-byte xpub/tpub Base58Check serialization.
     public init(_ serialized: String) throws {
         let payload = try BIP32Payload(serialized: serialized)
         guard payload.kind == .publicKey else {

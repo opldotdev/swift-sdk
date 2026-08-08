@@ -124,23 +124,32 @@ struct BIP32Tests {
     func parsingFailures() throws {
         let valid = try Base58Check.decode(vectorOneXprv, maximumPayloadByteCount: 78)
 
+        let shortPayloadText = Base58Check.encode([0x7f] + [UInt8](repeating: 0, count: 76))
+        #expect(shortPayloadText.utf8.count == 111)
         #expect(throws: ExtendedKeyError.invalidPayloadByteCount(77)) {
-            try ExtendedPrivateKey(Base58Check.encode(Array(valid.dropLast())))
+            try ExtendedPrivateKey(shortPayloadText)
         }
         #expect(
             throws: ExtendedKeyError.invalidEncoding(
                 .payloadSizeLimitExceeded(maximum: 78)
             )
         ) {
-            try ExtendedPrivateKey(Base58Check.encode(valid + [0]))
+            try ExtendedPrivateKey(String(repeating: "1", count: 111))
         }
-        #expect(throws: ExtendedKeyError.invalidSerializedTextLength) {
-            try ExtendedPrivateKey(String(repeating: "1", count: 1_000_000))
+        for invalidLengthText in [
+            String(vectorOneXprv.dropLast()),
+            vectorOneXprv + "1",
+            String(repeating: "1", count: 1_000_000),
+            String(repeating: "é", count: 56),
+        ] {
+            #expect(throws: ExtendedKeyError.invalidSerializedTextLength) {
+                try ExtendedPrivateKey(invalidLengthText)
+            }
         }
 
         var unknownVersion = valid
-        unknownVersion.replaceSubrange(0..<4, with: [0xde, 0xad, 0xbe, 0xef])
-        #expect(throws: ExtendedKeyError.unknownVersion(0xdead_beef)) {
+        unknownVersion.replaceSubrange(0..<4, with: [0x04, 0x88, 0xad, 0xe5])
+        #expect(throws: ExtendedKeyError.unknownVersion(0x0488_ade5)) {
             try ExtendedPrivateKey(Base58Check.encode(unknownVersion))
         }
 

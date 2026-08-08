@@ -37,11 +37,10 @@ struct BIP32Payload {
     let keyData: [UInt8]
 
     init(serialized text: String) throws {
-        // Valid standard xprv/xpub/tprv/tpub values are 111 ASCII bytes. Permit
-        // a small malformed-input envelope so checksum, payload-size, and version
-        // failures retain their semantic errors, while hostile text cannot force
-        // Base58 to scan an unbounded input.
-        guard text.utf8.prefix(129).count <= 128 else {
+        // Standard xprv/xpub/tprv/tpub values are exactly 111 ASCII bytes. Inspect
+        // at most one byte beyond that boundary before Base58 decoding so hostile
+        // text cannot force an unbounded validation pass.
+        guard text.utf8.prefix(112).count == 111 else {
             throw ExtendedKeyError.invalidSerializedTextLength
         }
 

@@ -12,7 +12,7 @@ public enum ExtendedKeyError: Error, Equatable, Sendable {
     case invalidMasterKey
     /// Bounded Base58Check decoding failed.
     case invalidEncoding(Base58CheckError)
-    /// Extended-key text exceeded the bounded Base58 inspection limit.
+    /// Extended-key text was not exactly 111 UTF-8 bytes.
     case invalidSerializedTextLength
     /// The decoded extended-key payload was not exactly 78 bytes.
     case invalidPayloadByteCount(Int)

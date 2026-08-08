@@ -100,6 +100,10 @@ supports exactly one version byte.
 | `base58check.encode` | `{payload,version}` | `{text}` |
 | `base58check.decode` | `{text}` | `{payload,version}` |
 | `big.umod` | `{dividend,divisor}` | `{value}` |
+| `brc42.private.derive` | `{recipientPrivateKey,senderPublicKey,invoiceNumber}` | `{privateKey}` using exact UTF-8 invoice bytes |
+| `brc42.public.derive` | `{recipientPublicKey,senderPrivateKey,invoiceNumber}` | `{publicKey}` in compressed SEC1 form |
+| `brc94.generate` | `{proverPrivateKey,counterpartyPublicKey}` | Fresh `{proverPublicKey,sharedSecret,noncePublicKey,nonceSharedSecret,response}` proof fields |
+| `brc94.verify` | `{proverPublicKey,counterpartyPublicKey,sharedSecret,noncePublicKey,nonceSharedSecret,response}` | `{valid}` for both BRC-94 proof equations |
 | `script.asm.decode` | `{text}` | `{bytes}` (Go SDK canonical ASM parser) |
 | `script.asm.encode` | `{bytes}` | `{text}` (Go SDK canonical ASM formatter) |
 | `script.asm.names` | `{}` | `{names}` (all 256 pinned Go SDK opcode names in byte order) |

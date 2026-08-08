@@ -125,6 +125,7 @@ print(account.neutered.serialized)
 - Deterministic digest-level ECDSA with strict DER and compact signatures
 - Deterministic recoverable ECDSA with typed, nontrapping recovery failures
 - Raw-point ECDH plus additive and multiplicative secp256k1 key tweaks
+- BRC-42 bilateral child-key derivation and BRC-94 verifiable shared-secret proofs
 - Wallet Import Format and legacy P2PKH addresses on mainnet and testnet
 - English BIP-39 mnemonics with NFKD normalization and fixed
   PBKDF2-HMAC-SHA512 seed derivation

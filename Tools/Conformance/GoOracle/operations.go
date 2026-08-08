@@ -23,6 +23,7 @@ import (
 	drbgprimitive "github.com/bsv-blockchain/go-sdk/primitives/drbg"
 	ecprimitive "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	primitives "github.com/bsv-blockchain/go-sdk/primitives/hash"
+	schnorrprimitive "github.com/bsv-blockchain/go-sdk/primitives/schnorr"
 	scriptpkg "github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/script/interpreter"
 	interpreterdebug "github.com/bsv-blockchain/go-sdk/script/interpreter/debug"
@@ -494,6 +495,135 @@ func execute(req request, meta metadata) (result any, err error) {
 			return nil, categorizedError{"invalidEncoding", "divisor is not a canonical decimal integer"}
 		}
 		return map[string]string{"value": util.Umod(x, y).String()}, nil
+	case "brc42.private.derive":
+		var args struct {
+			RecipientPrivateKey string `json:"recipientPrivateKey"`
+			SenderPublicKey     string `json:"senderPublicKey"`
+			InvoiceNumber       string `json:"invoiceNumber"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		recipient, err := protocolPrivateKey(args.RecipientPrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		sender, err := protocolPublicKey(args.SenderPublicKey)
+		if err != nil {
+			return nil, err
+		}
+		child, err := recipient.DeriveChild(sender, args.InvoiceNumber)
+		if err != nil || child == nil {
+			return nil, categorizedError{"key", "BRC-42 private derivation failed"}
+		}
+		return map[string]string{"privateKey": hex.EncodeToString(child.Serialize())}, nil
+	case "brc42.public.derive":
+		var args struct {
+			RecipientPublicKey string `json:"recipientPublicKey"`
+			SenderPrivateKey   string `json:"senderPrivateKey"`
+			InvoiceNumber      string `json:"invoiceNumber"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		recipient, err := protocolPublicKey(args.RecipientPublicKey)
+		if err != nil {
+			return nil, err
+		}
+		sender, err := protocolPrivateKey(args.SenderPrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		child, err := recipient.DeriveChild(sender, args.InvoiceNumber)
+		if err != nil || child == nil || !child.Validate() {
+			return nil, categorizedError{"key", "BRC-42 public derivation failed"}
+		}
+		return map[string]string{"publicKey": hex.EncodeToString(child.Compressed())}, nil
+	case "brc94.generate":
+		var args struct {
+			ProverPrivateKey      string `json:"proverPrivateKey"`
+			CounterpartyPublicKey string `json:"counterpartyPublicKey"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		prover, err := protocolPrivateKey(args.ProverPrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		counterparty, err := protocolPublicKey(args.CounterpartyPublicKey)
+		if err != nil {
+			return nil, err
+		}
+		sharedSecret, err := prover.DeriveSharedSecret(counterparty)
+		if err != nil {
+			return nil, err
+		}
+		proof, err := schnorrprimitive.New().GenerateProof(
+			prover, prover.PubKey(), counterparty, sharedSecret,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{
+			"noncePublicKey":    hex.EncodeToString(proof.R.Compressed()),
+			"nonceSharedSecret": hex.EncodeToString(proof.SPrime.Compressed()),
+			"proverPublicKey":   hex.EncodeToString(prover.PubKey().Compressed()),
+			"sharedSecret":      hex.EncodeToString(sharedSecret.Compressed()),
+			"response":          fmt.Sprintf("%064x", proof.Z),
+		}, nil
+	case "brc94.verify":
+		var args struct {
+			ProverPublicKey       string `json:"proverPublicKey"`
+			CounterpartyPublicKey string `json:"counterpartyPublicKey"`
+			SharedSecret          string `json:"sharedSecret"`
+			NoncePublicKey        string `json:"noncePublicKey"`
+			NonceSharedSecret     string `json:"nonceSharedSecret"`
+			Response              string `json:"response"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		prover, err := protocolPublicKey(args.ProverPublicKey)
+		if err != nil {
+			return nil, err
+		}
+		counterparty, err := protocolPublicKey(args.CounterpartyPublicKey)
+		if err != nil {
+			return nil, err
+		}
+		sharedSecret, err := protocolPublicKey(args.SharedSecret)
+		if err != nil {
+			return nil, err
+		}
+		noncePublicKey, err := protocolPublicKey(args.NoncePublicKey)
+		if err != nil {
+			return nil, err
+		}
+		nonceSharedSecret, err := protocolPublicKey(args.NonceSharedSecret)
+		if err != nil {
+			return nil, err
+		}
+		responseBytes, err := protocolHex(args.Response)
+		if err != nil {
+			return nil, err
+		}
+		if len(responseBytes) != 32 {
+			return nil, categorizedError{"invalidLength", "BRC-94 response must be 32 bytes"}
+		}
+		responseScalar := new(big.Int).SetBytes(responseBytes)
+		if responseScalar.Sign() <= 0 || responseScalar.Cmp(ecprimitive.S256().N) >= 0 {
+			return nil, categorizedError{"scalar", "BRC-94 response is outside scalar range"}
+		}
+		valid := schnorrprimitive.New().VerifyProof(
+			prover,
+			counterparty,
+			sharedSecret,
+			&schnorrprimitive.Proof{
+				R: noncePublicKey, SPrime: nonceSharedSecret, Z: responseScalar,
+			},
+		)
+		return map[string]bool{"valid": valid}, nil
 	case "scriptnum.encode":
 		return encodeScriptNumber(req.Args)
 	case "scriptnum.decode":
@@ -1179,6 +1309,37 @@ func protocolHex(text string) ([]byte, error) {
 		return nil, err
 	}
 	return data, nil
+}
+
+func protocolPrivateKey(text string) (*ecprimitive.PrivateKey, error) {
+	data, err := protocolHex(text)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) != ecprimitive.PrivateKeyBytesLen {
+		return nil, categorizedError{"invalidLength", "private key must be exactly 32 bytes"}
+	}
+	scalar := new(big.Int).SetBytes(data)
+	if scalar.Sign() <= 0 || scalar.Cmp(ecprimitive.S256().N) >= 0 {
+		return nil, categorizedError{"scalar", "private key is outside scalar range"}
+	}
+	privateKey, _ := ecprimitive.PrivateKeyFromBytes(data)
+	return privateKey, nil
+}
+
+func protocolPublicKey(text string) (*ecprimitive.PublicKey, error) {
+	data, err := protocolHex(text)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) != ecprimitive.PubKeyBytesLenCompressed {
+		return nil, categorizedError{"invalidLength", "public key must use 33-byte compressed SEC1"}
+	}
+	publicKey, err := ecprimitive.ParsePubKey(data)
+	if err != nil || !publicKey.Validate() {
+		return nil, categorizedError{"key", "public key is invalid"}
+	}
+	return publicKey, nil
 }
 
 func decimalUint(text string, bits int) (uint64, error) {

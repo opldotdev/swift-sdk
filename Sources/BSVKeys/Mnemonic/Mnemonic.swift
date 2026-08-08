@@ -22,7 +22,9 @@ public enum MnemonicError: Error, Equatable, Sendable {
 ///
 /// Phrase input is normalized with Unicode NFKD. Exactly one Unicode whitespace
 /// character is accepted between words; leading, trailing, or repeated
-/// whitespace is rejected. Output always uses one ASCII space.
+/// whitespace is rejected. Input and normalized UTF-8 are each limited to 4,096
+/// bytes, and parsing stops after 24 words or eight scalars in a word. Output
+/// always uses one ASCII space.
 public struct Mnemonic: Hashable, Sendable, CustomStringConvertible,
     CustomDebugStringConvertible {
     private static let allowedEntropyByteCounts: Set<Int> = [16, 20, 24, 28, 32]
@@ -82,7 +84,11 @@ public struct Mnemonic: Hashable, Sendable, CustomStringConvertible,
         self.entropy = entropy
     }
 
-    /// Parses and validates an English BIP-39 phrase.
+    /// Parses and validates a bounded English BIP-39 phrase.
+    ///
+    /// Both the supplied and NFKD-normalized UTF-8 representations must fit in
+    /// 4,096 bytes. This cap is deliberately much larger than any canonical
+    /// English BIP-39 phrase while bounding normalization and parsing work.
     public init(_ phrase: String) throws {
         guard phrase.utf8.prefix(Self.maximumPhraseUTF8ByteCount + 1).count
             <= Self.maximumPhraseUTF8ByteCount else {
@@ -162,7 +168,7 @@ public struct Mnemonic: Hashable, Sendable, CustomStringConvertible,
         var current = ""
         var previousWasWhitespace = false
         for scalar in normalized.unicodeScalars {
-            if Character(String(scalar)).isWhitespace {
+            if scalar.properties.isWhitespace {
                 guard !current.isEmpty, !previousWasWhitespace else {
                     throw MnemonicError.malformedPhrase
                 }

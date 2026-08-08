@@ -1,5 +1,8 @@
 /// Stable errors produced by secp256k1 key-agreement and key-tweak operations.
 public enum Secp256k1OperationError: Error, Equatable, Sendable {
+    /// The dependency could not generate a validated random scalar.
+    case randomGenerationFailed
+
     /// A tweak was not exactly one 32-byte big-endian scalar.
     case invalidTweakByteCount(Int)
 
@@ -9,4 +12,7 @@ public enum Secp256k1OperationError: Error, Equatable, Sendable {
 
     /// A validated SDK key could not be converted or used for key agreement.
     case keyAgreementFailed
+
+    /// Two valid public points could not be added to a finite curve point.
+    case pointAdditionFailed
 }

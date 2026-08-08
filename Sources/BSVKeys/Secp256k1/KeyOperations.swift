@@ -1,6 +1,18 @@
 import P256K
 
 extension PrivateKey {
+    /// Creates a cryptographically random validated secp256k1 private key.
+    ///
+    /// Randomness and scalar validation are delegated to P256K/libsecp256k1.
+    public static func random() throws -> PrivateKey {
+        do {
+            let dependencyKey = try P256K.Signing.PrivateKey(format: .compressed)
+            return try PrivateKey(Array(dependencyKey.dataRepresentation))
+        } catch {
+            throw Secp256k1OperationError.randomGenerationFailed
+        }
+    }
+
     /// Returns `(self + tweak) mod n`, where `tweak` is a 32-byte big-endian scalar.
     ///
     /// This operation delegates to P256K/libsecp256k1. The receiver is unchanged when
@@ -69,6 +81,27 @@ extension PrivateKey {
 }
 
 extension PublicKey {
+    /// Returns the elliptic-curve sum of this point and `other`.
+    ///
+    /// Point addition is delegated to P256K/libsecp256k1 and fails if the
+    /// result is the point at infinity.
+    public func adding(_ other: PublicKey) throws -> PublicKey {
+        do {
+            let dependencyKey = try P256K.Signing.PublicKey(
+                dataRepresentation: compressedBytes,
+                format: .compressed
+            )
+            let dependencyOther = try P256K.Signing.PublicKey(
+                dataRepresentation: other.compressedBytes,
+                format: .compressed
+            )
+            let result = try dependencyKey.combine([dependencyOther], format: .compressed)
+            return try PublicKey(Array(result.dataRepresentation))
+        } catch {
+            throw Secp256k1OperationError.pointAdditionFailed
+        }
+    }
+
     /// Returns `self + tweak * G`, where `tweak` is a 32-byte big-endian scalar.
     ///
     /// This operation delegates to P256K/libsecp256k1 and does not mutate the receiver.
@@ -106,14 +139,14 @@ extension PublicKey {
     }
 }
 
-private let secp256k1Order: [UInt8] = [
+package let secp256k1Order: [UInt8] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
     0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b,
     0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
 ]
 
-private func validatedTweak(_ tweak: [UInt8], permitsZero: Bool) throws -> [UInt8] {
+package func validatedTweak(_ tweak: [UInt8], permitsZero: Bool) throws -> [UInt8] {
     guard tweak.count == 32 else {
         throw Secp256k1OperationError.invalidTweakByteCount(tweak.count)
     }
@@ -140,4 +173,25 @@ private func validatedTweak(_ tweak: [UInt8], permitsZero: Bool) throws -> [UInt
     }
 
     return tweak
+}
+
+/// Reduces an exact 32-byte big-endian integer modulo the secp256k1 order.
+/// Since the input is below 2^256 and the order is above 2^255, at most one
+/// subtraction is required.
+package func reducedScalarModuloOrder(_ bytes: [UInt8]) -> [UInt8] {
+    precondition(bytes.count == 32)
+
+    var difference = [UInt8](repeating: 0, count: 32)
+    var borrow: UInt16 = 0
+    for index in stride(from: 31, through: 0, by: -1) {
+        let minuend = UInt16(bytes[index])
+        let subtrahend = UInt16(secp256k1Order[index]) + borrow
+        difference[index] = UInt8(truncatingIfNeeded: minuend &- subtrahend)
+        borrow = minuend < subtrahend ? 1 : 0
+    }
+
+    let useDifference = UInt8(truncatingIfNeeded: 0 &- UInt8(1 &- borrow))
+    return zip(bytes, difference).map { original, reduced in
+        (original & ~useDifference) | (reduced & useDifference)
+    }
 }
