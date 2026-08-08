@@ -140,17 +140,30 @@ struct WalletWireActionAdversarialTests {
         }
 
         let absent = [UInt8](repeating: 0xff, count: 9)
-        let emptyInputsFrame = [UInt8](arrayLiteral: 1, 0, 0) + absent + [0]
-            + absent + absent + absent + absent + [0]
+        var emptyInputsFrame: [UInt8] = [1, 0, 0]
+        emptyInputsFrame.append(contentsOf: absent)
+        emptyInputsFrame.append(0)
+        for _ in 0..<4 {
+            emptyInputsFrame.append(contentsOf: absent)
+        }
+        emptyInputsFrame.append(0)
         #expect(throws: WalletWireError.nonRoundTrippableValue(
             kind: "empty create-action inputs"
         )) {
             try WalletWireCodec.decodeActionRequest(emptyInputsFrame, beefLimits: beefLimits)
         }
 
-        let emptyScriptFrame = [UInt8](arrayLiteral: 1, 0, 0) + absent + absent
-            + [1, 0, 0, 0] + absent + absent + [0]
-            + absent + absent + absent + [0]
+        var emptyScriptFrame: [UInt8] = [1, 0, 0]
+        emptyScriptFrame.append(contentsOf: absent)
+        emptyScriptFrame.append(contentsOf: absent)
+        emptyScriptFrame.append(contentsOf: [1, 0, 0, 0])
+        emptyScriptFrame.append(contentsOf: absent)
+        emptyScriptFrame.append(contentsOf: absent)
+        emptyScriptFrame.append(0)
+        for _ in 0..<3 {
+            emptyScriptFrame.append(contentsOf: absent)
+        }
+        emptyScriptFrame.append(0)
         #expect(throws: WalletWireError.nonRoundTrippableValue(
             kind: "empty create-action locking script"
         )) {

@@ -155,11 +155,25 @@ final class WalletWireActionGoOracleTests: XCTestCase {
         XCTAssertEqual(unsortedResponse.error?.category, "invalidArgument")
 
         let absent = [UInt8](repeating: 0xff, count: 9)
-        let emptyInputs = [UInt8](arrayLiteral: WalletCall.createAction.rawValue, 0, 0)
-            + absent + [0] + absent + absent + absent + absent + [0]
-        let emptyOutputScript = [UInt8](arrayLiteral: WalletCall.createAction.rawValue, 0, 0)
-            + absent + absent + [1, 0, 0, 0] + absent + absent + [0]
-            + absent + absent + absent + [0]
+        var emptyInputs: [UInt8] = [WalletCall.createAction.rawValue, 0, 0]
+        emptyInputs.append(contentsOf: absent)
+        emptyInputs.append(0)
+        for _ in 0..<4 {
+            emptyInputs.append(contentsOf: absent)
+        }
+        emptyInputs.append(0)
+
+        var emptyOutputScript: [UInt8] = [WalletCall.createAction.rawValue, 0, 0]
+        emptyOutputScript.append(contentsOf: absent)
+        emptyOutputScript.append(contentsOf: absent)
+        emptyOutputScript.append(contentsOf: [1, 0, 0, 0])
+        emptyOutputScript.append(contentsOf: absent)
+        emptyOutputScript.append(contentsOf: absent)
+        emptyOutputScript.append(0)
+        for _ in 0..<3 {
+            emptyOutputScript.append(contentsOf: absent)
+        }
+        emptyOutputScript.append(0)
         let emptyLabel = [UInt8](arrayLiteral: WalletCall.listActions.rawValue, 0, 1, 0)
         for (call, bytes) in [
             (WalletCall.createAction, emptyInputs),

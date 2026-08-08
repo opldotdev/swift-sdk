@@ -42,7 +42,7 @@ jobs:
       - name: Run release scale and allocation gates
         env:
           BSV_BIG_NUM_SCALE: "1"
-        run: swift test -c release --disable-sandbox --filter BigNumScaleTests
+        run: swift test -c release --disable-sandbox --jobs 1 --filter BigNumScaleTests
 
   go-sdk-conformance:
     name: Go SDK v1.3.3 conformance
