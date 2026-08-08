@@ -12,6 +12,7 @@ let modernPublicModules = [
     "BSVInterpreter",
     "BSVSPV",
     "BSVNetwork",
+    "BSVOverlay",
     "BSVWallet",
     "BSVAuth",
 ]
@@ -109,10 +110,14 @@ let package = Package(
         ),
         .target(
             name: "BSVSPV",
-            dependencies: ["BSVCore", "BSVTransaction", "BSVInterpreter"]
+            dependencies: ["BSVCore", "BSVCrypto", "BSVTransaction", "BSVInterpreter"]
         ),
         .target(
             name: "BSVNetwork",
+            dependencies: ["BSVCore", "BSVTransaction", "BSVSPV"]
+        ),
+        .target(
+            name: "BSVOverlay",
             dependencies: ["BSVCore", "BSVTransaction"]
         ),
         .target(
@@ -188,8 +193,12 @@ let package = Package(
         ),
         .testTarget(
             name: "BSVNetworkTests",
-            dependencies: ["BSVNetwork", "BSVTransaction", "BSVCore"],
+            dependencies: ["BSVNetwork", "BSVTransaction", "BSVSPV", "BSVCore"],
             exclude: ["README.md"]
+        ),
+        .testTarget(
+            name: "BSVOverlayTests",
+            dependencies: ["BSVOverlay", "BSVCore", "BSVTransaction"]
         ),
         .testTarget(
             name: "BSVWalletTests",

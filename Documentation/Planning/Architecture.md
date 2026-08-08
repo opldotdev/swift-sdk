@@ -23,9 +23,10 @@ BSVMessage     -> BSVCore, BSVCrypto, BSVKeys
 BSVScript      -> BSVCore, BSVBigNum, BSVCrypto, BSVKeys
 BSVTransaction -> BSVCore, BSVCrypto, BSVKeys, BSVScript
 BSVInterpreter -> BSVCore, BSVBigNum, BSVCrypto, BSVKeys, BSVScript, BSVTransaction
-BSVSPV         -> BSVCore, BSVTransaction, BSVInterpreter
-BSVNetwork     -> BSVCore, BSVTransaction
-BSVWallet      -> BSVCore, BSVCrypto, BSVKeys, BSVTransaction
+BSVSPV         -> BSVCore, BSVCrypto, BSVTransaction, BSVInterpreter
+BSVNetwork     -> BSVCore, BSVTransaction, BSVSPV
+BSVOverlay     -> BSVCore, BSVTransaction
+BSVWallet      -> BSVCore, BSVCrypto, BSVKeys, BSVScript, BSVTransaction
 BSVAuth        -> BSVCore, BSVCrypto, BSVKeys, BSVTransaction, BSVWallet
 
 BSV (thin umbrella using @_exported import for public feature modules)
@@ -141,10 +142,11 @@ cyclic relationship.
 
 ### BSVSPV and BSVNetwork
 
-- `BSVSPV` owns full SPV validation that requires script execution.
+- `BSVSPV` owns block headers and full SPV validation that requires script execution.
 - `BSVNetwork` owns concrete chain-tracker and broadcaster implementations,
   HTTP clients, request/response models, retry behavior, and transport
-  abstractions.
+  abstractions. It imports `BSVSPV` for the block-header values exposed by the
+  block-headers-service client; the dependency remains one-way.
 - `FoundationNetworking` is isolated here for Linux support.
 
 ### BSVWallet

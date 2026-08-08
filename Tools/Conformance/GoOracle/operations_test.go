@@ -341,12 +341,13 @@ func TestScriptJSONOperations(t *testing.T) {
 
 func TestCompleteOperationRegistry(t *testing.T) {
 	expected := []string{
+		"auth.message.reencode", "auth.payload.request.encode", "auth.payload.response.encode",
 		"base58.decode", "base58.encode", "base58check.decode", "base58check.encode",
-		"base64.decode", "base64.encode", "big.umod", "brc42.private.derive", "brc42.public.derive", "brc94.generate", "brc94.verify", "bsm.recover", "bsm.sign", "bytes.reverse", "digest32.display",
+		"base64.decode", "base64.encode", "big.umod", "block.header.inspect", "block.header.reencode", "brc42.private.derive", "brc42.public.derive", "brc94.generate", "brc94.verify", "bsm.recover", "bsm.sign", "bytes.reverse", "digest32.display",
 		"digest32.parse", "drbg.generate", "ecies.bitcore.decrypt", "ecies.bitcore.encrypt", "ecies.electrum.decrypt", "ecies.electrum.encrypt", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "keyshares.recover", "keyshares.split", "metadata",
 		"portable.encrypted.decrypt", "portable.encrypted.encrypt", "portable.signed.sign", "portable.signed.verify",
-		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.bip276.decode", "script.bip276.encode", "script.execute", "script.json.marshal", "script.json.unmarshal", "scriptnum.decode", "scriptnum.encode", "spv.verify", "symmetric.decrypt", "symmetric.encrypt", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.ef.decode", "transaction.ef.encode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
+		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.bip276.decode", "script.bip276.encode", "script.execute", "script.json.marshal", "script.json.unmarshal", "scriptnum.decode", "scriptnum.encode", "spv.verify", "symmetric.decrypt", "symmetric.encrypt", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.ef.decode", "transaction.ef.encode", "transaction.fee", "transaction.input.json.marshal", "transaction.input.json.unmarshal", "transaction.json.marshal", "transaction.json.unmarshal", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.output.json.marshal", "transaction.output.json.unmarshal", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
 		"wallet.wire.request.inspect", "wallet.wire.request.reencode", "wallet.wire.result.inspect", "wallet.wire.result.reencode",
@@ -420,7 +421,7 @@ func TestWalletWireHostilePreflight(t *testing.T) {
 	}{
 		{"odd hex", "wallet.wire.request.inspect", `{"call":"8","bytes":"0"}`, "invalidLength"},
 		{"uppercase hex", "wallet.wire.request.inspect", `{"call":"8","bytes":"AA"}`, "invalidEncoding"},
-		{"unsupported call", "wallet.wire.request.inspect", `{"call":"9","bytes":"0900"}`, "invalidEncoding"},
+		{"truncated linkage call", "wallet.wire.request.inspect", `{"call":"9","bytes":"0900"}`, "truncated"},
 		{"zero call", "wallet.wire.request.inspect", `{"call":"0","bytes":"0000"}`, "invalidEncoding"},
 		{"out-of-range call", "wallet.wire.request.inspect", `{"call":"29","bytes":"1d00"}`, "invalidEncoding"},
 		{"noncanonical call", "wallet.wire.request.inspect", `{"call":"08","bytes":"0800"}`, "invalidEncoding"},
@@ -445,6 +446,62 @@ func TestWalletWireHostilePreflight(t *testing.T) {
 			}
 			if got := normalizeError(err).Category; got != tc.category {
 				t.Fatalf("got %s, want %s", got, tc.category)
+			}
+		})
+	}
+}
+
+func TestWalletWireCertificateCallsAreRegistered(t *testing.T) {
+	for _, call := range []byte{9, 10, 17, 18, 19, 20, 21, 22} {
+		if !walletWireCalls[call] {
+			t.Fatalf("certificate call %d is not registered", call)
+		}
+	}
+}
+
+func TestWalletWireCertificatePreflightStrictness(t *testing.T) {
+	tests := []struct {
+		name     string
+		call     byte
+		result   bool
+		data     []byte
+		category string
+	}{
+		{
+			name: "hostile list certifier count", call: 18,
+			data: []byte{0xfd, 0x11, 0x27}, category: "resourceLimit",
+		},
+		{
+			name: "unsorted verifier keyring", call: 19, result: true,
+			data: []byte{2, 1, 'z', 0, 1, 'a', 0}, category: "invalidArgument",
+		},
+		{
+			name: "relinquish result trailing data", call: 20, result: true,
+			data: []byte{1}, category: "trailingData",
+		},
+		{
+			name: "multi-certificate discovery", call: 21, result: true,
+			data: []byte{2}, category: "invalidArgument",
+		},
+		{
+			name: "noncanonical attribute count", call: 22,
+			data: []byte{0xfd, 0, 0}, category: "noncanonical",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var err error
+			if test.result {
+				err = walletWirePreflightResultPayload(test.call, test.data)
+			} else {
+				err = walletWirePreflightRequestParameters(test.call, test.data)
+			}
+			var categorized categorizedError
+			if !errors.As(err, &categorized) {
+				t.Fatalf("got %v, want categorized error", err)
+			}
+			if categorized.category != test.category {
+				t.Fatalf("got %s, want %s", categorized.category, test.category)
 			}
 		})
 	}

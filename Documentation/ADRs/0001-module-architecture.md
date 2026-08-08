@@ -14,9 +14,10 @@ convenient import without making the entire implementation one compiler unit.
 
 Use compiler-enforced feature modules. The consensus path is `BSVCore ->
 BSVBigNum -> BSVCrypto -> BSVKeys -> BSVScript -> BSVTransaction ->
-BSVInterpreter`. SPV depends on Core, Transaction, and Interpreter. Network
-depends on Core and Transaction. Wallet depends on Core, Crypto, Keys, and
-Transaction.
+BSVInterpreter`. SPV depends on Core, Crypto, Transaction, and Interpreter. Network
+depends on Core, Transaction, and SPV so concrete header services can expose
+the canonical block-header values. Wallet depends on Core, Crypto, Keys,
+Script, and Transaction.
 
 `BSVMessage` depends only on Core, Crypto, and Keys. It owns BRC-77 and BRC-78
 portable messages. `BSVAuth` sits above Wallet and owns certificates and future

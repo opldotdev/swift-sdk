@@ -5,8 +5,8 @@ import Testing
 
 @Suite("Package boundaries")
 struct PackageStructureTests {
-    @Test("BSVMessage is public and part of the modern umbrella")
-    func messageProductAndUmbrella() throws {
+    @Test("BSVMessage and BSVOverlay are public and part of the modern umbrella")
+    func messageAndOverlayProductAndUmbrella() throws {
         func requireType<T>(_: T.Type) {}
         requireType(SignedMessage.self)
         requireType(EncryptedMessage.self)
@@ -22,9 +22,11 @@ struct PackageStructureTests {
         let list = manifest[modernModules.lowerBound..<dependencyMap.lowerBound]
 
         #expect(list.contains("\"BSVMessage\""))
+        #expect(list.contains("\"BSVOverlay\""))
         #expect(!list.contains("\"BSVServices\""))
         #expect(manifest.contains("modernPublicModules.map { module in"))
         #expect(exports.contains("@_exported import BSVMessage"))
+        #expect(exports.contains("@_exported import BSVOverlay"))
     }
 
     @Test("portable messages have one source owner")
@@ -46,11 +48,16 @@ struct PackageStructureTests {
         #expect(!authSource.contains("typealias EncryptedMessage"))
     }
 
-    @Test("BSVServices is absent")
-    func emptyServicesModuleIsAbsent() throws {
+    @Test("BSVOverlay owns overlay source while BSVServices remains absent")
+    func overlaySourceOwnership() throws {
         let manifest = try text(at: "Package.swift")
         let exports = try text(at: "Sources/BSV/Exports.swift")
+        let overlaySource = try swiftSource(below: "Sources/BSVOverlay")
 
+        #expect(manifest.contains("BSVOverlay"))
+        #expect(exports.contains("BSVOverlay"))
+        #expect(overlaySource.contains("public struct TaggedBEEF"))
+        #expect(overlaySource.contains("public protocol LookupFacilitator"))
         #expect(!manifest.contains("BSVServices"))
         #expect(!exports.contains("BSVServices"))
         #expect(try swiftSource(below: "Sources/BSVServices").isEmpty)
@@ -71,6 +78,11 @@ struct PackageStructureTests {
         )
         try expectTarget(
             "BSVNetwork",
+            in: manifest,
+            dependencies: ["BSVCore", "BSVTransaction", "BSVSPV"]
+        )
+        try expectTarget(
+            "BSVOverlay",
             in: manifest,
             dependencies: ["BSVCore", "BSVTransaction"]
         )

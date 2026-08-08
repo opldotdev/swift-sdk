@@ -4,6 +4,7 @@ This directory owns the evidence used to plan and verify behavioral parity.
 The files are research inputs, not claims that features are implemented.
 
 - [Go SDK v1.3.3 surface inventory](GoSDK-v1.3.3.md)
+- [Go SDK v1.3.3 defect report](GoSDK-v1.3.3-Defects.md)
 - [BRC requirements matrix](BRC-Matrix.md)
 - [Compatibility rulings](Rulings.md)
 

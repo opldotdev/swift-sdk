@@ -120,8 +120,8 @@ short BRC-78 heuristic behind stable typed errors; panic recovery remains only a
 final generic defense and does not echo recovered values or request material.
 
 Wallet-wire operations accept a selected decimal `call` and lowercase even
-hex `bytes`. They are bounded before invoking pinned Go and cover calls 1
-through 8, 11 through 16, and 23 through 28. Request operations require the frame's call
+hex `bytes`. They are bounded before invoking pinned Go and cover all calls 1
+through 28. Request operations require the frame's call
 byte to match the selected call and validate the one-byte originator span and
 UTF-8. Result operations preflight canonical, fully consumed error frames.
 `inspect` returns only call/kind and byte counts; `reencode` parses and emits
@@ -163,6 +163,8 @@ digits, or hyphens. This intentionally rejects the Go-accepted prefixes `A`,
 | `base58check.encode` | `{payload,version}` | `{text}` |
 | `base58check.decode` | `{text}` | `{payload,version}` |
 | `big.umod` | `{dividend,divisor}` | `{value}` |
+| `block.header.inspect` | `{bytes}` | canonical `{bytes,version,previousBlockHash,merkleRoot,timestamp,bits,nonce,hash}` for one exact 80-byte header |
+| `block.header.reencode` | `{bytes}` | `{bytes}` after pinned Go parses and serializes one exact 80-byte header |
 | `brc42.private.derive` | `{recipientPrivateKey,senderPublicKey,invoiceNumber}` | `{privateKey}` using exact UTF-8 invoice bytes |
 | `brc42.public.derive` | `{recipientPublicKey,senderPrivateKey,invoiceNumber}` | `{publicKey}` in compressed SEC1 form |
 | `brc94.generate` | `{proverPrivateKey,counterpartyPublicKey}` | Fresh `{proverPublicKey,sharedSecret,noncePublicKey,nonceSharedSecret,response}` proof fields |
@@ -203,9 +205,15 @@ digits, or hyphens. This intentionally rejects the Go-accepted prefixes `A`,
 | `transaction.ef.decode` | `{bytes}` | `{bytes,rawBytes,txid,version,inputs,outputs,lockTime,sources:[{satoshis,lockingScript}]}` for a literal-marker BRC-30/BIP-239 packet |
 | `transaction.ef.encode` | `{bytes,sources:[{satoshis,lockingScript}]}` | `{bytes,rawBytes,txid}` after attaching one asserted source output per raw input |
 | `transaction.fee` | `{bytes,satoshisPerKilobyte,unlockingByteCounts}` | `{fee}` using actual nonempty scripts or one decimal-string/null estimate per input |
+| `transaction.input.json.marshal` | `{unlockingScript,txid,vout,sequence}` | `{json}` with the pinned input JSON document encoded as lowercase hex; integers are decimal-string arguments |
+| `transaction.input.json.unmarshal` | `{json}` | `{unlockingScript,txid,vout,sequence}` after pinned Go input JSON decoding |
+| `transaction.json.marshal` | `{bytes}` | `{json}` with the pinned transaction JSON document encoded as lowercase hex |
+| `transaction.json.unmarshal` | `{json}` | `{bytes}` after pinned Go transaction JSON decoding |
 | `transaction.merklepath.combine` | `{left,right}` | `{bytes}` for the combined canonical BRC-74 path |
 | `transaction.merklepath.decode` | `{bytes}` | `{bytes,blockHeight,treeHeight}` for canonical BRC-74 binary |
 | `transaction.merklepath.root` | `{bytes,txid}` | `{root}` using display-order txid/root strings |
+| `transaction.output.json.marshal` | `{satoshis,lockingScript}` | `{json}` with the pinned output JSON document encoded as lowercase hex; satoshis is a decimal-string argument |
+| `transaction.output.json.unmarshal` | `{json}` | `{satoshis,lockingScript}` after pinned Go output JSON decoding |
 | `transaction.p2pkh.sign` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash,privateKey}` | `{unlockingScript}` using the pinned Go signer |
 | `transaction.sighash` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash}` | `{preimage,digest}` for canonical legacy or replay-protected signature-hash flags |
 | `wallet.wire.request.inspect` | `{call,bytes}` | `{call,originatorUTF8ByteCount,parameterByteCount,canonicalParameterByteCount}` after complete call-aware preflight and pinned typed parsing |
@@ -219,12 +227,31 @@ document before the selected pinned method sees it. The adapter checks the
 hexadecimal character count before decoding. It limits scripts to 128 KiB and
 Script JSON documents to 256 KiB plus two quote bytes.
 
-Wallet-wire operations are limited to calls 1 through 8, 11 through 16, and 23
-through 28. Before any selected pinned serializer runs, the oracle scans the applicable
+Transaction JSON arguments also carry the inner document as lowercase hex.
+The adapter limits raw transactions to 64 KiB, scripts in standalone input or
+output operations to 32 KiB, and inner transaction JSON documents to 384 KiB.
+Numeric operation arguments use canonical unsigned-decimal strings. The inner
+unmarshal document reaches the pinned methods unchanged so tests can record
+their unknown-key, duplicate-key, and field-loss behavior.
+The adapter returns the pinned transaction unmarshal bytes after the fixed
+document and transaction bounds. It does not reinterpret those bytes as raw or
+Extended Format a second time.
+
+Wallet-wire operations cover calls 1 through 28. Before any selected pinned
+serializer runs, the oracle scans the applicable
 request or success-result grammar using byte indexes: canonical CompactSize,
 bounded counts before slicing, exact fixed fields and discriminators, checked
 UInt32 heights, bounded DER structure, fixed-width secp256k1 scalar range and
 low-S checks, empty-call shapes, and full consumption.
+Certificate calls 9, 10, and 17 through 22 also require compressed public keys,
+display-order revocation transaction IDs, strictly UTF-8-byte-sorted maps,
+canonical Base64 certificate fields, and exact keyring presence bytes. A
+present list-certificate keyring must contain an entry. The live-Go adapter
+limits discovery results to one certificate because the pinned Go reader checks
+for end of input inside each identity-certificate decoder. The Swift codec
+supports bounded multiple items. The pinned prove-result writer does
+not sort its map. The adapter therefore validates with the pinned reader and
+returns the already validated canonical input bytes for that one result shape.
 Remote-error framing is scanned independently with 2,000-byte message and
 8,192-byte stack limits. Over-limit declarations report `resourceLimit`;
 in-limit declarations that exceed the remaining packet report `truncated`.

@@ -90,13 +90,16 @@ explicit wire format so marker-like raw transactions are never auto-detected.
 BIP-276 text and BRC-307 inscription construction are also accepted with
 explicit input and output limits. Strict bounded Script JSON is accepted with
 bidirectional pinned-Go checks for canonical lowercase documents and an
-explicit ruling for the pinned unmarshal artifacts.
+explicit ruling for the pinned unmarshal artifacts. Strict bounded transaction
+JSON is accepted with complete redundant-field checks and bidirectional
+pinned-Go coverage.
 
 - Transaction value/graph semantics and ADR. (Accepted)
 - Script representation, parsing, ASM, strict bounded JSON, opcodes, and
   templates that do not sign. (Accepted)
 - Resource-bounded script numbers and era configuration.
 - Transaction model, parsing, serialization, IDs, and outpoints. (Accepted)
+- Strict transaction, input, and output JSON compatibility. (Accepted)
 - Extended Format parsing and serialization with source outputs. (Accepted)
 - Bounded BIP-276 text encoding and decoding. (Accepted)
 - BRC-307 basic, enriched, and specific-ordinal inscriptions. (Accepted)
@@ -128,6 +131,7 @@ signature, and script-cleanup behavior on consensus-sensitive paths.
   (Accepted)
 - Full BRC-67 source resolution, value/fee, Script, lock-condition, and trusted
   Merkle-root validation in `BSVSPV`. (Accepted checkpoint)
+- Canonical 80-byte block-header parsing, serialization, and hashing. (Accepted)
 - Bounded BEEF merge, txid-only projection, known-ID trimming, and proof
   propagation. (Accepted)
 
@@ -181,9 +185,12 @@ policy.
 - Strict bounded wallet-wire action and output-query codecs for calls 1 through
   7, with explicit BEEF limits. (Accepted)
 - Offline BRC-52 certificate values, keyrings, and binary codecs. (Accepted)
-- Certificate wallet-wire codecs, transport substrates, persistent wallet
-  state, remote execution, and permission policy.
-  (Future)
+- Strict bounded wallet-wire certificate, discovery, and linkage codecs for
+  calls 9, 10, and 17 through 22. (Accepted)
+- Transport-neutral wallet-wire processor and transceiver for all 28 calls,
+  with an injected originator authorizer. (Accepted)
+- Persistent wallet state, HTTP or WebSocket remote execution, and interactive
+  permission policy. (Future)
 - Chain-aware certificate revocation checks. (Future)
 
 ## Phase 9: Messages and authentication
@@ -196,16 +203,23 @@ issue, acquire, project, and verify workflows.
 - BRC-77 portable signed messages. (Accepted)
 - BRC-78 portable encrypted messages. (Accepted)
 - Offline BRC-52 certificate workflows. (Accepted)
-- BRC-103 peer authentication. (Future)
+- BRC-103 peer authentication and bounded session, nonce, and replay protection.
+  (Accepted)
+- Transport-neutral BRC-104 request and response payloads. (Accepted)
+- BRC-103 certificate exchange. (Future)
 - BRC-104 authenticated HTTP and WebSocket transports. (Future)
-- Session, certificate, nonce, and replay protections. (Future)
 
 ## Phase 10: Overlay and application services
 
-These service families are future work. The package does not expose an empty
-general services module. Each implemented family must use a clear module name.
+Accepted checkpoint: `BSVOverlay` provides bounded SHIP and SLAP values and
+transport-neutral topic and lookup facilitator protocols. It does not include
+HTTP, resolver policy, persistence, or wallet-backed admin tokens. The package
+does not expose an empty general services module. Each implemented family uses
+a clear module name.
 
-- Overlay topic and lookup services, SHIP/SLAP, and admin tokens.
+- Bounded overlay topic and lookup values and facilitator protocols. (Accepted)
+- Overlay HTTP transport, resolver and broadcaster policy, and admin tokens.
+  (Future)
 - Identity and registry features.
 - Key-value and storage/UHRP features.
 - Remaining Go SDK utility and compatibility APIs.

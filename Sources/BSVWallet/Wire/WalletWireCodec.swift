@@ -231,7 +231,7 @@ public enum WalletWireCodec {
         _ request: WalletWireKeyQueryRequest,
         limits: WalletWireLimits
     ) throws -> [UInt8] {
-        var writer = WalletWireWriter()
+        var writer = WalletWireWriter(maximumByteCount: limits.maximumPayloadByteCount)
         switch request {
         case .getPublicKey(let value):
             switch value.selection {
@@ -355,6 +355,7 @@ public enum WalletWireCodec {
         case .getHeaderForHeight(let value):
             writer.writeCompactSize(UInt64(value.height))
         }
+        try writer.requireWithinLimit(kind: "request parameters")
         try requireBytes(
             writer.bytes.count,
             maximum: limits.maximumPayloadByteCount,
@@ -526,7 +527,7 @@ public enum WalletWireCodec {
         _ result: WalletWireKeyQueryResult,
         limits: WalletWireLimits
     ) throws -> [UInt8] {
-        var writer = WalletWireWriter()
+        var writer = WalletWireWriter(maximumByteCount: limits.maximumPayloadByteCount)
         switch result {
         case .getPublicKey(let value):
             let bytes = value.publicKey.compressedBytes
@@ -582,6 +583,7 @@ public enum WalletWireCodec {
             )
             writer.writeBytes(Array(value.version.utf8))
         }
+        try writer.requireWithinLimit(kind: "result payload")
         try requireBytes(
             writer.bytes.count,
             maximum: limits.maximumPayloadByteCount,

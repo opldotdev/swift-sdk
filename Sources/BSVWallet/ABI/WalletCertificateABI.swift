@@ -261,18 +261,34 @@ public struct WalletListCertificatesRequest: Equatable, Sendable {
 public struct WalletCertificateResult:
     Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let certificate: Certificate
-    public let keyring: [CertificateFieldName: CertificateCiphertext]
+    /// `nil` means that the wallet did not return a keyring. A present keyring
+    /// must contain at least one entry because the pinned Go reader cannot
+    /// preserve the distinction between an empty map and an absent map.
+    public let keyring: [CertificateFieldName: CertificateCiphertext]?
     public let verifier: [UInt8]
     public init(
         certificate: Certificate,
-        keyring: [CertificateFieldName: CertificateCiphertext],
+        keyring: [CertificateFieldName: CertificateCiphertext]?,
         verifier: [UInt8],
         limits: WalletABILimits = .standard
     ) throws {
-        try walletABIRequireCount(keyring.count, kind: "certificate keyring", maximum: limits.maximumCollectionCount)
+        if let keyring {
+            guard !keyring.isEmpty else {
+                throw WalletABIError.invalidFieldRelation(
+                    "a present certificate keyring must not be empty"
+                )
+            }
+            try walletABIRequireCount(
+                keyring.count,
+                kind: "certificate keyring",
+                maximum: limits.maximumCollectionCount
+            )
+        }
         try walletABIRequireBytes(verifier.count, kind: "certificate verifier", limits: limits)
         try walletABIRequireAggregate(
-            [verifier.count] + keyring.map { $0.key.value.utf8.count + $0.value.bytes.count },
+            [verifier.count] + (keyring?.map {
+                $0.key.value.utf8.count + $0.value.bytes.count
+            } ?? []),
             limits: limits
         )
         self.certificate = certificate
@@ -284,7 +300,8 @@ public struct WalletCertificateResult:
     public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletListCertificatesResult: Equatable, Sendable {
+public struct WalletListCertificatesResult:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let totalCertificates: UInt32
     public let certificates: [WalletCertificateResult]
     public init(
@@ -296,9 +313,13 @@ public struct WalletListCertificatesResult: Equatable, Sendable {
         self.totalCertificates = totalCertificates
         self.certificates = certificates
     }
+    public var description: String { "<redacted wallet certificate list>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletProveCertificateRequest: Equatable, Sendable {
+public struct WalletProveCertificateRequest:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let certificate: Certificate
     public let fieldsToReveal: [CertificateFieldName]
     public let verifier: PublicKey
@@ -324,6 +345,9 @@ public struct WalletProveCertificateRequest: Equatable, Sendable {
         self.verifier = verifier
         self.privilege = privilege
     }
+    public var description: String { "<redacted prove-certificate request>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
 public struct WalletProveCertificateResult:
@@ -457,7 +481,8 @@ public struct WalletDiscoverByAttributesRequest:
     public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
-public struct WalletDiscoverCertificatesResult: Equatable, Sendable {
+public struct WalletDiscoverCertificatesResult:
+    Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let totalCertificates: UInt32
     public let certificates: [WalletIdentityCertificate]
     public init(
@@ -469,6 +494,9 @@ public struct WalletDiscoverCertificatesResult: Equatable, Sendable {
         self.totalCertificates = totalCertificates
         self.certificates = certificates
     }
+    public var description: String { "<redacted discovered certificates>" }
+    public var debugDescription: String { description }
+    public var customMirror: Mirror { walletEmptyMirror(self) }
 }
 
 private func walletABIValidateTextMap(

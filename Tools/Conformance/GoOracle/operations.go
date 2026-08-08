@@ -258,6 +258,8 @@ func execute(req request, meta metadata) (result any, err error) {
 	}()
 
 	switch req.Op {
+	case "auth.message.reencode", "auth.payload.request.encode", "auth.payload.response.encode":
+		return executeAuthOperation(req.Op, req.Args)
 	case "metadata":
 		var args struct{}
 		if err := decodeArgs(req.Args, &args); err != nil {
@@ -857,6 +859,10 @@ func execute(req request, meta metadata) (result any, err error) {
 		return splitKeyShares(req.Args)
 	case "keyshares.recover":
 		return recoverKeyShares(req.Args)
+	case "block.header.inspect":
+		return inspectBlockHeader(req.Args)
+	case "block.header.reencode":
+		return reencodeBlockHeader(req.Args)
 	case "portable.encrypted.decrypt":
 		return decryptPortableMessage(req.Args)
 	case "portable.encrypted.encrypt":
@@ -1050,6 +1056,10 @@ func execute(req request, meta metadata) (result any, err error) {
 			"txid":     tx.TxID().String(),
 			"version":  strconv.FormatUint(uint64(tx.Version), 10),
 		}, nil
+	case "transaction.input.json.marshal", "transaction.input.json.unmarshal",
+		"transaction.json.marshal", "transaction.json.unmarshal",
+		"transaction.output.json.marshal", "transaction.output.json.unmarshal":
+		return executeTransactionJSONOperation(req.Op, req.Args)
 	case "transaction.ef.encode":
 		var args struct {
 			Bytes   string `json:"bytes"`
@@ -1676,7 +1686,8 @@ var walletWireSecp256k1HalfOrder = [32]byte{
 
 var walletWireCalls = map[byte]bool{
 	1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true,
-	8: true, 11: true, 12: true, 13: true, 14: true, 15: true, 16: true,
+	8: true, 9: true, 10: true, 11: true, 12: true, 13: true, 14: true, 15: true, 16: true,
+	17: true, 18: true, 19: true, 20: true, 21: true, 22: true,
 	23: true, 24: true, 25: true, 26: true, 27: true, 28: true,
 }
 
@@ -2093,6 +2104,20 @@ func (s *walletWireScanner) readOptionalUint32(kind string) error {
 	return nil
 }
 
+func (s *walletWireScanner) readOptionalPageLimit(kind string) error {
+	value, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if value == math.MaxUint64 {
+		return nil
+	}
+	if value == 0 || value > wallet.MaxActionsLimit {
+		return categorizedError{"invalidArgument", "wallet-wire " + kind + " is outside 1...10000"}
+	}
+	return nil
+}
+
 func (s *walletWireScanner) readRequiredUint32(kind string) error {
 	value, err := s.readCompactSize()
 	if err != nil {
@@ -2189,6 +2214,400 @@ func (s *walletWireScanner) readActionOutpoint() error {
 		return err
 	}
 	return s.readRequiredUint32("outpoint index")
+}
+
+func (s *walletWireScanner) readCertificatePublicKey(kind string) error {
+	key, err := s.takeFixed(33, kind)
+	if err != nil {
+		return err
+	}
+	if key[0] != 0x02 && key[0] != 0x03 {
+		return categorizedError{"invalidEncoding", "wallet-wire " + kind + " is invalid"}
+	}
+	if _, err := ecprimitive.ParsePubKey(key); err != nil {
+		return categorizedError{"invalidEncoding", "wallet-wire " + kind + " is invalid"}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readCertificateOutpoint() error {
+	if _, err := s.takeFixed(32, "certificate outpoint transaction ID"); err != nil {
+		return err
+	}
+	return s.readRequiredUint32("certificate outpoint index")
+}
+
+func walletWireStrictlyOrdered(previous, current []byte) bool {
+	return previous == nil || bytes.Compare(previous, current) < 0
+}
+
+func (s *walletWireScanner) readCertificateMap(
+	kind string,
+	valuesAreText bool,
+	valuesAreCanonicalBase64 bool,
+	rejectEmpty bool,
+) error {
+	count, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire " + kind + " count exceeds operation limit"}
+	}
+	if rejectEmpty && count == 0 {
+		return categorizedError{"invalidArgument", "wallet-wire present " + kind + " must not be empty"}
+	}
+	if count > uint64(s.remaining()/2) {
+		return categorizedError{"truncated", "wallet-wire " + kind + " is truncated"}
+	}
+	var previous []byte
+	for index := uint64(0); index < count; index++ {
+		name, err := s.readText(50, false, kind+" name")
+		if err != nil {
+			return err
+		}
+		if !walletWireStrictlyOrdered(previous, name) {
+			return categorizedError{"invalidArgument", "wallet-wire " + kind + " keys are not strictly sorted"}
+		}
+		previous = name
+		value, err := s.readVarBytes(walletWireMaximumBytes, kind+" value")
+		if err != nil {
+			return err
+		}
+		if valuesAreText && !utf8.Valid(value) {
+			return categorizedError{"invalidEncoding", "wallet-wire " + kind + " value is not UTF-8"}
+		}
+		if valuesAreCanonicalBase64 {
+			decoded, decodeErr := base64.StdEncoding.DecodeString(string(value))
+			if decodeErr != nil || base64.StdEncoding.EncodeToString(decoded) != string(value) {
+				return categorizedError{"invalidEncoding", "wallet-wire " + kind + " value is not canonical Base64"}
+			}
+		}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readCertificateSignature(optional bool) error {
+	signature, err := s.readVarBytes(walletWireMaximumDERBytes, "certificate signature")
+	if err != nil {
+		return err
+	}
+	if optional && len(signature) == 0 {
+		return nil
+	}
+	valid, lowS := walletWireDERStatus(signature)
+	if !valid {
+		return categorizedError{"invalidEncoding", "wallet-wire certificate signature is invalid"}
+	}
+	if !lowS {
+		return categorizedError{"invalidArgument", "wallet-wire high-S certificate signature is not round-trippable"}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readCertificateBinary(requireSignature bool) error {
+	if _, err := s.takeFixed(32, "certificate type"); err != nil {
+		return err
+	}
+	if _, err := s.takeFixed(32, "certificate serial number"); err != nil {
+		return err
+	}
+	if err := s.readCertificatePublicKey("certificate subject"); err != nil {
+		return err
+	}
+	if err := s.readCertificatePublicKey("certificate certifier"); err != nil {
+		return err
+	}
+	if err := s.readCertificateOutpoint(); err != nil {
+		return err
+	}
+	if err := s.readCertificateMap("certificate fields", true, true, false); err != nil {
+		return err
+	}
+	signature := s.data[s.position:]
+	if len(signature) == 0 && !requireSignature {
+		s.position = len(s.data)
+		return nil
+	}
+	valid, lowS := walletWireDERStatus(signature)
+	if !valid {
+		return categorizedError{"invalidEncoding", "wallet-wire certificate signature is invalid"}
+	}
+	if !lowS {
+		return categorizedError{"invalidArgument", "wallet-wire high-S certificate signature is not round-trippable"}
+	}
+	s.position = len(s.data)
+	return nil
+}
+
+func (s *walletWireScanner) readAcquireCertificateRequest() error {
+	if _, err := s.takeFixed(32, "certificate type"); err != nil {
+		return err
+	}
+	if err := s.readCertificatePublicKey("certificate certifier"); err != nil {
+		return err
+	}
+	if err := s.readCertificateMap("certificate fields", true, false, false); err != nil {
+		return err
+	}
+	if err := s.readAccess(); err != nil {
+		return err
+	}
+	protocol, err := s.readByte("certificate acquisition protocol")
+	if err != nil {
+		return err
+	}
+	switch protocol {
+	case 1:
+		if _, err := s.takeFixed(32, "certificate serial number"); err != nil {
+			return err
+		}
+		if err := s.readCertificateOutpoint(); err != nil {
+			return err
+		}
+		if err := s.readCertificateSignature(false); err != nil {
+			return err
+		}
+		revealer, err := s.readByte("keyring revealer")
+		if err != nil {
+			return err
+		}
+		if revealer != 11 {
+			if revealer != 2 && revealer != 3 {
+				return categorizedError{"invalidEncoding", "wallet-wire keyring revealer is invalid"}
+			}
+			if _, err := s.takeFixed(32, "keyring revealer public key"); err != nil {
+				return err
+			}
+		}
+		return s.readCertificateMap("subject keyring", false, false, false)
+	case 2:
+		_, err := s.readText(walletWireMaximumTextBytes, false, "certifier URL")
+		return err
+	default:
+		return categorizedError{"invalidEncoding", "wallet-wire certificate acquisition protocol is invalid"}
+	}
+}
+
+func (s *walletWireScanner) readListCertificatesRequest() error {
+	certifiers, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if certifiers > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire certifier count exceeds operation limit"}
+	}
+	if certifiers > uint64(s.remaining()/33) {
+		return categorizedError{"truncated", "wallet-wire certifiers are truncated"}
+	}
+	for index := uint64(0); index < certifiers; index++ {
+		if err := s.readCertificatePublicKey("certificate certifier"); err != nil {
+			return err
+		}
+	}
+	types, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if types > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire certificate type count exceeds operation limit"}
+	}
+	if _, err := s.take(types*32, walletWireMaximumBytes, "certificate types"); err != nil {
+		return err
+	}
+	if err := s.readOptionalPageLimit("certificate limit"); err != nil {
+		return err
+	}
+	if err := s.readOptionalUint32("certificate offset"); err != nil {
+		return err
+	}
+	return s.readAccess()
+}
+
+func (s *walletWireScanner) readProveCertificateRequest() error {
+	if _, err := s.takeFixed(32, "certificate type"); err != nil {
+		return err
+	}
+	if err := s.readCertificatePublicKey("certificate subject"); err != nil {
+		return err
+	}
+	if _, err := s.takeFixed(32, "certificate serial number"); err != nil {
+		return err
+	}
+	if err := s.readCertificatePublicKey("certificate certifier"); err != nil {
+		return err
+	}
+	if err := s.readCertificateOutpoint(); err != nil {
+		return err
+	}
+	if err := s.readCertificateSignature(true); err != nil {
+		return err
+	}
+	if err := s.readCertificateMap("certificate fields", true, true, false); err != nil {
+		return err
+	}
+	count, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire fields-to-reveal count exceeds operation limit"}
+	}
+	if count > uint64(s.remaining()) {
+		return categorizedError{"truncated", "wallet-wire fields to reveal are truncated"}
+	}
+	seen := make(map[string]struct{}, min(int(count), walletWireMaximumCollectionCount))
+	for index := uint64(0); index < count; index++ {
+		field, err := s.readText(50, false, "field to reveal")
+		if err != nil {
+			return err
+		}
+		if _, duplicate := seen[string(field)]; duplicate {
+			return categorizedError{"invalidArgument", "wallet-wire fields to reveal contain a duplicate"}
+		}
+		seen[string(field)] = struct{}{}
+	}
+	if err := s.readCertificatePublicKey("certificate verifier"); err != nil {
+		return err
+	}
+	return s.readAccess()
+}
+
+func (s *walletWireScanner) readDiscoveryRequest(identity bool) error {
+	if identity {
+		if err := s.readCertificatePublicKey("identity key"); err != nil {
+			return err
+		}
+	} else if err := s.readCertificateMap("certificate attributes", true, false, false); err != nil {
+		return err
+	}
+	if err := s.readOptionalPageLimit("discovery limit"); err != nil {
+		return err
+	}
+	if err := s.readOptionalUint32("discovery offset"); err != nil {
+		return err
+	}
+	return s.readOptionalBool("seek-permission flag")
+}
+
+func (s *walletWireScanner) readLinkageResult(specific bool) error {
+	for _, kind := range []string{"linkage prover", "linkage verifier", "linkage counterparty"} {
+		if err := s.readCertificatePublicKey(kind); err != nil {
+			return err
+		}
+	}
+	if specific {
+		level, err := s.readByte("protocol security level")
+		if err != nil {
+			return err
+		}
+		if level > 2 {
+			return categorizedError{"invalidEncoding", "wallet-wire protocol security level is invalid"}
+		}
+		name, err := s.readText(walletWireMaximumProtocolBytes, false, "protocol name")
+		if err != nil {
+			return err
+		}
+		if !walletWireCanonicalProtocolName(name) {
+			return categorizedError{"invalidArgument", "wallet-wire protocol name is not canonical"}
+		}
+		if _, err := s.readText(walletWireMaximumKeyIDBytes, false, "key ID"); err != nil {
+			return err
+		}
+	} else if _, err := s.readText(walletWireMaximumTextBytes, true, "revelation time"); err != nil {
+		return err
+	}
+	if _, err := s.readVarBytes(walletWireMaximumBytes, "encrypted linkage"); err != nil {
+		return err
+	}
+	if _, err := s.readVarBytes(walletWireMaximumBytes, "encrypted linkage proof"); err != nil {
+		return err
+	}
+	if specific {
+		_, err := s.readByte("linkage proof type")
+		return err
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readListCertificatesResult() error {
+	count, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if count > walletWireMaximumCollectionCount {
+		return categorizedError{"resourceLimit", "wallet-wire certificate count exceeds operation limit"}
+	}
+	for index := uint64(0); index < count; index++ {
+		certificate, err := s.readVarBytes(walletWireMaximumBytes, "certificate")
+		if err != nil {
+			return err
+		}
+		nested := walletWireScanner{data: certificate}
+		if err := nested.readCertificateBinary(true); err != nil {
+			return err
+		}
+		presence, err := s.readByte("certificate keyring presence")
+		if err != nil {
+			return err
+		}
+		switch presence {
+		case 0:
+		case 1:
+			if err := s.readCertificateMap("certificate keyring", false, false, true); err != nil {
+				return err
+			}
+		default:
+			return categorizedError{"invalidEncoding", "wallet-wire certificate keyring presence is invalid"}
+		}
+		if _, err := s.readVarBytes(walletWireMaximumBytes, "certificate verifier"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *walletWireScanner) readIdentityCertificate() error {
+	certificate, err := s.readVarBytes(walletWireMaximumBytes, "identity certificate")
+	if err != nil {
+		return err
+	}
+	nested := walletWireScanner{data: certificate}
+	if err := nested.readCertificateBinary(true); err != nil {
+		return err
+	}
+	for _, kind := range []string{"certifier name", "certifier icon URL", "certifier description"} {
+		if _, err := s.readText(walletWireMaximumTextBytes, true, kind); err != nil {
+			return err
+		}
+	}
+	trust, err := s.readByte("certifier trust")
+	if err != nil {
+		return err
+	}
+	if trust > 10 {
+		return categorizedError{"invalidArgument", "wallet-wire certifier trust exceeds 10"}
+	}
+	if err := s.readCertificateMap("public keyring", false, false, false); err != nil {
+		return err
+	}
+	return s.readCertificateMap("decrypted fields", true, false, false)
+}
+
+func (s *walletWireScanner) readDiscoveryResult() error {
+	count, err := s.readCompactSize()
+	if err != nil {
+		return err
+	}
+	if count > 1 {
+		return categorizedError{"invalidArgument", "pinned Go cannot read a multi-certificate discovery result"}
+	}
+	for index := uint64(0); index < count; index++ {
+		if err := s.readIdentityCertificate(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *walletWireScanner) readOutpointCollection(kind string) error {
@@ -2881,6 +3300,23 @@ func walletWirePreflightRequestParameters(call byte, data []byte) error {
 		if err := s.readOptionalBool("seek-permission flag"); err != nil {
 			return err
 		}
+	case 9:
+		if err := s.readAccess(); err != nil {
+			return err
+		}
+		if err := s.readCertificatePublicKey("linkage counterparty"); err != nil {
+			return err
+		}
+		if err := s.readCertificatePublicKey("linkage verifier"); err != nil {
+			return err
+		}
+	case 10:
+		if err := s.readKeyParameters(); err != nil {
+			return err
+		}
+		if err := s.readCertificatePublicKey("linkage verifier"); err != nil {
+			return err
+		}
 	case 11, 12, 13:
 		if err := s.readKeyParameters(); err != nil {
 			return err
@@ -2936,6 +3372,52 @@ func walletWirePreflightRequestParameters(call byte, data []byte) error {
 			return err
 		}
 		if err := s.readOptionalBool("seek-permission flag"); err != nil {
+			return err
+		}
+	case 17:
+		if err := s.readAcquireCertificateRequest(); err != nil {
+			return err
+		}
+	case 18:
+		if err := s.readListCertificatesRequest(); err != nil {
+			return err
+		}
+	case 19:
+		certificateType, err := s.takeFixed(32, "certificate type")
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(certificateType, make([]byte, 32)) {
+			return categorizedError{"invalidArgument", "wallet-wire prove-certificate type must not be zero"}
+		}
+		s.position -= 32
+		if err := s.readProveCertificateRequest(); err != nil {
+			return err
+		}
+	case 20:
+		certificateType, err := s.takeFixed(32, "certificate type")
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(certificateType, make([]byte, 32)) {
+			return categorizedError{"invalidArgument", "wallet-wire relinquish-certificate type must not be zero"}
+		}
+		serialNumber, err := s.takeFixed(32, "certificate serial number")
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(serialNumber, make([]byte, 32)) {
+			return categorizedError{"invalidArgument", "wallet-wire relinquish-certificate serial number must not be zero"}
+		}
+		if err := s.readCertificatePublicKey("certificate certifier"); err != nil {
+			return err
+		}
+	case 21:
+		if err := s.readDiscoveryRequest(true); err != nil {
+			return err
+		}
+	case 22:
+		if err := s.readDiscoveryRequest(false); err != nil {
 			return err
 		}
 	case 23, 24, 25, 27, 28:
@@ -3006,6 +3488,32 @@ func walletWirePreflightResultPayload(call byte, data []byte) error {
 			return categorizedError{"invalidArgument", "wallet-wire high-S signature is not round-trippable"}
 		}
 		s.position = len(data)
+	case 9:
+		if err := s.readLinkageResult(false); err != nil {
+			return err
+		}
+	case 10:
+		if err := s.readLinkageResult(true); err != nil {
+			return err
+		}
+	case 17:
+		if err := s.readCertificateBinary(true); err != nil {
+			return err
+		}
+	case 18:
+		if err := s.readListCertificatesResult(); err != nil {
+			return err
+		}
+	case 19:
+		if err := s.readCertificateMap("verifier keyring", false, false, false); err != nil {
+			return err
+		}
+	case 20:
+		// A successful relinquish-certificate result has an empty payload.
+	case 21, 22:
+		if err := s.readDiscoveryResult(); err != nil {
+			return err
+		}
 	case 23:
 		value, err := s.readByte("authentication result")
 		if err != nil {
@@ -3128,6 +3636,18 @@ func walletWireReencodeRequestParameters(call byte, data []byte) ([]byte, error)
 			return nil, err
 		}
 		return walletserializer.SerializeGetPublicKeyArgs(value)
+	case 9:
+		value, err := walletserializer.DeserializeRevealCounterpartyKeyLinkageArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeRevealCounterpartyKeyLinkageArgs(value)
+	case 10:
+		value, err := walletserializer.DeserializeRevealSpecificKeyLinkageArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeRevealSpecificKeyLinkageArgs(value)
 	case 11:
 		value, err := walletserializer.DeserializeEncryptArgs(data)
 		if err != nil {
@@ -3164,6 +3684,42 @@ func walletWireReencodeRequestParameters(call byte, data []byte) ([]byte, error)
 			return nil, err
 		}
 		return walletserializer.SerializeVerifySignatureArgs(value)
+	case 17:
+		value, err := walletserializer.DeserializeAcquireCertificateArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeAcquireCertificateArgs(value)
+	case 18:
+		value, err := walletserializer.DeserializeListCertificatesArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeListCertificatesArgs(value)
+	case 19:
+		value, err := walletserializer.DeserializeProveCertificateArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeProveCertificateArgs(value)
+	case 20:
+		value, err := walletserializer.DeserializeRelinquishCertificateArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeRelinquishCertificateArgs(value)
+	case 21:
+		value, err := walletserializer.DeserializeDiscoverByIdentityKeyArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeDiscoverByIdentityKeyArgs(value)
+	case 22:
+		value, err := walletserializer.DeserializeDiscoverByAttributesArgs(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeDiscoverByAttributesArgs(value)
 	case 23, 24, 25, 27, 28:
 		if len(data) != 0 {
 			return nil, errors.New("no-argument call has parameters")
@@ -3230,6 +3786,18 @@ func walletWireReencodeResultPayload(call byte, data []byte) ([]byte, error) {
 			return nil, err
 		}
 		return walletserializer.SerializeGetPublicKeyResult(value)
+	case 9:
+		value, err := walletserializer.DeserializeRevealCounterpartyKeyLinkageResult(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeRevealCounterpartyKeyLinkageResult(value)
+	case 10:
+		value, err := walletserializer.DeserializeRevealSpecificKeyLinkageResult(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeRevealSpecificKeyLinkageResult(value)
 	case 11:
 		value, err := walletserializer.DeserializeEncryptResult(data)
 		if err != nil {
@@ -3266,6 +3834,39 @@ func walletWireReencodeResultPayload(call byte, data []byte) ([]byte, error) {
 			return nil, err
 		}
 		return walletserializer.SerializeVerifySignatureResult(value)
+	case 17:
+		value, err := walletserializer.DeserializeCertificate(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeCertificate(value)
+	case 18:
+		value, err := walletserializer.DeserializeListCertificatesResult(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeListCertificatesResult(value)
+	case 19:
+		// The pinned writer ranges over this map without sorting. The strict
+		// preflight establishes canonical order, and the pinned reader validates
+		// the typed shape. Preserve those canonical bytes instead of returning
+		// nondeterministic map iteration output.
+		if _, err := walletserializer.DeserializeProveCertificateResult(data); err != nil {
+			return nil, err
+		}
+		return append([]byte(nil), data...), nil
+	case 20:
+		value, err := walletserializer.DeserializeRelinquishCertificateResult(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeRelinquishCertificateResult(value)
+	case 21, 22:
+		value, err := walletserializer.DeserializeDiscoverCertificatesResult(data)
+		if err != nil {
+			return nil, err
+		}
+		return walletserializer.SerializeDiscoverCertificatesResult(value)
 	case 23:
 		value, err := walletserializer.DeserializeIsAuthenticatedResult(data)
 		if err != nil {

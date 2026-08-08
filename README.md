@@ -175,6 +175,7 @@ print(script.isPayToPublicKeyHash)
 - Parses BRC-74 BUMP proofs.
 - Parses BRC-62, BRC-95, and BRC-96 BEEF envelopes.
 - Verifies BRC-67 SPV proofs with an injected chain tracker.
+- Parses and hashes canonical 80-byte block headers.
 
 ### Script
 
@@ -226,10 +227,11 @@ print(script.isPayToPublicKeyHash)
 | `BSVScript` | Supplies Script data, BIP-276, opcodes, ASM, numbers, and templates. |
 | `BSVTransaction` | Supplies transactions, inscriptions, fees, signing, BUMP, and BEEF. |
 | `BSVInterpreter` | Runs Bitcoin Script with explicit limits. |
-| `BSVSPV` | Verifies BRC-67 SPV proofs. |
+| `BSVSPV` | Parses block headers and verifies BRC-67 SPV proofs. |
 | `BSVNetwork` | Supplies ARC, chain tracking, and transaction broadcast services. |
+| `BSVOverlay` | Supplies bounded SHIP/SLAP overlay values and transport-neutral facilitator protocols. |
 | `BSVWallet` | Supplies offline BRC-100 cryptography and BRC-52 certificate values. |
-| `BSVAuth` | Supplies offline certificate workflows and future authentication sessions. |
+| `BSVAuth` | Supplies certificate workflows, BRC-103 peer sessions, and BRC-104 payloads. |
 
 ## BSVCompat
 

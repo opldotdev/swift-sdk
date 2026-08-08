@@ -8,6 +8,8 @@
 - Explicitly excluded: dirty/conflicted `/Users/satchmo/code/go-sdk` at `90f6988`.
 - Inventory: 91 Go packages total; 55 non-example packages, including three test-support packages. The other 36 are executable documentation examples, not reusable API.
 - The Go module directly requires `github.com/pkg/errors`, `golang.org/x/crypto`, `golang.org/x/net`, `golang.org/x/sync`, and `github.com/stretchr/testify`. Some production files unfortunately import `testing`/`testify` because mocks live outside `_test.go`.
+- Confirmed upstream defects are kept in the separate
+  [Go SDK v1.3.3 defect report](GoSDK-v1.3.3-Defects.md).
 
 “Public” below means Go-exported. Some exported test helpers are called out separately and should not become production Swift API.
 
@@ -99,6 +101,10 @@ Purpose: 80-byte block header representation.
 Public: `HeaderSize`; `Header`; `NewHeaderFromBytes/Hex`; `Bytes`, `Hex`, `Hash`, `String`.
 
 Dependency: `chainhash`.
+
+Status: accepted. `BlockHeader` preserves the exact 80-byte wire fields and
+uses a distinct `BlockHash` value for block identifiers. A persistent pinned-Go
+differential checks parsing, serialization, field byte order, and double-SHA-256.
 
 ### Cryptographic primitives
 
@@ -303,6 +309,10 @@ Critical semantics:
 - `SIGHASH_NONE/SINGLE` sequence clearing, `ANYONECANPAY`, ForkID source amount/script inclusion, and the `uint64.max` placeholder outputs must match exactly.
 - BEEF v1 (BRC-64), v2 (BRC-96), Atomic BEEF (BRC-95), txid-only entries, BUMP sharing, and computed leaves require graph-preservation tests.
 - Raw transaction, EF, BEEF and Atomic BEEF parsers need explicit trailing-data and allocation-limit decisions; do not inherit unsafe Go reads.
+- Transaction JSON uses the pinned compact field order. Swift requires all
+  redundant fields to match the raw `hex` transaction, rejects unsafe JSON
+  integers and noncanonical text, and follows COMP-049 instead of Go's lossy
+  unmarshal behavior.
 
 #### `transaction/fee_model` → `BSVTransaction`
 
@@ -342,6 +352,14 @@ Public:
 Public models: `Client`, `Header`, `MerkleRootInfo`, `RequiredAuth`, `State`, `Webhook`, `WebhookRequest`.
 
 Client operations: block by height, current height, chain tip/state, paged merkle roots, webhook get/register/unregister, root validation.
+
+Swift status: `BlockHeadersServiceClient` provides the read-only chain-tracker
+surface: best-chain block lookup, state/tip/current height, root validation,
+and cursor-preserving bounded Merkle-root pages. It validates HTTPS endpoint
+configuration, response/header hashes, canonical hashes, numeric fields, and
+bounded response bodies. It intentionally defers webhook mutation because it
+needs a separately reviewed explicit no-retry surface. See GO-010 for the Go
+client's configured-transport and unbounded-body defect.
 
 #### `transaction/broadcaster` → `BSVNetwork`
 
@@ -425,7 +443,8 @@ Edges: chainhash, EC, transaction, util, wallet. This codec is a prime different
 
 Swift checkpoint: strict bounded request/result frames and typed payload codecs
 are accepted for action calls 1 through 7, key calls 8 and 11 through 16, and
-queries 23 through 28. Canonical CompactSize, exact discriminators and fixed
+queries 23 through 28. Certificate and linkage calls 9, 10, and 17 through 22
+are also accepted. Canonical CompactSize, exact discriminators and fixed
 results, checked UInt32 conversion, complete error frames, and redacted bounded
 remote errors follow COMP-045 and COMP-046. Go's absent `forSelf` value is
 accepted and normalized to the required Swift value `false`; canonical Swift
@@ -434,6 +453,18 @@ and a payload-bounded writer. They reject nil/empty collisions and the three
 list-action script sentinels that the pinned Go writer emits but its reader
 cannot consume. They add no wallet execution, transport, storage, or permission
 policy.
+
+Certificate wire codecs follow COMP-048. They use the existing strict BRC-52
+binary codec, display-order revocation transaction IDs, low-S DER, bounded
+UTF-8-byte-sorted maps, and exact keyring presence. `nil` keyring emits `00`;
+a nonempty keyring emits `01` and its map. A present empty keyring is rejected.
+The Swift codec supports bounded multi-certificate discovery through the
+intended nested grammar. Live-Go parity uses zero or one item, and the safe Go
+adapter rejects multiple items before the pinned identity-certificate reader
+can fail on its internal end-of-input check. The oracle preserves a strict
+canonical prove-result map after pinned typed parsing because the pinned writer
+ranges over that map without sorting. The separate Go maintainer report records
+[the multi-certificate decoder defect](GoSDK-v1.3.3-Defects.md#go-001-discovery-results-cannot-contain-more-than-one-identity-certificate).
 
 #### `wallet/substrates` → `BSVWallet`, concrete HTTP in `BSVNetwork` if factored
 
@@ -524,38 +555,36 @@ Edges: all auth subpackages, EC, script, P2PKH, wallet; stdlib HTTP.
 
 ### Overlay and high-level services
 
-These packages need named Swift modules when their public APIs are implemented.
-They do not map to an empty general services module.
+The transport-neutral overlay core is implemented in `BSVOverlay`. HTTP
+facilitators, resolver policy, admin tokens, and persistence remain separate
+named packets; the module does not map to an empty general services module.
 
-#### `overlay`
+#### `overlay` → `BSVOverlay`
 
-Public protocol models: networks, protocol names/IDs for SHIP/SLAP, `TaggedBEEF`, `Steak`, admittance instructions, applied transaction, topic data, metadata. Edges: chainhash, transaction.
+Public protocol models: networks, protocol names/IDs for SHIP/SLAP, `TaggedBEEF`, `Steak`, admittance instructions, applied transaction, typed topic data, metadata, bounded topic/service/host values. Edges: Core, Transaction.
 
 #### `overlay/admin-token`
 
 Public: `OverlayAdminToken`, lock/unlock; `OverlayAdminTokenData`, decode. Edges: overlay, script, PushDrop, wallet.
 
-#### `overlay/lookup`
+#### `overlay/lookup` → `BSVOverlay` core
 
 Public:
 
 - `Facilitator.Lookup`.
-- HTTPS facilitator.
-- `LookupResolver`: query and competent-host discovery.
-- `LookupQuestion`, `LookupAnswer`, `LookupFormula`, `OutputListItem`, `AnswerType`.
-- Main/test tracker defaults and 30-second max wait.
+- Transport-neutral `LookupFacilitator`.
+- Bounded `LookupQuestion`, `LookupAnswer`, and `OutputListItem` values.
+- HTTP facilitation, resolver discovery, formulas, and tracker defaults remain separate.
 
 Edges: overlay, admin token, transaction, util; HTTP.
 
-#### `overlay/topic`
+#### `overlay/topic` → `BSVOverlay` core
 
 Public:
 
-- Overlay `Broadcaster` implementing transaction broadcasting; host discovery.
-- `BroadcasterConfig`.
-- `Facilitator.Send`; HTTPS implementation.
-- `AckFrom`, `Response`, `RequireAck`.
-- 30-second query timeout.
+- Transport-neutral `TopicFacilitator`.
+- `AckFrom` and `RequireAck` values.
+- Broadcaster execution, host discovery, and HTTP implementation remain separate.
 
 Edges: overlay, admin token, lookup, transaction, util; HTTP.
 
@@ -813,7 +842,7 @@ License warning: these live under the Open BSV-licensed upstream. Use the Go ora
 10. `BSVNetwork`: concrete chain trackers, headers client, ARC/TAAL/WOC broadcasters, HTTP seam, Linux networking tests.
 11. `BSVWallet`: BRC-100 models/protocols, key deriver/cache, ProtoWallet, wallet-backed PushDrop, serializers, wire/JSON substrates.
 12. `BSVMessage`: BRC-77 and BRC-78 portable messages.
-13. `BSVAuth`: certificates, nonce/certificate utilities, peer/session state, BRC-104 payloads, HTTP/WebSocket/auth-fetch.
+13. `BSVAuth`: certificates, strict BRC-103 peer/session state, and bounded BRC-104 payloads. HTTP, WebSocket, auth-fetch, and certificate exchange remain future work.
 14. Future named modules: overlay/admin/lookup/topic, identity, registry, KV store, and UHRP storage.
 15. Hardening: differential oracle for every codec, explicit Go-error-to-Swift-error tables, malformed/truncation fuzzing, resource ceilings, concurrency/Sendable review, Linux live transport tests.
 

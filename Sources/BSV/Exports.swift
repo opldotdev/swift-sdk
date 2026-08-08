@@ -5,6 +5,7 @@
 @_exported import BSVKeys
 @_exported import BSVMessage
 @_exported import BSVNetwork
+@_exported import BSVOverlay
 @_exported import BSVSPV
 @_exported import BSVScript
 @_exported import BSVTransaction

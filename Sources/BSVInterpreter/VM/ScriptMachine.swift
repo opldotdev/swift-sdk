@@ -15,8 +15,9 @@ package struct ScriptMachine {
     private let configuration: ScriptExecutionConfiguration
     private let consensusLimits: ScriptConsensusLimits
     private let context: ScriptExecutionContext?
-    private(set) var mainStack = ScriptStack()
-    private var altStack = ScriptStack()
+    private(set) var mainStack: ScriptStack
+    private var altStack: ScriptStack
+    private let debugState: ScriptDebugState?
     private var conditions: [ConditionalState] = []
     private var elseSeen: [Bool] = []
     private(set) var operationCount = 0
@@ -25,11 +26,16 @@ package struct ScriptMachine {
 
     init(
         configuration: ScriptExecutionConfiguration,
-        context: ScriptExecutionContext?
+        context: ScriptExecutionContext?,
+        debugSession: ScriptDebugSession? = nil
     ) {
         self.configuration = configuration
         self.context = context
         consensusLimits = .forEra(configuration.era)
+        let debugState = debugSession.map(ScriptDebugState.init(session:))
+        self.debugState = debugState
+        mainStack = ScriptStack(debugState: debugState, debugStack: .main)
+        altStack = ScriptStack(debugState: debugState, debugStack: .alternate)
     }
 
     mutating func execute(_ script: Script, phase: ScriptPhase) throws {
@@ -51,6 +57,18 @@ package struct ScriptMachine {
                 maximumResourcePushByteCount: configuration.resourceLimits.maximumPushDataByteCount
             )
             let opcode = instruction.opcode
+            try debugState?.beginStep(
+                phase: phase,
+                opcode: opcode,
+                offset: offset,
+                operationCount: operationCount
+            )
+            var didCompleteStep = false
+            defer {
+                if didCompleteStep {
+                    debugState?.completeStep(operationCount: operationCount)
+                }
+            }
             if opcode.rawValue > Opcode.sixteen.rawValue {
                 try countOperation()
             }
@@ -71,9 +89,13 @@ package struct ScriptMachine {
                     mayEvaluateCondition: !returningWithinConditional
                 )
                 try enforceStackBudgets()
+                didCompleteStep = true
                 continue
             }
-            guard executing else { continue }
+            guard executing else {
+                didCompleteStep = true
+                continue
+            }
 
             if let data = instruction.data {
                 if configuration.flags.contains(.minimalData),
@@ -82,6 +104,7 @@ package struct ScriptMachine {
                 }
                 mainStack.push(data)
                 try enforceStackBudgets()
+                didCompleteStep = true
                 continue
             }
 
@@ -94,6 +117,7 @@ package struct ScriptMachine {
                     mainStack.push([UInt8(integer)])
                 }
                 try enforceStackBudgets()
+                didCompleteStep = true
                 continue
             }
 
@@ -504,6 +528,7 @@ package struct ScriptMachine {
             }
 
             try enforceStackBudgets()
+            didCompleteStep = true
             if returnedAtTopLevel { break }
         }
 
@@ -519,6 +544,18 @@ package struct ScriptMachine {
         mainStack.removeAll()
         for item in items { mainStack.push(item) }
         try enforceStackBudgets()
+    }
+
+    mutating func debugEvent(_ kind: ScriptDebugEventKind, failure: ScriptDebugFailure? = nil) throws {
+        try debugState?.execution(kind, failure: failure)
+    }
+
+    mutating func debugEventBestEffort(_ kind: ScriptDebugEventKind, failure: ScriptDebugFailure? = nil) {
+        debugState?.executionBestEffort(kind, failure: failure)
+    }
+
+    mutating func debugTransition(to phase: ScriptPhase) throws {
+        try debugState?.transition(to: phase, operationCount: operationCount)
     }
 
     private var isExecuting: Bool {

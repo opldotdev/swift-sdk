@@ -6,7 +6,8 @@ public enum ScriptInterpreter {
         unlockingScript: Script,
         lockingScript: Script,
         configuration: ScriptExecutionConfiguration,
-        context: ScriptExecutionContext? = nil
+        context: ScriptExecutionContext? = nil,
+        debugger: ScriptDebugSession? = nil
     ) throws -> ScriptExecutionResult {
         if let context {
             guard context.inputIndex >= 0,
@@ -38,55 +39,78 @@ public enum ScriptInterpreter {
             }
         }
 
-        var machine = ScriptMachine(configuration: configuration, context: context)
-        try machine.execute(unlockingScript, phase: .unlocking)
-        let unlockingStack = machine.mainStack.items
-        try machine.execute(lockingScript, phase: .locking)
+        var machine = ScriptMachine(
+            configuration: configuration,
+            context: context,
+            debugSession: debugger
+        )
+        do {
+            try machine.debugEvent(.beforeExecution)
+            try machine.execute(unlockingScript, phase: .unlocking)
+            let unlockingStack = machine.mainStack.items
+            try machine.debugEvent(.beforeScriptChange)
+            try machine.debugTransition(to: .locking)
+            try machine.execute(lockingScript, phase: .locking)
 
-        if evaluatesPayToScriptHash {
-            guard let lockingResult = machine.mainStack.items.last else {
+            if evaluatesPayToScriptHash {
+                guard let lockingResult = machine.mainStack.items.last else {
+                    throw ScriptExecutionError.consensus(.emptyFinalStack)
+                }
+                guard scriptBoolean(lockingResult) else {
+                    throw ScriptExecutionError.consensus(.evaluatedFalse)
+                }
+                guard let redeemBytes = unlockingStack.last else {
+                    throw ScriptExecutionError.consensus(.emptyFinalStack)
+                }
+                let redeemScript: Script
+                do {
+                    redeemScript = try Script(
+                        bytes: redeemBytes,
+                        maximumByteCount: configuration.resourceLimits.maximumScriptByteCount
+                    )
+                } catch {
+                    throw ScriptExecutionError.resourceBudgetExceeded(.scriptByteCount(
+                        actual: redeemBytes.count,
+                        maximum: configuration.resourceLimits.maximumScriptByteCount
+                    ))
+                }
+                try machine.replaceMainStack(with: Array(unlockingStack.dropLast()))
+                try machine.debugEvent(.beforeScriptChange)
+                try machine.debugTransition(to: .redeem)
+                try machine.execute(redeemScript, phase: .redeem)
+            }
+
+            try machine.debugEvent(.afterExecution)
+            let finalStack = machine.mainStack.items
+            guard let top = finalStack.last else {
                 throw ScriptExecutionError.consensus(.emptyFinalStack)
             }
-            guard scriptBoolean(lockingResult) else {
-                throw ScriptExecutionError.consensus(.evaluatedFalse)
-            }
-            guard let redeemBytes = unlockingStack.last else {
-                throw ScriptExecutionError.consensus(.emptyFinalStack)
-            }
-            let redeemScript: Script
-            do {
-                redeemScript = try Script(
-                    bytes: redeemBytes,
-                    maximumByteCount: configuration.resourceLimits.maximumScriptByteCount
-                )
-            } catch {
-                throw ScriptExecutionError.resourceBudgetExceeded(.scriptByteCount(
-                    actual: redeemBytes.count,
-                    maximum: configuration.resourceLimits.maximumScriptByteCount
+            if configuration.flags.contains(.cleanStack), finalStack.count != 1 {
+                throw ScriptExecutionError.consensus(.cleanStackViolation(
+                    actualItemCount: finalStack.count
                 ))
             }
-            try machine.replaceMainStack(with: Array(unlockingStack.dropLast()))
-            try machine.execute(redeemScript, phase: .redeem)
-        }
+            guard scriptBoolean(top) else {
+                throw ScriptExecutionError.consensus(.evaluatedFalse)
+            }
 
-        let finalStack = machine.mainStack.items
-        guard let top = finalStack.last else {
-            throw ScriptExecutionError.consensus(.emptyFinalStack)
+            let result = ScriptExecutionResult(
+                stack: finalStack,
+                operationCount: machine.operationCount,
+                didEarlyReturn: machine.didEarlyReturn
+            )
+            try machine.debugEvent(.success)
+            return result
+        } catch let error as ScriptDebugError {
+            machine.debugEventBestEffort(.failure, failure: .cancelled)
+            throw error
+        } catch let error as ScriptExecutionError {
+            machine.debugEventBestEffort(.failure, failure: .execution(error))
+            throw error
+        } catch {
+            machine.debugEventBestEffort(.failure)
+            throw error
         }
-        if configuration.flags.contains(.cleanStack), finalStack.count != 1 {
-            throw ScriptExecutionError.consensus(.cleanStackViolation(
-                actualItemCount: finalStack.count
-            ))
-        }
-        guard scriptBoolean(top) else {
-            throw ScriptExecutionError.consensus(.evaluatedFalse)
-        }
-
-        return ScriptExecutionResult(
-            stack: finalStack,
-            operationCount: machine.operationCount,
-            didEarlyReturn: machine.didEarlyReturn
-        )
     }
 
     private static func isPushOnly(
