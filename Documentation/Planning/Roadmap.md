@@ -95,7 +95,9 @@ differentials, and Fable review.
 
 - Merkle paths and BUMP. (Accepted)
 - BEEF and Atomic BEEF. (Accepted)
-- SPV validation using transaction-owned chain-tracker protocols.
+- Transaction-owned chain-tracker protocol and BUMP/BEEF root verification.
+  (Accepted)
+- Full BRC-67 script, fee, and lock-condition validation in `BSVSPV`.
 - Transaction graph operations and proof propagation.
 
 Merkle/BUMP/BEEF parsing and serialization may run in parallel with Phase 5.

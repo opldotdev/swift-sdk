@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/binary"
@@ -29,6 +30,29 @@ import (
 	p2pkhpkg "github.com/bsv-blockchain/go-sdk/transaction/template/p2pkh"
 	"github.com/bsv-blockchain/go-sdk/util"
 )
+
+type oracleChainTracker struct {
+	validRoots map[uint32]chainhash.Hash
+}
+
+func (o oracleChainTracker) IsValidRootForHeight(
+	_ context.Context,
+	root *chainhash.Hash,
+	height uint32,
+) (bool, error) {
+	expected, ok := o.validRoots[height]
+	return ok && root != nil && expected.IsEqual(root), nil
+}
+
+func (o oracleChainTracker) CurrentHeight(_ context.Context) (uint32, error) {
+	var current uint32
+	for height := range o.validRoots {
+		if height > current {
+			current = height
+		}
+	}
+	return current, nil
+}
 
 func execute(req request, meta metadata) (result any, err error) {
 	defer func() {
@@ -431,6 +455,47 @@ func execute(req request, meta metadata) (result any, err error) {
 			return nil, err
 		}
 		return map[string]bool{"valid": beef.IsValid(args.AllowTransactionIDOnly)}, nil
+	case "transaction.beef.verify":
+		var args struct {
+			AllowTransactionIDOnly bool   `json:"allowTransactionIDOnly"`
+			Bytes                  string `json:"bytes"`
+			ValidRoots             []struct {
+				BlockHeight string `json:"blockHeight"`
+				Root        string `json:"root"`
+			} `json:"validRoots"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		beef, err := transaction.NewBeefFromBytes(data)
+		if err != nil {
+			return nil, err
+		}
+		roots := make(map[uint32]chainhash.Hash, len(args.ValidRoots))
+		for _, item := range args.ValidRoots {
+			height, err := decimalUint(item.BlockHeight, 32)
+			if err != nil {
+				return nil, err
+			}
+			root, err := chainhash.NewHashFromHex(item.Root)
+			if err != nil {
+				return nil, err
+			}
+			roots[uint32(height)] = *root
+		}
+		valid, err := beef.Verify(
+			context.Background(),
+			oracleChainTracker{validRoots: roots},
+			args.AllowTransactionIDOnly,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]bool{"valid": valid}, nil
 	case "transaction.fee":
 		var args struct {
 			Bytes               string    `json:"bytes"`

@@ -137,6 +137,8 @@ print(account.neutered.serialized)
   duplicate branches, compound paths, and conflict-checked proof merging
 - Bounded BRC-62/BRC-96 BEEF v1/v2 and BRC-95 Atomic BEEF codecs with ordered
   dependency validation and explicit transaction-ID-only trust policy
+- Async, transport-independent chain tracking with BUMP and BEEF root
+  verification through the `BSVSPV` proof façade
 - Redacted default descriptions for mnemonics and extended private keys, with
   explicitly named properties for intentional secret export
 - Swift 6 value semantics, structured errors, and `Sendable` public values

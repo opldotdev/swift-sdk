@@ -80,21 +80,32 @@ extension BEEF {
         )
     }
 
-    /// Computes and cross-checks every marked BUMP root by block height.
+    /// Computes every level-zero leaf root and cross-checks them by block height.
     public func merkleRootsByBlockHeight() throws -> [UInt32: Hash256] {
         var roots: [UInt32: Hash256] = [:]
         for (index, path) in merklePaths.enumerated() {
-            for transactionID in Self.markedTransactionIDs(in: path) {
+            var pathRoot: Hash256?
+            for element in path.levels[0] {
+                guard let hash = element.hash else { continue }
+                let transactionID = TransactionID(
+                    exactDigestBytesGuaranteed: hash.bytes
+                )
                 let root: Hash256
                 do {
                     root = try path.root(for: transactionID)
                 } catch let error as MerklePathError {
                     throw BEEFError.invalidMerklePath(index: index, cause: error)
                 }
-                if let existing = roots[path.blockHeight], existing != root {
+                if let existing = pathRoot, existing != root {
                     throw BEEFError.conflictingMerkleRoot(blockHeight: path.blockHeight)
                 }
-                roots[path.blockHeight] = root
+                pathRoot = root
+            }
+            if let pathRoot {
+                if let existing = roots[path.blockHeight], existing != pathRoot {
+                    throw BEEFError.conflictingMerkleRoot(blockHeight: path.blockHeight)
+                }
+                roots[path.blockHeight] = pathRoot
             }
         }
         return roots
