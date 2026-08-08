@@ -89,7 +89,10 @@ jobs:
           GOTOOLCHAIN: go1.25.0
           GOPROXY: "off"
           GOSUMDB: "off"
-        run: Tools/Conformance/GoOracle/test-external.sh
+        run: |
+          Tools/Conformance/GoOracle/test-external.sh
+          oracle_response=$(printf '%s\n' '{"schema":"bsv-conformance/1","id":"ci-smoke","op":"bytes.reverse","args":{"hex":"000102"}}' | Tools/Conformance/GoOracle/run.sh serve)
+          test "$oracle_response" = '{"schema":"bsv-conformance/1","id":"ci-smoke","ok":true,"result":{"hex":"020100"}}'
       - name: Run required Swift-to-Go differentials offline
         working-directory: swift-sdk
         env:

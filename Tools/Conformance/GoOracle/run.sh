@@ -65,7 +65,12 @@ else
 fi
 cd "$temporary_dir/oracle"
 "$go_command" build -o "$temporary_dir/go-oracle" .
-"$temporary_dir/go-oracle" "$1" <&0 &
+# POSIX shells can replace standard input with /dev/null for an asynchronous
+# command. Preserve the caller's pipe on a separate descriptor before the
+# command enters the background.
+exec 3<&0
+"$temporary_dir/go-oracle" "$1" <&3 &
 child_pid=$!
+exec 3<&-
 wait "$child_pid"
 child_pid=
