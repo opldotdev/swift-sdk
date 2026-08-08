@@ -3,7 +3,8 @@
 Status: P0 complete; foundational P1/P2 crypto and BIP-32/BIP-39 plus legacy
 P3 key-format packets accepted after independent and Fable review. BigNum,
 initial Script, bounded legacy transactions, BRC-74 Merkle paths, and BEEF
-v1/v2 plus Atomic BEEF foundations are accepted.
+v1/v2 plus Atomic BEEF foundations are accepted. The first network, wallet,
+and portable-message checkpoints in Phases 7, 8, and 9 are also accepted.
 
 Each milestone ends with passing conformance tests, an updated compatibility
 matrix, and an advisor review at architectural or security-sensitive boundaries.
@@ -124,25 +125,52 @@ caller-owned rather than hard-wired to a service.
 
 ## Phase 7: Network services
 
-- Broadcasters, chain trackers, HTTP utilities, retry/error mapping, and
-  configurable endpoints.
-- Cross-platform networking and mock transports.
+Accepted checkpoint: `BSVNetwork` provides a bounded URLSession transport on
+Apple platforms and Linux, typed network errors, and an unauthenticated
+WhatsOnChain chain tracker for mainnet and testnet. Chain lookups use bounded
+transient retries. The WhatsOnChain broadcaster submits each transaction once
+and accepts the result only when the provider's canonical transaction ID
+matches the locally computed ID. A cancellation or transport failure after the
+POST begins can still leave delivery uncertain; callers must reconcile before
+submitting again.
+
+- Bounded cross-platform HTTP transport and mockable package transport seam.
+  (Accepted)
+- Unauthenticated WhatsOnChain height and Merkle-root tracking. (Accepted)
+- One-shot WhatsOnChain broadcasting with local transaction-ID verification.
+  (Accepted)
+- Additional broadcasters, authenticated service clients, and configurable
+  provider endpoints. (Future)
 - Linux WebSocket viability spike and fallback ADR if FoundationNetworking is
-  insufficient.
+  insufficient. (Future)
 
 ## Phase 8: Wallets
 
-- BRC-100 protocol types and capabilities.
-- Proto wallet and key derivation/signing flows.
-- Request/response serializers and substrates.
-- Wallet encryption and certificate flows.
+Accepted checkpoint: `BSVWallet` provides the offline BRC-100 cryptographic
+kernel: validated identifiers and request/result values, stateless BRC-42 key
+derivation, bounded JSON, and `ProtoWallet` public-key, encryption, HMAC, and
+signature operations. The checkpoint has no persistence, network substrate, or
+interactive permission policy.
+
+- BRC-100 crypto protocol types and capability protocols. (Accepted)
+- ProtoWallet key derivation, public-key, encryption, HMAC, and signing flows.
+  (Accepted)
+- Bounded Go-compatible request/result JSON. (Accepted)
+- Persistent wallet state, request/response substrates, and permission policy.
+  (Future)
+- Wallet certificate flows. (Future)
 
 ## Phase 9: Messages and authentication
 
-- BRC-77 message encryption/signing.
-- BRC-103 peer authentication.
-- BRC-104 authenticated HTTP and WebSocket transports.
-- Session, certificate, nonce, and replay protections.
+Accepted checkpoint: `BSVAuth` provides canonical BRC-77 portable signed
+messages and BRC-78 portable encrypted messages, including recipient-specific
+BRC-42 derivation and the BRC-77 anyone mode.
+
+- BRC-77 portable signed messages. (Accepted)
+- BRC-78 portable encrypted messages. (Accepted)
+- BRC-103 peer authentication. (Future)
+- BRC-104 authenticated HTTP and WebSocket transports. (Future)
+- Session, certificate, nonce, and replay protections. (Future)
 
 ## Phase 10: Overlay and application services
 

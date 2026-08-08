@@ -23,8 +23,8 @@ while embracing Swift value semantics, explicit resource bounds, and
 structured errors.
 
 The package can be imported through the `BSV` umbrella library or through its
-focused `BSVCore`, `BSVCrypto`, `BSVKeys`, `BSVScript`, and `BSVTransaction`
-libraries.
+focused libraries, including `BSVCore`, `BSVCrypto`, `BSVKeys`, `BSVScript`,
+`BSVTransaction`, `BSVNetwork`, `BSVWallet`, and `BSVAuth`.
 
 ## Installation
 
@@ -151,11 +151,18 @@ print(account.neutered.serialized)
   resolution, checked fees, and Script execution through the `BSVSPV` façade
 - Immutable BEEF graph merge, proof propagation, BRC-96 txid-only projection,
   and known-ID trimming with stable parent-before-child ordering
+- Bounded cross-platform HTTP, unauthenticated WhatsOnChain chain tracking,
+  and one-shot transaction broadcasting with local transaction-ID verification
+- Offline BRC-100 wallet key derivation, encryption, HMAC, signatures, public
+  keys, and bounded Go-compatible JSON through `BSVWallet`
+- Canonical BRC-77 signed and BRC-78 encrypted portable messages through
+  `BSVAuth`
 - Redacted default descriptions and reflection for private keys, symmetric keys,
   mnemonics, extended private keys, Wallet Import Format, HMAC-DRBG state, and
   key shares, with explicitly named properties for intentional secret export
 - Swift 6 value semantics, structured errors, and `Sendable` public values
-- Unified `BSV` import plus focused core, cryptography, and key libraries
+- Unified `BSV` import plus focused libraries for lower-level or size-conscious
+  integrations
 
 ## Documentation
 

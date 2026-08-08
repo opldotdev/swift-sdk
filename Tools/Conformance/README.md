@@ -106,6 +106,19 @@ the shared accepted policy and record malformed rejection only where both agree.
 Go split output is fresh random secret-bearing material and is never cached,
 printed, or committed.
 
+Portable-message operations call the pinned Go SDK's BRC-77 and BRC-78
+implementations with fresh process-local randomness; envelopes are returned only
+to the requesting differential test and are never written as fixtures. The
+adapter accepts lowercase even hexadecimal, exact private scalars, and canonical
+compressed SEC1 public keys. Message, plaintext, and envelope fields are bounded
+so their hexadecimal requests and responses remain below the 1 MiB line limit.
+Before invoking pinned Go, BRC-77 verification checks the complete version,
+sender key, exact `00`-or-compressed-recipient layout, key ID, and strict complete
+DER suffix. BRC-78 decryption requires the true 150-byte minimum and validates
+both embedded keys. These preflights keep the pinned BRC-77 unchecked slices and
+short BRC-78 heuristic behind stable typed errors; panic recovery remains only a
+final generic defense and does not echo recovered values or request material.
+
 | Operation | Args | Result |
 | --- | --- | --- |
 | `metadata` | `{}` | validated metadata object |
@@ -142,6 +155,10 @@ printed, or committed.
 | `ecies.bitcore.decrypt` | `{envelope,recipientPrivateKey}` | `{plaintext}` from pinned Go Bitcore ECIES |
 | `keyshares.split` | `{privateKey,threshold,shareCount}` | Fresh `{shares}` from pinned Go BRC-140 splitting; threshold and count are canonical decimal strings |
 | `keyshares.recover` | `{shares}` | `{privateKey}` as exact 32-byte lowercase hex from pinned Go BRC-140 recovery |
+| `portable.signed.sign` | `{message,senderPrivateKey,recipientPublicKey?}` | Fresh `{envelope}` from pinned Go BRC-77 signing; omitted or null recipient selects anyone |
+| `portable.signed.verify` | `{message,envelope,recipientPrivateKey?}` | `{valid}`; signature mismatch is success/false and structural or recipient failures are typed errors |
+| `portable.encrypted.encrypt` | `{plaintext,senderPrivateKey,recipientPublicKey}` | Fresh `{envelope}` from pinned Go BRC-78 encryption |
+| `portable.encrypted.decrypt` | `{envelope,recipientPrivateKey}` | `{plaintext}` after exact recipient enforcement and authenticated decryption |
 | `symmetric.encrypt` | `{key,plaintext,nonce}` | Deterministic `{envelope}` as `32-byte nonce || ciphertext || 16-byte tag` |
 | `symmetric.decrypt` | `{key,envelope}` | `{plaintext}` through pinned Go `SymmetricKey.Decrypt` |
 | `script.asm.decode` | `{text}` | `{bytes}` (Go SDK canonical ASM parser) |
@@ -170,7 +187,9 @@ Stable error categories are `invalidEncoding`, `invalidCharacter`,
 `invalidLength`, `truncated`, `trailingData`, `noncanonical`, `overflow`,
 `resourceLimit`, `checksum`, `version`, `key`, `signature`, `scalar`,
 `authentication`, `padding`, `numberTooLarge`, `nonminimal`, `divisionByZero`,
-`insufficientEntropy`, `invalidRequestedByteCount`, `requestTooLarge`,
+`insufficientEntropy`, `invalidRequestedByteCount`, `invalidHex`,
+`invalidPrivateKey`, `invalidPublicKey`, `invalidSignature`,
+`unsupportedVersion`, `recipientMismatch`, `authenticationFailed`, `requestTooLarge`,
 `reseedRequired`, `unsupportedOperation`, `oraclePanic`, `timeout`, `transport`,
 and `internal`.
 Typed errors take precedence. The one pinned message fallback is isolated and

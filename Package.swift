@@ -186,6 +186,21 @@ let package = Package(
             exclude: ["README.md"]
         ),
         .testTarget(
+            name: "BSVNetworkTests",
+            dependencies: ["BSVNetwork", "BSVTransaction", "BSVCore"],
+            exclude: ["README.md"]
+        ),
+        .testTarget(
+            name: "BSVWalletTests",
+            dependencies: ["BSVWallet", "BSVKeys", "BSVCrypto", "BSVCore"],
+            exclude: ["README.md"]
+        ),
+        .testTarget(
+            name: "BSVAuthTests",
+            dependencies: ["BSVAuth", "BSVKeys", "BSVCrypto", "BSVCore"],
+            exclude: ["README.md"]
+        ),
+        .testTarget(
             name: "BSVConformanceTests",
             dependencies: [
                 Target.Dependency.target(name: "BSV"),

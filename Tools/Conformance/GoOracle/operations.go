@@ -22,6 +22,7 @@ import (
 	base58 "github.com/bsv-blockchain/go-sdk/compat/base58"
 	bsmcompat "github.com/bsv-blockchain/go-sdk/compat/bsm"
 	eciescompat "github.com/bsv-blockchain/go-sdk/compat/ecies"
+	messagepkg "github.com/bsv-blockchain/go-sdk/message"
 	aesgcmprimitive "github.com/bsv-blockchain/go-sdk/primitives/aesgcm"
 	drbgprimitive "github.com/bsv-blockchain/go-sdk/primitives/drbg"
 	ecprimitive "github.com/bsv-blockchain/go-sdk/primitives/ec"
@@ -249,7 +250,7 @@ func execute(req request, meta metadata) (result any, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			result = nil
-			err = categorizedError{"oraclePanic", fmt.Sprintf("operation panicked: %v", recovered)}
+			err = categorizedError{"oraclePanic", "operation panicked"}
 		}
 	}()
 
@@ -853,6 +854,14 @@ func execute(req request, meta metadata) (result any, err error) {
 		return splitKeyShares(req.Args)
 	case "keyshares.recover":
 		return recoverKeyShares(req.Args)
+	case "portable.encrypted.decrypt":
+		return decryptPortableMessage(req.Args)
+	case "portable.encrypted.encrypt":
+		return encryptPortableMessage(req.Args)
+	case "portable.signed.sign":
+		return signPortableMessage(req.Args)
+	case "portable.signed.verify":
+		return verifyPortableMessage(req.Args)
 	case "scriptnum.encode":
 		return encodeScriptNumber(req.Args)
 	case "scriptnum.decode":
@@ -1548,6 +1557,275 @@ func (f fixedLengthUnlocker) Sign(*transaction.Transaction, uint32) (*scriptpkg.
 
 func (f fixedLengthUnlocker) EstimateLength(*transaction.Transaction, uint32) uint32 {
 	return uint32(f)
+}
+
+const portableContentMaximumByteCount = (maxLineBytes - 4096) / 2
+const portableVerificationFieldMaximumByteCount = (maxLineBytes - 4096) / 4
+
+var portableSignedVersion = []byte{0x42, 0x42, 0x33, 0x01}
+var portableEncryptedVersion = []byte{0x42, 0x42, 0x10, 0x33}
+
+func signPortableMessage(raw json.RawMessage) (any, error) {
+	var args struct {
+		Message            *string `json:"message"`
+		SenderPrivateKey   *string `json:"senderPrivateKey"`
+		RecipientPublicKey *string `json:"recipientPublicKey,omitempty"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.Message == nil || args.SenderPrivateKey == nil {
+		return nil, categorizedError{"invalidEncoding", "portable signing arguments must not be null"}
+	}
+	messageBytes, err := portableHex(*args.Message, portableContentMaximumByteCount)
+	if err != nil {
+		return nil, err
+	}
+	sender, err := portablePrivateKey(*args.SenderPrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	var recipient *ecprimitive.PublicKey
+	if args.RecipientPublicKey != nil {
+		recipient, err = portablePublicKey(*args.RecipientPublicKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+	envelope, err := messagepkg.Sign(messageBytes, sender, recipient)
+	if err != nil {
+		return nil, categorizedError{"internal", "pinned Go portable signing failed"}
+	}
+	if _, err := preflightPortableSigned(envelope); err != nil {
+		return nil, categorizedError{"internal", "pinned Go portable signing returned an invalid envelope"}
+	}
+	return map[string]string{"envelope": hex.EncodeToString(envelope)}, nil
+}
+
+func verifyPortableMessage(raw json.RawMessage) (any, error) {
+	var args struct {
+		Message             *string `json:"message"`
+		Envelope            *string `json:"envelope"`
+		RecipientPrivateKey *string `json:"recipientPrivateKey,omitempty"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.Message == nil || args.Envelope == nil {
+		return nil, categorizedError{"invalidEncoding", "portable verification arguments must not be null"}
+	}
+	messageBytes, err := portableHex(*args.Message, portableVerificationFieldMaximumByteCount)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := portableHex(*args.Envelope, portableVerificationFieldMaximumByteCount)
+	if err != nil {
+		return nil, err
+	}
+	requiredRecipient, err := preflightPortableSigned(envelope)
+	if err != nil {
+		return nil, err
+	}
+	var recipient *ecprimitive.PrivateKey
+	if args.RecipientPrivateKey != nil {
+		recipient, err = portablePrivateKey(*args.RecipientPrivateKey)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if requiredRecipient != nil {
+		if recipient == nil || !bytes.Equal(
+			requiredRecipient.Compressed(),
+			recipient.PubKey().Compressed(),
+		) {
+			return nil, categorizedError{"recipientMismatch", "portable signature recipient does not match"}
+		}
+	}
+	valid, err := messagepkg.Verify(messageBytes, envelope, recipient)
+	if err != nil {
+		return nil, categorizedError{"internal", "pinned Go portable verification failed"}
+	}
+	return map[string]bool{"valid": valid}, nil
+}
+
+func encryptPortableMessage(raw json.RawMessage) (any, error) {
+	var args struct {
+		Plaintext          *string `json:"plaintext"`
+		SenderPrivateKey   *string `json:"senderPrivateKey"`
+		RecipientPublicKey *string `json:"recipientPublicKey"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.Plaintext == nil || args.SenderPrivateKey == nil || args.RecipientPublicKey == nil {
+		return nil, categorizedError{"invalidEncoding", "portable encryption arguments must not be null"}
+	}
+	plaintext, err := portableHex(*args.Plaintext, portableContentMaximumByteCount)
+	if err != nil {
+		return nil, err
+	}
+	sender, err := portablePrivateKey(*args.SenderPrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	recipient, err := portablePublicKey(*args.RecipientPublicKey)
+	if err != nil {
+		return nil, err
+	}
+	envelope, err := messagepkg.Encrypt(plaintext, sender, recipient)
+	if err != nil {
+		return nil, categorizedError{"internal", "pinned Go portable encryption failed"}
+	}
+	if _, err := preflightPortableEncrypted(envelope); err != nil {
+		return nil, categorizedError{"internal", "pinned Go portable encryption returned an invalid envelope"}
+	}
+	return map[string]string{"envelope": hex.EncodeToString(envelope)}, nil
+}
+
+func decryptPortableMessage(raw json.RawMessage) (any, error) {
+	var args struct {
+		Envelope            *string `json:"envelope"`
+		RecipientPrivateKey *string `json:"recipientPrivateKey"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if args.Envelope == nil || args.RecipientPrivateKey == nil {
+		return nil, categorizedError{"invalidEncoding", "portable decryption arguments must not be null"}
+	}
+	envelope, err := portableHex(*args.Envelope, portableContentMaximumByteCount)
+	if err != nil {
+		return nil, err
+	}
+	requiredRecipient, err := preflightPortableEncrypted(envelope)
+	if err != nil {
+		return nil, err
+	}
+	recipient, err := portablePrivateKey(*args.RecipientPrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(requiredRecipient.Compressed(), recipient.PubKey().Compressed()) {
+		return nil, categorizedError{"recipientMismatch", "portable encryption recipient does not match"}
+	}
+	plaintext, err := messagepkg.Decrypt(envelope, recipient)
+	if err != nil {
+		return nil, categorizedError{"authenticationFailed", "portable message authentication failed"}
+	}
+	return map[string]string{"plaintext": hex.EncodeToString(plaintext)}, nil
+}
+
+func preflightPortableSigned(envelope []byte) (*ecprimitive.PublicKey, error) {
+	if len(envelope) < len(portableSignedVersion) {
+		return nil, categorizedError{"invalidLength", "portable signed envelope is too short"}
+	}
+	if !bytes.Equal(envelope[:len(portableSignedVersion)], portableSignedVersion) {
+		return nil, categorizedError{"unsupportedVersion", "portable signed version is unsupported"}
+	}
+	const anyoneMinimumByteCount = 4 + 33 + 1 + 32 + 8
+	if len(envelope) < anyoneMinimumByteCount {
+		return nil, categorizedError{"invalidLength", "portable signed envelope is too short"}
+	}
+	if _, err := portablePublicKeyBytes(envelope[4:37]); err != nil {
+		return nil, err
+	}
+	cursor := 37
+	var recipient *ecprimitive.PublicKey
+	if envelope[cursor] == 0 {
+		cursor++
+	} else {
+		const specificMinimumByteCount = 4 + 33 + 33 + 32 + 8
+		if len(envelope) < specificMinimumByteCount {
+			return nil, categorizedError{"invalidLength", "portable signed envelope is too short"}
+		}
+		var err error
+		recipient, err = portablePublicKeyBytes(envelope[cursor : cursor+33])
+		if err != nil {
+			return nil, err
+		}
+		cursor += 33
+	}
+	cursor += 32
+	signatureBytes := envelope[cursor:]
+	signature, err := ecprimitive.ParseDERSignature(signatureBytes)
+	if err != nil {
+		return nil, categorizedError{"invalidSignature", "portable signature is not canonical DER"}
+	}
+	canonicalDER, err := signature.ToDER()
+	if err != nil || !bytes.Equal(canonicalDER, signatureBytes) {
+		return nil, categorizedError{"invalidSignature", "portable signature is not canonical DER"}
+	}
+	return recipient, nil
+}
+
+func preflightPortableEncrypted(envelope []byte) (*ecprimitive.PublicKey, error) {
+	if len(envelope) < len(portableEncryptedVersion) {
+		return nil, categorizedError{"invalidLength", "portable encrypted envelope is too short"}
+	}
+	if !bytes.Equal(envelope[:len(portableEncryptedVersion)], portableEncryptedVersion) {
+		return nil, categorizedError{"unsupportedVersion", "portable encrypted version is unsupported"}
+	}
+	const minimumByteCount = 4 + 33 + 33 + 32 + 32 + 16
+	if len(envelope) < minimumByteCount {
+		return nil, categorizedError{"invalidLength", "portable encrypted envelope is too short"}
+	}
+	if _, err := portablePublicKeyBytes(envelope[4:37]); err != nil {
+		return nil, err
+	}
+	return portablePublicKeyBytes(envelope[37:70])
+}
+
+func portableHex(text string, maximumByteCount int) ([]byte, error) {
+	if len(text)%2 != 0 || text != strings.ToLower(text) {
+		return nil, categorizedError{"invalidHex", "portable byte fields require lowercase even hexadecimal"}
+	}
+	data, err := hex.DecodeString(text)
+	if err != nil {
+		return nil, categorizedError{"invalidHex", "portable byte fields require lowercase even hexadecimal"}
+	}
+	if len(data) > maximumByteCount {
+		return nil, categorizedError{"resourceLimit", "portable byte field exceeds protocol resource limit"}
+	}
+	return data, nil
+}
+
+func portablePrivateKey(text string) (*ecprimitive.PrivateKey, error) {
+	data, err := portableHex(text, ecprimitive.PrivateKeyBytesLen)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) != ecprimitive.PrivateKeyBytesLen {
+		return nil, categorizedError{"invalidLength", "portable private key must be exactly 32 bytes"}
+	}
+	scalar := new(big.Int).SetBytes(data)
+	if scalar.Sign() <= 0 || scalar.Cmp(ecprimitive.S256().N) >= 0 {
+		return nil, categorizedError{"invalidPrivateKey", "portable private key is invalid"}
+	}
+	privateKey, _ := ecprimitive.PrivateKeyFromBytes(data)
+	return privateKey, nil
+}
+
+func portablePublicKey(text string) (*ecprimitive.PublicKey, error) {
+	data, err := portableHex(text, ecprimitive.PubKeyBytesLenCompressed)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) != ecprimitive.PubKeyBytesLenCompressed {
+		return nil, categorizedError{"invalidLength", "portable public key must use compressed SEC1"}
+	}
+	return portablePublicKeyBytes(data)
+}
+
+func portablePublicKeyBytes(data []byte) (*ecprimitive.PublicKey, error) {
+	if len(data) != ecprimitive.PubKeyBytesLenCompressed ||
+		(data[0] != 0x02 && data[0] != 0x03) {
+		return nil, categorizedError{"invalidPublicKey", "portable public key is invalid"}
+	}
+	publicKey, err := ecprimitive.ParsePubKey(data)
+	if err != nil || publicKey == nil || !publicKey.Validate() {
+		return nil, categorizedError{"invalidPublicKey", "portable public key is invalid"}
+	}
+	return publicKey, nil
 }
 
 func generateDRBG(raw json.RawMessage) (any, error) {

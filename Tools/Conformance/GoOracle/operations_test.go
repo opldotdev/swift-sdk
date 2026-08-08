@@ -202,6 +202,7 @@ func TestCompleteOperationRegistry(t *testing.T) {
 		"base64.decode", "base64.encode", "big.umod", "brc42.private.derive", "brc42.public.derive", "brc94.generate", "brc94.verify", "bsm.recover", "bsm.sign", "bytes.reverse", "digest32.display",
 		"digest32.parse", "drbg.generate", "ecies.bitcore.decrypt", "ecies.bitcore.encrypt", "ecies.electrum.decrypt", "ecies.electrum.encrypt", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "keyshares.recover", "keyshares.split", "metadata",
+		"portable.encrypted.decrypt", "portable.encrypted.encrypt", "portable.signed.sign", "portable.signed.verify",
 		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.execute", "scriptnum.decode", "scriptnum.encode", "spv.verify", "symmetric.decrypt", "symmetric.encrypt", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
@@ -659,6 +660,275 @@ func TestECIESStrictArgumentsAndMalformedPackets(t *testing.T) {
 				t.Fatalf("malformed request panicked: %v", err)
 			}
 		})
+	}
+}
+
+func TestPortableMessagesRoundTripAndFrame(t *testing.T) {
+	senderPrivate := strings.Repeat("00", 31) + "0f"
+	recipientPrivate := strings.Repeat("00", 31) + "15"
+	unrelatedPrivate := strings.Repeat("00", 31) + "16"
+	sender, err := portablePrivateKey(senderPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient, err := portablePrivateKey(recipientPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientPublic := hex.EncodeToString(recipient.PubKey().Compressed())
+
+	anyResult, err := execute(testRequest(
+		"portable.signed.sign",
+		fmt.Sprintf(`{"message":"","senderPrivateKey":"%s"}`, senderPrivate),
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	anyEnvelopeHex := anyResult.(map[string]string)["envelope"]
+	anyEnvelope, err := hex.DecodeString(anyEnvelopeHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(anyEnvelope[:4], portableSignedVersion) ||
+		!bytes.Equal(anyEnvelope[4:37], sender.PubKey().Compressed()) ||
+		anyEnvelope[37] != 0 {
+		t.Fatal("anyone signed-message framing is incorrect")
+	}
+	for index, recipientArgument := range []string{"", `,"recipientPrivateKey":"` + unrelatedPrivate + `"`} {
+		verified, err := execute(testRequest(
+			"portable.signed.verify",
+			fmt.Sprintf(`{"message":"","envelope":"%s"%s}`, anyEnvelopeHex, recipientArgument),
+		), metadata{})
+		if err != nil {
+			t.Fatalf("anyone verification %d: %v", index, err)
+		}
+		if !verified.(map[string]bool)["valid"] {
+			t.Fatalf("anyone verification %d returned false", index)
+		}
+	}
+
+	messageHex := hex.EncodeToString([]byte("Grüße, 世界"))
+	specificResult, err := execute(testRequest(
+		"portable.signed.sign",
+		fmt.Sprintf(
+			`{"message":"%s","senderPrivateKey":"%s","recipientPublicKey":"%s"}`,
+			messageHex, senderPrivate, recipientPublic,
+		),
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	specificEnvelopeHex := specificResult.(map[string]string)["envelope"]
+	specificEnvelope, err := hex.DecodeString(specificEnvelopeHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(specificEnvelope[37:70], recipient.PubKey().Compressed()) {
+		t.Fatal("specific signed-message recipient framing is incorrect")
+	}
+	verified, err := execute(testRequest(
+		"portable.signed.verify",
+		fmt.Sprintf(
+			`{"message":"%s","envelope":"%s","recipientPrivateKey":"%s"}`,
+			messageHex, specificEnvelopeHex, recipientPrivate,
+		),
+	), metadata{})
+	if err != nil || !verified.(map[string]bool)["valid"] {
+		t.Fatalf("specific signed-message verification failed: %#v, %v", verified, err)
+	}
+
+	plaintext := hex.EncodeToString(bytes.Repeat([]byte{0x5a}, 65))
+	encryptedResult, err := execute(testRequest(
+		"portable.encrypted.encrypt",
+		fmt.Sprintf(
+			`{"plaintext":"%s","senderPrivateKey":"%s","recipientPublicKey":"%s"}`,
+			plaintext, senderPrivate, recipientPublic,
+		),
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encryptedEnvelopeHex := encryptedResult.(map[string]string)["envelope"]
+	encryptedEnvelope, err := hex.DecodeString(encryptedEnvelopeHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encryptedEnvelope) != 150+65 ||
+		!bytes.Equal(encryptedEnvelope[:4], portableEncryptedVersion) ||
+		!bytes.Equal(encryptedEnvelope[4:37], sender.PubKey().Compressed()) ||
+		!bytes.Equal(encryptedEnvelope[37:70], recipient.PubKey().Compressed()) {
+		t.Fatal("encrypted-message framing is incorrect")
+	}
+	decrypted, err := execute(testRequest(
+		"portable.encrypted.decrypt",
+		fmt.Sprintf(
+			`{"envelope":"%s","recipientPrivateKey":"%s"}`,
+			encryptedEnvelopeHex, recipientPrivate,
+		),
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decrypted.(map[string]string)["plaintext"]; got != plaintext {
+		t.Fatalf("decrypted plaintext got %s, want %s", got, plaintext)
+	}
+}
+
+func TestPortableMessagesStrictArgumentsAndPanicSafePreflights(t *testing.T) {
+	senderPrivate := strings.Repeat("00", 31) + "0f"
+	recipientPrivate := strings.Repeat("00", 31) + "15"
+	wrongRecipientPrivate := strings.Repeat("00", 31) + "16"
+	recipient, err := portablePrivateKey(recipientPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientPublic := hex.EncodeToString(recipient.PubKey().Compressed())
+
+	signedResult, err := execute(testRequest(
+		"portable.signed.sign",
+		fmt.Sprintf(
+			`{"message":"0102","senderPrivateKey":"%s","recipientPublicKey":"%s"}`,
+			senderPrivate, recipientPublic,
+		),
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signedHex := signedResult.(map[string]string)["envelope"]
+	signed, err := hex.DecodeString(signedHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	encryptedResult, err := execute(testRequest(
+		"portable.encrypted.encrypt",
+		fmt.Sprintf(
+			`{"plaintext":"01020304","senderPrivateKey":"%s","recipientPublicKey":"%s"}`,
+			senderPrivate, recipientPublic,
+		),
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encryptedHex := encryptedResult.(map[string]string)["envelope"]
+	encrypted, err := hex.DecodeString(encryptedHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrongVersionSigned := append([]byte(nil), signed...)
+	wrongVersionSigned[0] ^= 1
+	malformedSenderSigned := append([]byte(nil), signed...)
+	malformedSenderSigned[4] = 0x04
+	malformedRecipientSigned := append([]byte(nil), signed...)
+	malformedRecipientSigned[37] = 0x04
+	trailingSigned := append(append([]byte(nil), signed...), 0)
+	wrongVersionEncrypted := append([]byte(nil), encrypted...)
+	wrongVersionEncrypted[0] ^= 1
+	malformedSenderEncrypted := append([]byte(nil), encrypted...)
+	malformedSenderEncrypted[4] = 0x04
+	malformedRecipientEncrypted := append([]byte(nil), encrypted...)
+	malformedRecipientEncrypted[37] = 0x04
+	tamperedEncrypted := append([]byte(nil), encrypted...)
+	tamperedEncrypted[70] ^= 1
+
+	cases := []struct {
+		name, operation, arguments, category string
+	}{
+		{"sign unknown field", "portable.signed.sign", fmt.Sprintf(`{"message":"","senderPrivateKey":"%s","extra":true}`, senderPrivate), "invalidEncoding"},
+		{"sign missing message", "portable.signed.sign", fmt.Sprintf(`{"senderPrivateKey":"%s"}`, senderPrivate), "invalidEncoding"},
+		{"sign null message", "portable.signed.sign", fmt.Sprintf(`{"message":null,"senderPrivateKey":"%s"}`, senderPrivate), "invalidEncoding"},
+		{"sign odd hex", "portable.signed.sign", fmt.Sprintf(`{"message":"0","senderPrivateKey":"%s"}`, senderPrivate), "invalidHex"},
+		{"sign uppercase hex", "portable.signed.sign", fmt.Sprintf(`{"message":"AA","senderPrivateKey":"%s"}`, senderPrivate), "invalidHex"},
+		{"sign bad hex", "portable.signed.sign", fmt.Sprintf(`{"message":"zz","senderPrivateKey":"%s"}`, senderPrivate), "invalidHex"},
+		{"sign short private key", "portable.signed.sign", `{"message":"","senderPrivateKey":"01"}`, "invalidLength"},
+		{"sign zero private key", "portable.signed.sign", fmt.Sprintf(`{"message":"","senderPrivateKey":"%s"}`, strings.Repeat("00", 32)), "invalidPrivateKey"},
+		{"sign uncompressed recipient", "portable.signed.sign", fmt.Sprintf(`{"message":"","senderPrivateKey":"%s","recipientPublicKey":"04%s"}`, senderPrivate, strings.Repeat("00", 32)), "invalidPublicKey"},
+		{"verify wrong version", "portable.signed.verify", fmt.Sprintf(`{"message":"0102","envelope":"%s","recipientPrivateKey":"%s"}`, hex.EncodeToString(wrongVersionSigned), recipientPrivate), "unsupportedVersion"},
+		{"verify unknown field", "portable.signed.verify", fmt.Sprintf(`{"message":"0102","envelope":"%s","recipientPrivateKey":"%s","extra":true}`, signedHex, recipientPrivate), "invalidEncoding"},
+		{"verify missing envelope", "portable.signed.verify", `{"message":"0102"}`, "invalidEncoding"},
+		{"verify malformed sender", "portable.signed.verify", fmt.Sprintf(`{"message":"0102","envelope":"%s","recipientPrivateKey":"%s"}`, hex.EncodeToString(malformedSenderSigned), recipientPrivate), "invalidPublicKey"},
+		{"verify malformed recipient", "portable.signed.verify", fmt.Sprintf(`{"message":"0102","envelope":"%s","recipientPrivateKey":"%s"}`, hex.EncodeToString(malformedRecipientSigned), recipientPrivate), "invalidPublicKey"},
+		{"verify trailing DER", "portable.signed.verify", fmt.Sprintf(`{"message":"0102","envelope":"%s","recipientPrivateKey":"%s"}`, hex.EncodeToString(trailingSigned), recipientPrivate), "invalidSignature"},
+		{"verify wrong recipient", "portable.signed.verify", fmt.Sprintf(`{"message":"0102","envelope":"%s","recipientPrivateKey":"%s"}`, signedHex, wrongRecipientPrivate), "recipientMismatch"},
+		{"encrypt unknown field", "portable.encrypted.encrypt", fmt.Sprintf(`{"plaintext":"","senderPrivateKey":"%s","recipientPublicKey":"%s","extra":true}`, senderPrivate, recipientPublic), "invalidEncoding"},
+		{"encrypt missing recipient", "portable.encrypted.encrypt", fmt.Sprintf(`{"plaintext":"","senderPrivateKey":"%s"}`, senderPrivate), "invalidEncoding"},
+		{"decrypt unknown field", "portable.encrypted.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s","extra":true}`, encryptedHex, recipientPrivate), "invalidEncoding"},
+		{"decrypt missing recipient", "portable.encrypted.decrypt", fmt.Sprintf(`{"envelope":"%s"}`, encryptedHex), "invalidEncoding"},
+		{"decrypt wrong version", "portable.encrypted.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s"}`, hex.EncodeToString(wrongVersionEncrypted), recipientPrivate), "unsupportedVersion"},
+		{"decrypt malformed sender", "portable.encrypted.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s"}`, hex.EncodeToString(malformedSenderEncrypted), recipientPrivate), "invalidPublicKey"},
+		{"decrypt malformed recipient", "portable.encrypted.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s"}`, hex.EncodeToString(malformedRecipientEncrypted), recipientPrivate), "invalidPublicKey"},
+		{"decrypt wrong recipient", "portable.encrypted.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s"}`, encryptedHex, wrongRecipientPrivate), "recipientMismatch"},
+		{"decrypt authentication", "portable.encrypted.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s"}`, hex.EncodeToString(tamperedEncrypted), recipientPrivate), "authenticationFailed"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := execute(testRequest(tc.operation, tc.arguments), metadata{})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			normalized := normalizeError(err)
+			if normalized.Category != tc.category {
+				t.Fatalf("got %s, want %s (%v)", normalized.Category, tc.category, err)
+			}
+			if normalized.Category == "oraclePanic" {
+				t.Fatal("malformed portable request reached panic recovery")
+			}
+			for _, secret := range []string{senderPrivate, recipientPrivate, signedHex, encryptedHex} {
+				if strings.Contains(normalized.Message, secret) {
+					t.Fatal("normalized error leaked request material")
+				}
+			}
+		})
+	}
+
+	mismatch, err := execute(testRequest(
+		"portable.signed.verify",
+		fmt.Sprintf(
+			`{"message":"ff","envelope":"%s","recipientPrivateKey":"%s"}`,
+			signedHex, recipientPrivate,
+		),
+	), metadata{})
+	if err != nil || mismatch.(map[string]bool)["valid"] {
+		t.Fatalf("well-formed signature mismatch must be success/false: %#v, %v", mismatch, err)
+	}
+
+	for count := 0; count < len(signed); count++ {
+		_, err := execute(testRequest(
+			"portable.signed.verify",
+			fmt.Sprintf(`{"message":"0102","envelope":"%s"}`, hex.EncodeToString(signed[:count])),
+		), metadata{})
+		if err == nil || normalizeError(err).Category == "oraclePanic" {
+			t.Fatalf("signed truncation %d was not safely rejected: %v", count, err)
+		}
+	}
+	for count := 0; count < 150; count++ {
+		_, err := execute(testRequest(
+			"portable.encrypted.decrypt",
+			fmt.Sprintf(
+				`{"envelope":"%s","recipientPrivateKey":"%s"}`,
+				hex.EncodeToString(encrypted[:min(count, len(encrypted))]), recipientPrivate,
+			),
+		), metadata{})
+		if err == nil || normalizeError(err).Category == "oraclePanic" {
+			t.Fatalf("encrypted truncation %d was not safely rejected: %v", count, err)
+		}
+	}
+
+	oversizedContent := strings.Repeat("00", portableContentMaximumByteCount+1)
+	oversizedVerificationField := strings.Repeat("00", portableVerificationFieldMaximumByteCount+1)
+	resourceCases := []request{
+		testRequest("portable.signed.sign", fmt.Sprintf(`{"message":"%s","senderPrivateKey":"%s"}`, oversizedContent, senderPrivate)),
+		testRequest("portable.signed.verify", fmt.Sprintf(`{"message":"%s","envelope":"%s"}`, oversizedVerificationField, signedHex)),
+		testRequest("portable.encrypted.encrypt", fmt.Sprintf(`{"plaintext":"%s","senderPrivateKey":"%s","recipientPublicKey":"%s"}`, oversizedContent, senderPrivate, recipientPublic)),
+		testRequest("portable.encrypted.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s"}`, oversizedContent, recipientPrivate)),
+	}
+	for _, request := range resourceCases {
+		_, err := execute(request, metadata{})
+		if err == nil || normalizeError(err).Category != "resourceLimit" {
+			t.Fatalf("%s oversized input was not resource-limited: %v", request.Op, err)
+		}
 	}
 }
 
