@@ -1,6 +1,8 @@
 import BSVAuth
 import BSVCore
 import BSVKeys
+import BSVTransaction
+import BSVWallet
 import Testing
 
 @Suite("BRC-103 Go oracle", .serialized)
@@ -35,6 +37,86 @@ struct AuthGoOracleTests {
             #expect(decoded.messageType == AuthMessageType.initialRequest)
             #expect(decoded.identityKey == message.identityKey)
             #expect(decoded.initialNonce == nonce)
+        }
+    }
+
+    @Test("certificate request and response messages reencode through pinned Go")
+    func certificateMessageReencode() throws {
+        let configuration = GoOracleConfiguration.default()
+        switch try GoOracleClient.connect(configuration: configuration) {
+        case .unavailable(let reason):
+            #expect(!configuration.required)
+            print("Auth Go oracle unavailable: \(reason)")
+        case .available(let client):
+            defer { client.close() }
+            let requester = try privateKey(9)
+            let peer = try privateKey(10)
+            let certifier = try privateKey(11)
+            let nonce = Base64Encoding.encode([UInt8](repeating: 4, count: 32))
+            let type = try CertificateTypeID([UInt8](repeating: 0x21, count: 32))
+            let field = try CertificateFieldName("email")
+            let escapedField = try CertificateFieldName("<&\u{2028}")
+            let request = try AuthRequestedCertificateSet(
+                certifiers: [certifier.publicKey],
+                certificateTypes: [type: [field, escapedField]]
+            )
+            let signature = try fixtureSignature()
+            let requestMessage = AuthMessage(
+                messageType: .certificateRequest,
+                identityKey: requester.publicKey,
+                nonce: nonce,
+                yourNonce: nonce,
+                signature: signature.derBytes,
+                requestedCertificates: request
+            )
+            let requestOutput = try reencode(
+                requestMessage,
+                id: "auth-certificate-request-reencode",
+                client: client,
+                expectedSigningBytes: AuthMessageCodec.certificateRequestSigningBytes(
+                    request,
+                    limits: .standard
+                )
+            )
+            #expect(requestOutput == requestMessage)
+
+            let ciphertext = try CertificateCiphertext([1, 2, 3])
+            let certificate = try Certificate(
+                type: type,
+                serialNumber: CertificateSerialNumber([UInt8](repeating: 0x31, count: 32)),
+                subject: peer.publicKey,
+                certifier: certifier.publicKey,
+                revocationOutpoint: Outpoint(
+                    transactionID: try TransactionID(
+                        wireBytes: [UInt8](repeating: 0, count: 32)
+                    ),
+                    outputIndex: 0
+                ),
+                fields: [field: ciphertext],
+                signature: signature
+            )
+            let verifiable = try VerifiableCertificate(
+                certificate: certificate,
+                keyring: CertificateKeyring([field: ciphertext])
+            )
+            let responseMessage = AuthMessage(
+                messageType: .certificateResponse,
+                identityKey: peer.publicKey,
+                nonce: nonce,
+                yourNonce: nonce,
+                signature: signature.derBytes,
+                certificates: [verifiable]
+            )
+            let responseOutput = try reencode(
+                responseMessage,
+                id: "auth-certificate-response-reencode",
+                client: client,
+                expectedSigningBytes: AuthMessageCodec.certificateResponseSigningBytes(
+                    [verifiable],
+                    limits: .standard
+                )
+            )
+            #expect(responseOutput == responseMessage)
         }
     }
 
@@ -108,5 +190,46 @@ struct AuthGoOracleTests {
             throw AuthError.invalidMessage
         }
         return try Hex.decode(hex, maximumDecodedByteCount: 1 << 20)
+    }
+
+    private func reencode(
+        _ message: AuthMessage,
+        id: String,
+        client: GoOracleClient,
+        expectedSigningBytes: [UInt8]? = nil
+    ) throws -> AuthMessage {
+        let input = try AuthMessageCodec.encode(message)
+        let response = try client.request(
+            id: id,
+            operation: "auth.message.reencode",
+            arguments: ["json": .string(Hex.encode(input))]
+        )
+        guard case .object(let fields) = response.result,
+            case .string(let hex)? = fields["json"]
+        else { throw AuthError.invalidMessage }
+        if let expectedSigningBytes {
+            guard case .string(let signingHex)? = fields["signing"] else {
+                throw AuthError.invalidMessage
+            }
+            #expect(
+                try Hex.decode(
+                    signingHex,
+                    maximumDecodedByteCount: AuthLimits.maximumAllowedCertificateAggregateBytes
+                ) == expectedSigningBytes
+            )
+        }
+        return try AuthMessageCodec.decode(
+            Hex.decode(hex, maximumDecodedByteCount: AuthLimits.maximumAllowedJSONBytes)
+        )
+    }
+
+    private func privateKey(_ scalar: UInt8) throws -> PrivateKey {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        bytes[31] = scalar
+        return try PrivateKey(bytes)
+    }
+
+    private func fixtureSignature() throws -> ECDSASignature {
+        try ECDSASignature(derBytes: [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01])
     }
 }

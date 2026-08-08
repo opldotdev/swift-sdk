@@ -22,6 +22,11 @@ metadata and long-lived `serve` launches share an offline build cache even
 though their workspaces are cleaned. Set `BSV_GO_ORACLE_GOCACHE` to override
 that cache path.
 
+The `auth.message.reencode` result contains the reencoded message JSON. For a
+BRC-103 certificate request or response, it also contains `signing`, which is
+the exact JSON fragment that Go signs for that message type. Both values use
+lowercase hexadecimal bytes.
+
 ## Pin validation
 
 [`go-sdk.lock.json`](go-sdk.lock.json) pins the module, tag, commit, exact Go

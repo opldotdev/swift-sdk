@@ -234,7 +234,7 @@ print(script.isPayToPublicKeyHash)
 | `BSVOverlay` | Supplies bounded SHIP/SLAP values, verified administration advertisements, and transport-neutral facilitator protocols. |
 | `BSVRegistry` | Supplies bounded registry definitions, PushDrop codecs, records, and transport-neutral lookup or publication boundaries. |
 | `BSVWallet` | Supplies offline BRC-100 cryptography and BRC-52 certificate values. |
-| `BSVAuth` | Supplies certificate workflows, BRC-103 peer sessions, BRC-104 payloads, and bounded authenticated HTTP framing. |
+| `BSVAuth` | Supplies certificate workflows, BRC-103 peer sessions and signed certificate exchange, BRC-104 payloads, and bounded authenticated HTTP framing. |
 | `BSVIdentity` | Resolves bounded display identities and creates transport-neutral public disclosures. |
 
 ## BSVCompat

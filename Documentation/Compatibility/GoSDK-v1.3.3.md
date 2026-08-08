@@ -511,6 +511,11 @@ Public: requested certificate-set models/JSON, nonce creation/verification, cert
 
 Exported test leakage: `SignCertificateForTest`, `SignCertificateWithWalletForTest`, `GetEncodedCertificateForDebug` should live in Swift test support.
 
+Swift status: accepted for bounded requested-certificate values, exact wallet
+preparation, and all-or-nothing BRC-52 validation. Swift requires every
+requested type and field. Confirmed Go validation defects are recorded
+separately as GO-061 and GO-062.
+
 #### `auth` → `BSVAuth`
 
 Public:
@@ -526,6 +531,11 @@ Public:
 
 Edges: certificates/utils, EC, wallet. Uses locks/atomics/time/logging. Peer/session objects should be actors or carefully synchronized `Sendable` references.
 
+Swift status: accepted for bounded peer sessions, signed general messages, and
+signed post-authentication certificate request and response messages. One
+pending request is bound to one exact response. Certificate trust and
+revocation policy remain caller responsibilities.
+
 #### `auth/brc104` → `BSVAuth`
 
 Public: authenticated HTTP header constants and included-header allowlists.
@@ -534,8 +544,8 @@ Swift status: accepted. `BRC104HTTPHeaderName` defines the authenticated HTTP
 header names. `BRC104HTTPFrameCodec` converts signed general messages to and
 from bounded transport-neutral request and response frames. It requires
 canonical values, one value for each authentication header, and exact response
-request-ID correlation. It rejects certificate-exchange headers because the
-current auth model has no typed nonempty certificate-request value.
+request-ID correlation. It rejects the requested-certificate header because
+the general-message signature does not bind that header.
 
 #### `auth/authpayload` → `BSVAuth`
 
@@ -566,9 +576,9 @@ requests or maintain callback state.
 Public: `AuthFetch`, `AuthPeer`, request/options models; constructor/options; authenticated `Fetch`, certificate request, received-certificate drain, logger.
 
 Swift status: future. Endpoint policy, fallback, retry, cancellation, payment
-approval, payment limits, and certificate exchange must be explicit before a
-client is added. Confirmed Go defects are recorded separately as GO-053 through
-GO-060.
+approval, and payment limits must be explicit before a client is added. Signed
+transport-neutral certificate exchange is accepted outside AuthFetch.
+Confirmed Go defects are recorded separately as GO-053 through GO-063.
 
 Edges: all auth subpackages, EC, script, P2PKH, wallet; stdlib HTTP.
 
@@ -885,7 +895,7 @@ License warning: these live under the Open BSV-licensed upstream. Use the Go ora
 10. `BSVNetwork`: concrete chain trackers, headers client, ARC/TAAL/WOC broadcasters, HTTP seam, Linux networking tests.
 11. `BSVWallet`: BRC-100 models/protocols, key deriver/cache, ProtoWallet, wallet-backed PushDrop, serializers, wire/JSON substrates.
 12. `BSVMessage`: BRC-77 and BRC-78 portable messages.
-13. `BSVAuth`: certificates, strict BRC-103 peer/session state, bounded BRC-104 payloads, and bounded transport-neutral authenticated HTTP framing. Concrete HTTP, WebSocket, auth-fetch, automatic payment, and certificate exchange remain future work.
+13. `BSVAuth`: certificates, strict BRC-103 peer/session state and signed certificate exchange, bounded BRC-104 payloads, and bounded transport-neutral authenticated HTTP framing. Concrete HTTP, WebSocket, auth-fetch, automatic payment, and certificate-gated initial-handshake policy remain future work.
 14. `BSVOverlay`, `BSVIdentity`, `BSVRegistry`, `BSVKVStore`, and `BSVStorage`
     cores are accepted. Future named work includes overlay/admin/lookup/topic
     transports, registry orchestration, wallet-backed KV store, and UHRP

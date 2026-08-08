@@ -532,7 +532,7 @@ public enum BRC104HTTPFrameCodec {
         _ message: AuthMessage,
         limits: BRC104HTTPFramingLimits
     ) throws {
-        guard !message.hasCertificates, !message.hasRequestedCertificates else {
+        guard message.certificates == nil, message.requestedCertificates == nil else {
             throw BRC104HTTPFramingError.certificateExchangeUnavailable
         }
         do {

@@ -207,7 +207,10 @@ issue, acquire, project, and verify workflows.
   (Accepted)
 - Transport-neutral BRC-104 request and response payloads. (Accepted)
 - Bounded transport-neutral BRC-104 authenticated HTTP framing. (Accepted)
-- BRC-103 certificate exchange. (Future)
+- Signed bounded BRC-103 post-authentication certificate exchange and exact
+  BRC-52 disclosure validation. (Accepted)
+- Certificate-gated initial-handshake policy and chain-aware revocation checks.
+  (Future)
 - Concrete BRC-104 HTTP and WebSocket transports, AuthFetch policy, and
   automatic payment. (Future)
 

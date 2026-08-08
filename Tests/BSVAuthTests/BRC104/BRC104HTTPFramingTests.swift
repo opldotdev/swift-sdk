@@ -65,7 +65,8 @@ struct BRC104HTTPFramingTests {
         )
         #expect(try BRC104HTTPFrameCodec.decodeRequest(mixedCase) == fixture.requestMessage)
 
-        let duplicate = try requestFrame(basedOn: frame, headers: frame.headers + [frame.headers[0]])
+        let duplicate = try requestFrame(
+            basedOn: frame, headers: frame.headers + [frame.headers[0]])
         #expect(throws: BRC104HTTPFramingError.duplicateAuthenticationHeader) {
             try BRC104HTTPFrameCodec.decodeRequest(duplicate)
         }
@@ -94,6 +95,20 @@ struct BRC104HTTPFramingTests {
         )
         #expect(throws: BRC104HTTPFramingError.certificateExchangeUnavailable) {
             try BRC104HTTPFrameCodec.decodeRequest(certificateRequest)
+        }
+
+        let response = try BRC104HTTPFrameCodec.encodeResponse(fixture.responseMessage)
+        let responseCertificateRequest = try responseFrame(
+            basedOn: response,
+            headers: response.headers + [
+                .init(name: BRC104HTTPHeaderName.requestedCertificates, value: "{}")
+            ]
+        )
+        #expect(throws: BRC104HTTPFramingError.certificateExchangeUnavailable) {
+            try BRC104HTTPFrameCodec.decodeResponse(
+                responseCertificateRequest,
+                expectedRequestID: fixture.requestID
+            )
         }
     }
 
@@ -133,15 +148,19 @@ struct BRC104HTTPFramingTests {
         let fixture = try await makeHTTPFixture()
         let frame = try BRC104HTTPFrameCodec.encodeRequest(fixture.requestMessage)
         let exact = try BRC104HTTPFramingLimits(maximumHeaderCount: frame.headers.count)
-        #expect(try BRC104HTTPFrameCodec.encodeRequest(fixture.requestMessage, limits: exact) == frame)
+        #expect(
+            try BRC104HTTPFrameCodec.encodeRequest(fixture.requestMessage, limits: exact) == frame)
 
         let oneFewer = try BRC104HTTPFramingLimits(maximumHeaderCount: frame.headers.count - 1)
         #expect(throws: BRC104HTTPFramingError.resourceLimit) {
             try BRC104HTTPFrameCodec.encodeRequest(fixture.requestMessage, limits: oneFewer)
         }
 
-        let exactMethod = try BRC104HTTPFramingLimits(maximumMethodByteCount: frame.method.utf8.count)
-        #expect(try BRC104HTTPFrameCodec.decodeRequest(frame, limits: exactMethod) == fixture.requestMessage)
+        let exactMethod = try BRC104HTTPFramingLimits(
+            maximumMethodByteCount: frame.method.utf8.count)
+        #expect(
+            try BRC104HTTPFrameCodec.decodeRequest(frame, limits: exactMethod)
+                == fixture.requestMessage)
         let shortMethod = try BRC104HTTPFramingLimits(
             maximumMethodByteCount: frame.method.utf8.count - 1
         )

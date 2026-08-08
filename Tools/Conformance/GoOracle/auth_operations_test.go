@@ -37,6 +37,32 @@ func TestAuthPayloadRequestEncode(t *testing.T) {
 	}
 }
 
+func TestAuthMessageReencodeReportsCanonicalCertificateSigningBytes(t *testing.T) {
+	identity := "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+	certifier := identity
+	typeID := "ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISE="
+	message := `{"version":"0.1","messageType":"certificateRequest","identityKey":"` + identity + `","nonce":"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=","yourNonce":"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ=","requestedCertificates":{"Certifiers":["` + certifier + `"],"CertificateTypes":{"` + typeID + `":["email"]}},"signature":[48,6,2,1,1,2,1,1]}`
+	result, err := executeAuthOperation(
+		"auth.message.reencode",
+		json.RawMessage(`{"json":"`+hex.EncodeToString([]byte(message))+`"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, ok := result.(map[string]string)
+	if !ok {
+		t.Fatalf("unexpected result type %T", result)
+	}
+	signing, err := hex.DecodeString(fields["signing"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := `{"Certifiers":["` + certifier + `"],"CertificateTypes":{"` + typeID + `":["email"]}}`
+	if string(signing) != expected {
+		t.Fatalf("unexpected signing bytes %s", signing)
+	}
+}
+
 func TestAuthOperationsRejectInvalidArguments(t *testing.T) {
 	tests := []struct {
 		name      string

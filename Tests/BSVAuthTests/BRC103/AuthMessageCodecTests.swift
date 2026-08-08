@@ -1,6 +1,7 @@
 import BSVAuth
 import BSVCore
 import BSVKeys
+import BSVWallet
 import Testing
 
 @Suite("BRC-103 authentication message codec")
@@ -14,8 +15,7 @@ struct AuthMessageCodecTests {
             let message = AuthMessage(
                 messageType: .initialRequest,
                 identityKey: identity,
-                initialNonce: nonce,
-                hasRequestedCertificates: true
+                initialNonce: nonce
             )
             let encoded = try AuthMessageCodec.encode(message)
             let decoded = try AuthMessageCodec.decode(encoded)
@@ -74,7 +74,7 @@ struct AuthMessageCodecTests {
     }
 
     @Test("checks the JSON byte limit before parsing or encoding")
-    func JSONLimit() throws {
+    func jsonLimit() throws {
         let identity = try fixtureIdentity()
         let nonce = Base64Encoding.encode([UInt8](repeating: 3, count: 32))
         let message = AuthMessage(
@@ -95,6 +95,40 @@ struct AuthMessageCodecTests {
             try AuthMessageCodec.decode(
                 encoded,
                 limits: AuthLimits(maximumJSONBytes: encoded.count - 1)
+            )
+        }
+    }
+
+    @Test("certificate data is accepted only in signed certificate messages")
+    func certificateMessageBoundary() throws {
+        let identity = try fixtureIdentity()
+        let nonce = Base64Encoding.encode([UInt8](repeating: 3, count: 32))
+        let type = try CertificateTypeID([UInt8](repeating: 4, count: 32))
+        let request = try AuthRequestedCertificateSet(
+            certifiers: [identity],
+            certificateTypes: [type: [try CertificateFieldName("name")]]
+        )
+        #expect(throws: AuthError.invalidMessage) {
+            try AuthMessageCodec.encode(
+                AuthMessage(
+                    messageType: .initialRequest,
+                    identityKey: identity,
+                    initialNonce: nonce,
+                    requestedCertificates: request
+                )
+            )
+        }
+        #expect(throws: AuthError.invalidMessage) {
+            try AuthMessageCodec.encode(
+                AuthMessage(
+                    messageType: .general,
+                    identityKey: identity,
+                    nonce: nonce,
+                    yourNonce: nonce,
+                    payload: [1],
+                    signature: [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01],
+                    requestedCertificates: request
+                )
             )
         }
     }

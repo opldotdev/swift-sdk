@@ -1029,6 +1029,65 @@ close each response before retry.
 Swift handling: automatic payment is not included. Any future client must make
 payment authority and limits explicit.
 
+### GO-061: Certificate validation does not enforce requested disclosures
+
+- Package: `auth/utils`
+- File: [`validate_certificates.go`](https://github.com/bsv-blockchain/go-sdk/blob/de26fdec57a945ddc06de5d5617f6c32374f3929/auth/utils/validate_certificates.go)
+- Severity: high
+
+`verifyForRequestedType` confirms that each supplied certificate has a
+requested type, but it reads and then ignores the requested field list.
+`ValidateCertificates` also does not require at least one certificate for each
+requested type. A nonempty response can therefore pass request matching while
+it omits a requested type or disclosure field.
+
+Suggested correction: compare every keyring field with the requested field
+list and require the complete requested type set before success.
+
+Swift handling: preparation and validation require exact keyring fields and
+the complete requested type set. The operation is all-or-nothing.
+
+### GO-062: Certificate responses are not correlated with a pending request
+
+- Package: `auth`
+- File: [`peer.go`](https://github.com/bsv-blockchain/go-sdk/blob/de26fdec57a945ddc06de5d5617f6c32374f3929/auth/peer.go)
+- Severity: high
+
+`RequestCertificates` does not store the request on the session.
+`handleCertificateResponse` accepts a signed response for a session and checks
+it against the peer-wide `CertificatesToRequest` configuration. It does not
+require a pending request or bind the response to the request that caused it.
+An unsolicited or stale response can therefore enter validation under the
+wrong request state.
+
+Suggested correction: store one bounded pending request on the session,
+compare the exact response with that request, and clear the request only after
+successful signature and certificate validation.
+
+Swift handling: `PeerAuthenticator` stores one pending request per session,
+rejects unsolicited or mismatched responses, and clears the request only after
+successful response-signature verification.
+
+### GO-063: The requested-certificate HTTP header is not signed
+
+- Package: `auth/transports`
+- File: [`simplified_http_transport.go`](https://github.com/bsv-blockchain/go-sdk/blob/de26fdec57a945ddc06de5d5617f6c32374f3929/auth/transports/simplified_http_transport.go)
+- Severity: high
+
+`authMessageFromGeneralMessageResponse` reads
+`x-bsv-auth-requested-certificates` into the authentication message after it
+creates the signed response payload. Auth headers are excluded from that
+payload, and the general-message signature covers only the payload. A network
+intermediary can therefore alter the certificate request without invalidating
+the signature.
+
+Suggested correction: include a canonical hash of the requested-certificate
+set in the signed payload, or send a signed BRC-103 certificate-request
+message.
+
+Swift handling: the HTTP frame codec rejects this header. Callers use the
+signed BRC-103 certificate-request message.
+
 ## Reporting format
 
 When a new defect is confirmed, add one entry with:

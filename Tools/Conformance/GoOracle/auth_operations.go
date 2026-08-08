@@ -34,7 +34,22 @@ func executeAuthOperation(operation string, raw json.RawMessage) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]string{"json": hex.EncodeToString(encoded)}, nil
+		result := map[string]string{"json": hex.EncodeToString(encoded)}
+		switch message.MessageType {
+		case auth.MessageTypeCertificateRequest:
+			signing, err := json.Marshal(message.RequestedCertificates)
+			if err != nil {
+				return nil, err
+			}
+			result["signing"] = hex.EncodeToString(signing)
+		case auth.MessageTypeCertificateResponse:
+			signing, err := json.Marshal(message.Certificates)
+			if err != nil {
+				return nil, err
+			}
+			result["signing"] = hex.EncodeToString(signing)
+		}
+		return result, nil
 	case "auth.payload.request.encode":
 		var args struct {
 			RequestID string            `json:"requestID"`
