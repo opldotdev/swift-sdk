@@ -62,6 +62,20 @@ func TestKnownStandardValues(t *testing.T) {
 			"bytes": "01000000000000000000", "inputs": "0", "lockTime": "0",
 			"outputs": "0", "txid": "d21633ba23f70118185227be58a63527675641ad37967e2aa461559f577aec43", "version": "1",
 		}},
+		{"transaction.beef.decode", `{"bytes":"0200beef000102` + strings.Repeat("00", 32) + `"}`, map[string]string{
+			"atomicSubject": "", "bumps": "0", "newestTxid": strings.Repeat("00", 32),
+			"transactions": "1", "version": "4022206466",
+		}},
+		{"transaction.beef.decode", `{"bytes":"01010101` + strings.Repeat("00", 32) + `0200beef000102` + strings.Repeat("00", 32) + `"}`, map[string]string{
+			"atomicSubject": strings.Repeat("00", 32), "bumps": "0", "newestTxid": strings.Repeat("00", 32),
+			"transactions": "1", "version": "4022206466",
+		}},
+		{"transaction.beef.reencode", `{"bytes":"0200beef000102` + strings.Repeat("00", 32) + `"}`, map[string]string{
+			"bytes": "0200beef000102" + strings.Repeat("00", 32),
+		}},
+		{"transaction.beef.reencode", `{"bytes":"01010101` + strings.Repeat("00", 32) + `0200beef000102` + strings.Repeat("00", 32) + `"}`, map[string]string{
+			"bytes": "01010101" + strings.Repeat("00", 32) + "0200beef000102" + strings.Repeat("00", 32),
+		}},
 		{"transaction.merklepath.decode", `{"bytes":"0101010002` + strings.Repeat("00", 32) + `"}`, map[string]string{
 			"blockHeight": "1", "bytes": "0101010002" + strings.Repeat("00", 32), "treeHeight": "1",
 		}},
@@ -182,7 +196,7 @@ func TestCompleteOperationRegistry(t *testing.T) {
 		"base64.decode", "base64.encode", "big.umod", "bytes.reverse", "digest32.display",
 		"digest32.parse", "drbg.generate", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "metadata",
-		"script.asm.decode", "script.asm.encode", "script.asm.names", "scriptnum.decode", "scriptnum.encode", "transaction.decode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
+		"script.asm.decode", "script.asm.encode", "script.asm.names", "scriptnum.decode", "scriptnum.encode", "transaction.beef.decode", "transaction.beef.reencode", "transaction.beef.validate", "transaction.decode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
 	}

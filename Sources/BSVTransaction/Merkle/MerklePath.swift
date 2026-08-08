@@ -122,6 +122,29 @@ public struct MerklePath: Hashable, Sendable {
         }
 
         var cursor = ByteCursor(bytes)
+        try self.init(
+            consuming: &cursor,
+            limits: limits,
+            compactSizeCanonicality: compactSizeCanonicality
+        )
+        do {
+            try cursor.requireFinished()
+        } catch let error as BinaryDecodingError {
+            throw MerklePathError.malformed(
+                field: .trailingBytes,
+                offset: cursor.position,
+                cause: error
+            )
+        }
+    }
+
+    /// Consumes one BRC-74 path from an enclosing package format.
+    package init(
+        consuming cursor: inout ByteCursor,
+        limits: MerklePathLimits,
+        compactSizeCanonicality: CompactSizeCanonicality = .required
+    ) throws {
+        let startPosition = cursor.position
         let heightValue = try Self.read(.blockHeight, from: &cursor) {
             try $0.readCompactSize(canonicality: compactSizeCanonicality).value
         }
@@ -203,13 +226,11 @@ public struct MerklePath: Hashable, Sendable {
             parsedLevels.append(level)
         }
 
-        do {
-            try cursor.requireFinished()
-        } catch let error as BinaryDecodingError {
-            throw MerklePathError.malformed(
-                field: .trailingBytes,
-                offset: cursor.position,
-                cause: error
+        let byteCount = cursor.position - startPosition
+        guard byteCount <= limits.maximumByteCount else {
+            throw MerklePathError.pathTooLarge(
+                actual: byteCount,
+                maximum: limits.maximumByteCount
             )
         }
 

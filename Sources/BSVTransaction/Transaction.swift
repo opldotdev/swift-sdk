@@ -38,6 +38,29 @@ public struct Transaction: Hashable, Sendable {
         }
 
         var cursor = ByteCursor(bytes)
+        try self.init(
+            consuming: &cursor,
+            limits: limits,
+            compactSizeCanonicality: compactSizeCanonicality
+        )
+        do {
+            try cursor.requireFinished()
+        } catch let error as BinaryDecodingError {
+            throw TransactionError.malformed(
+                field: .trailingBytes,
+                offset: cursor.position,
+                cause: error
+            )
+        }
+    }
+
+    /// Consumes one raw transaction from an enclosing package format.
+    package init(
+        consuming cursor: inout ByteCursor,
+        limits: TransactionLimits,
+        compactSizeCanonicality: CompactSizeCanonicality = .required
+    ) throws {
+        let startPosition = cursor.position
         let version = try Self.read(.version, from: &cursor) {
             try $0.readUInt32LE()
         }
@@ -122,13 +145,11 @@ public struct Transaction: Hashable, Sendable {
         let lockTime = try Self.read(.lockTime, from: &cursor) {
             try $0.readUInt32LE()
         }
-        do {
-            try cursor.requireFinished()
-        } catch let error as BinaryDecodingError {
-            throw TransactionError.malformed(
-                field: .trailingBytes,
-                offset: cursor.position,
-                cause: error
+        let byteCount = cursor.position - startPosition
+        guard byteCount <= limits.maximumTransactionByteCount else {
+            throw TransactionError.transactionTooLarge(
+                actual: byteCount,
+                maximum: limits.maximumTransactionByteCount
             )
         }
 

@@ -349,6 +349,88 @@ func execute(req request, meta metadata) (result any, err error) {
 			"txid":     tx.TxID().String(),
 			"version":  strconv.FormatUint(uint64(tx.Version), 10),
 		}, nil
+	case "transaction.beef.decode":
+		var args struct {
+			Bytes string `json:"bytes"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		var beef *transaction.Beef
+		atomicSubject := ""
+		if len(data) >= 4 && binary.LittleEndian.Uint32(data[:4]) == transaction.ATOMIC_BEEF {
+			var subject *chainhash.Hash
+			beef, subject, err = transaction.NewBeefFromAtomicBytes(data)
+			if subject != nil {
+				atomicSubject = subject.String()
+			}
+		} else {
+			beef, err = transaction.NewBeefFromBytes(data)
+		}
+		if err != nil {
+			return nil, err
+		}
+		newest := ""
+		if beef.NewestTxID != nil {
+			newest = beef.NewestTxID.String()
+		}
+		return map[string]string{
+			"atomicSubject": atomicSubject,
+			"bumps":         strconv.Itoa(len(beef.BUMPs)),
+			"newestTxid":    newest,
+			"transactions":  strconv.Itoa(len(beef.Transactions)),
+			"version":       strconv.FormatUint(uint64(beef.Version), 10),
+		}, nil
+	case "transaction.beef.reencode":
+		var args struct {
+			Bytes string `json:"bytes"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		var encoded []byte
+		if len(data) >= 4 && binary.LittleEndian.Uint32(data[:4]) == transaction.ATOMIC_BEEF {
+			beef, subject, parseErr := transaction.NewBeefFromAtomicBytes(data)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			encoded, err = beef.AtomicBytes(subject)
+		} else {
+			beef, parseErr := transaction.NewBeefFromBytes(data)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			encoded, err = beef.Bytes()
+		}
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"bytes": hex.EncodeToString(encoded)}, nil
+	case "transaction.beef.validate":
+		var args struct {
+			AllowTransactionIDOnly bool   `json:"allowTransactionIDOnly"`
+			Bytes                  string `json:"bytes"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		beef, err := transaction.NewBeefFromBytes(data)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]bool{"valid": beef.IsValid(args.AllowTransactionIDOnly)}, nil
 	case "transaction.fee":
 		var args struct {
 			Bytes               string    `json:"bytes"`

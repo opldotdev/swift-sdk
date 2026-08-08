@@ -105,6 +105,9 @@ supports exactly one version byte.
 | `script.asm.names` | `{}` | `{names}` (all 256 pinned Go SDK opcode names in byte order) |
 | `scriptnum.encode` | `{value,era}` | `{bytes}` |
 | `scriptnum.decode` | `{bytes,era,minimal,maxBytes}` | `{value}` |
+| `transaction.beef.decode` | `{bytes}` | `{version,bumps,transactions,newestTxid,atomicSubject}` for BEEF v1/v2 or Atomic BEEF |
+| `transaction.beef.reencode` | `{bytes}` | `{bytes}` emitted by pinned Go after parsing BEEF v2 or Atomic BEEF |
+| `transaction.beef.validate` | `{bytes,allowTransactionIDOnly}` | `{valid}` using the pinned Go structural/proof policy |
 | `transaction.decode` | `{bytes}` | `{bytes,version,inputs,outputs,lockTime,txid}` |
 | `transaction.fee` | `{bytes,satoshisPerKilobyte,unlockingByteCounts}` | `{fee}` using actual nonempty scripts or one decimal-string/null estimate per input |
 | `transaction.merklepath.combine` | `{left,right}` | `{bytes}` for the combined canonical BRC-74 path |

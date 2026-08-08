@@ -2,7 +2,8 @@
 
 Status: P0 complete; foundational P1/P2 crypto and BIP-32/BIP-39 plus legacy
 P3 key-format packets accepted after independent and Fable review. BigNum,
-initial Script, and bounded legacy transaction wire foundations are accepted.
+initial Script, bounded legacy transactions, BRC-74 Merkle paths, and BEEF
+v1/v2 plus Atomic BEEF foundations are accepted.
 
 Each milestone ends with passing conformance tests, an updated compatibility
 matrix, and an advisor review at architectural or security-sensitive boundaries.
@@ -93,7 +94,7 @@ differentials, and Fable review.
 ## Phase 6: Merkle proofs and transaction envelopes
 
 - Merkle paths and BUMP. (Accepted)
-- BEEF and Atomic BEEF.
+- BEEF and Atomic BEEF. (Accepted)
 - SPV validation using transaction-owned chain-tracker protocols.
 - Transaction graph operations and proof propagation.
 
