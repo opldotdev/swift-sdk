@@ -144,17 +144,18 @@ public struct Opcode: RawRepresentable, Hashable, Sendable {
         }
     }
 
-    /// Canonical ASM name for known opcodes, including unknown byte values.
+    /// Canonical BRC-106 ASM name, including a stable name for unknown bytes.
     public var name: String {
         if isDirectPush { return "OP_DATA_\(rawValue)" }
         return switch rawValue {
-        case 0x00: "OP_0"
+        case 0x00: "OP_FALSE"
         case 0x4c: "OP_PUSHDATA1"
         case 0x4d: "OP_PUSHDATA2"
         case 0x4e: "OP_PUSHDATA4"
         case 0x4f: "OP_1NEGATE"
         case 0x50: "OP_RESERVED"
-        case 0x51...0x60: "OP_\(rawValue - 0x50)"
+        case 0x51: "OP_TRUE"
+        case 0x52...0x60: "OP_\(rawValue - 0x50)"
         case 0x61: "OP_NOP"
         case 0x62: "OP_VER"
         case 0x63: "OP_IF"
@@ -235,16 +236,104 @@ public struct Opcode: RawRepresentable, Hashable, Sendable {
         case 0xae: "OP_CHECKMULTISIG"
         case 0xaf: "OP_CHECKMULTISIGVERIFY"
         case 0xb0: "OP_NOP1"
-        case 0xb1: "OP_CHECKLOCKTIMEVERIFY"
-        case 0xb2: "OP_CHECKSEQUENCEVERIFY"
+        case 0xb1: "OP_NOP2"
+        case 0xb2: "OP_NOP3"
         case 0xb3: "OP_SUBSTR"
         case 0xb4: "OP_LEFT"
         case 0xb5: "OP_RIGHT"
+        case 0xb6: "OP_NOP4"
+        case 0xb7: "OP_NOP5"
+        case 0xb8: "OP_NOP6"
+        case 0xb9: "OP_NOP7"
+        case 0xba: "OP_NOP8"
+        case 0xbb: "OP_NOP9"
+        case 0xbc: "OP_NOP10"
+        case 0xfd: "OP_PUBKEYHASH"
+        case 0xfe: "OP_PUBKEY"
+        case 0xff: "OP_INVALIDOPCODE"
+        default: "OP_UNKNOWN\(rawValue)"
+        }
+    }
+
+    /// Unambiguous compact SASM name.
+    ///
+    /// OP_10...OP_16 retain their canonical spelling because bare `10`...`16`
+    /// are valid hexadecimal pushed-data tokens in BRC-14 ASM.
+    public var compactName: String {
+        if (0x5a...0x60).contains(rawValue) { return name }
+        return String(name.dropFirst(3)).lowercased()
+    }
+
+    /// Canonical name emitted by the pinned Go SDK v1.3.3.
+    public var goSDKName: String {
+        return switch rawValue {
+        case 0x50: "OP_BASE"
         case 0xb6: "OP_LSHIFTNUM"
         case 0xb7: "OP_RSHIFTNUM"
         case 0xb8: "OP_NOP9"
         case 0xb9: "OP_NOP10"
-        default: "OP_UNKNOWN\(rawValue)"
+        case 0xba...0xf9: "OP_UNKNOWN\(rawValue)"
+        case 0xfa: "OP_SMALLINTEGER"
+        case 0xfb: "OP_PUBKEYS"
+        case 0xfc: "OP_UNKNOWN252"
+        default: name
         }
     }
+
+    /// Parses canonical BRC-106 names, compact SASM names, and common SDK aliases.
+    public init?(asmName: String, dialect: ScriptASMDialect) {
+        let table = dialect == .brc106 ? Self.brcASMNameTable : Self.goSDKASMNameTable
+        guard let opcode = table[asmName] else { return nil }
+        self = opcode
+    }
+
+    private static let brcASMNameTable: [String: Opcode] = {
+        var names: [String: Opcode] = [:]
+        for raw in UInt16(UInt8.min)...UInt16(UInt8.max) {
+            let opcode = Opcode(rawValue: UInt8(raw))
+            names[opcode.name] = opcode
+            names[opcode.compactName] = opcode
+        }
+
+        let aliases: [String: Opcode] = [
+            "OP_0": .zero, "OP_ZERO": .zero, "0": .zero, "zero": .zero,
+            "OP_1": .one, "OP_ONE": .one, "1": .one, "one": .one,
+            "OP_BASE": .reserved, "base": .reserved,
+            "OP_CHECKLOCKTIMEVERIFY": .checkLockTimeVerify,
+            "checklocktimeverify": .checkLockTimeVerify,
+            "OP_CHECKSEQUENCEVERIFY": .checkSequenceVerify,
+            "checksequenceverify": .checkSequenceVerify,
+            "OP_LSHIFTNUM": .leftShiftNumber, "lshiftnum": .leftShiftNumber,
+            "OP_RSHIFTNUM": .rightShiftNumber, "rshiftnum": .rightShiftNumber,
+        ]
+        for (name, opcode) in aliases { names[name] = opcode }
+        return names
+    }()
+
+    private static let goSDKASMNameTable: [String: Opcode] = {
+        var names: [String: Opcode] = [:]
+        for raw in UInt16(UInt8.min)...UInt16(UInt8.max) {
+            let opcode = Opcode(rawValue: UInt8(raw))
+            names[opcode.goSDKName] = opcode
+            if !(0x5a...0x60).contains(opcode.rawValue) {
+                names[String(opcode.goSDKName.dropFirst(3)).lowercased()] = opcode
+            }
+        }
+        let aliases: [String: Opcode] = [
+            "OP_0": .zero, "OP_ZERO": .zero, "0": .zero, "zero": .zero,
+            "OP_1": .one, "OP_ONE": .one, "1": .one, "one": .one,
+            "OP_RESERVED": .reserved, "reserved": .reserved,
+            "OP_CHECKLOCKTIMEVERIFY": .checkLockTimeVerify,
+            "checklocktimeverify": .checkLockTimeVerify,
+            "OP_CHECKSEQUENCEVERIFY": .checkSequenceVerify,
+            "checksequenceverify": .checkSequenceVerify,
+            "OP_NOP4": .substring, "nop4": .substring,
+            "OP_NOP5": .left, "nop5": .left,
+            "OP_NOP6": .right, "nop6": .right,
+            "OP_NOP7": .leftShiftNumber, "nop7": .leftShiftNumber,
+            "OP_NOP8": .rightShiftNumber, "nop8": .rightShiftNumber,
+        ]
+        for (name, opcode) in aliases { names[name] = opcode }
+        return names
+    }()
 }

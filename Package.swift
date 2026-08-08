@@ -162,7 +162,7 @@ let package = Package(
         ),
         .testTarget(
             name: "BSVScriptTests",
-            dependencies: ["BSVScript"],
+            dependencies: ["BSVScript", "BSVCore", "BSVKeys"],
             exclude: ["README.md"]
         ),
         .testTarget(

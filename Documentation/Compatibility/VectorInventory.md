@@ -37,6 +37,7 @@ Dependency pins:
 | ECDSA verify | vendored Wycheproof Bitcoin/secp256k1 JSON | Apache-2.0 | P2; 463 valid/invalid cases; hash `1be8742064fec73d670339f0036dec56b21baa94cb2d8e0fbbb6fb480f733869`. |
 | DER/recovery/RFC6979 | Decred secp256k1 ECDSA tests and P256K binding tests | ISC / MIT | P2; strict DER, compact, recovery header/id, high-S normalization. |
 | Base58/Base58Check/WIF/address | `bitcoinsv/bsvutil` tests | ISC | Raw Base58 P1-B; checksum/key/address façades later. |
+| Script ASM and standard templates | Independently authored BRC-106/BRC-18 examples plus pinned Go differential queries | Original / oracle-only | Canonical `OP_FALSE`/`OP_TRUE`, aliases, push normalization, P2PK/P2PKH/P2SH, false-return parts, malformed and bounded input. No BRC repository text is copied because that repository has no identified license. |
 | Script number small corpus | btcd v0.24.2 `txscript/scriptnum_test.go` | ISC | BigNum concepts P1-D; production era-aware codec later. |
 
 Wycheproof provenance recorded by the selected dependencies identifies Apache

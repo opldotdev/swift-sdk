@@ -126,8 +126,8 @@ print(account.neutered.serialized)
   PBKDF2-HMAC-SHA512 seed derivation
 - BIP-32 extended private and public keys, child derivation, canonical paths,
   and xprv/xpub/tprv/tpub serialization
-- Bounded Bitcoin Script bytes, raw opcode identity, PUSHDATA parsing and
-  construction, signed-magnitude Script numbers, and standard script classifiers
+- Bounded Bitcoin Script bytes, BRC-106 ASM and compact SASM, raw opcode and
+  PUSHDATA parsing, signed-magnitude numbers, and P2PK/P2PKH/P2SH/BRC-18 templates
 - Bounded legacy transaction parsing and canonical serialization, outpoints,
   transaction IDs, coinbase recognition, and checked satoshi totals
 - Redacted default descriptions for mnemonics and extended private keys, with

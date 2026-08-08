@@ -100,6 +100,9 @@ supports exactly one version byte.
 | `base58check.encode` | `{payload,version}` | `{text}` |
 | `base58check.decode` | `{text}` | `{payload,version}` |
 | `big.umod` | `{dividend,divisor}` | `{value}` |
+| `script.asm.decode` | `{text}` | `{bytes}` (Go SDK canonical ASM parser) |
+| `script.asm.encode` | `{bytes}` | `{text}` (Go SDK canonical ASM formatter) |
+| `script.asm.names` | `{}` | `{names}` (all 256 pinned Go SDK opcode names in byte order) |
 | `scriptnum.encode` | `{value,era}` | `{bytes}` |
 | `scriptnum.decode` | `{bytes,era,minimal,maxBytes}` | `{value}` |
 | `transaction.decode` | `{bytes}` | `{bytes,version,inputs,outputs,lockTime,txid}` |

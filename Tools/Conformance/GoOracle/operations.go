@@ -20,6 +20,7 @@ import (
 	base58 "github.com/bsv-blockchain/go-sdk/compat/base58"
 	drbgprimitive "github.com/bsv-blockchain/go-sdk/primitives/drbg"
 	primitives "github.com/bsv-blockchain/go-sdk/primitives/hash"
+	scriptpkg "github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/script/interpreter"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-sdk/util"
@@ -282,6 +283,45 @@ func execute(req request, meta metadata) (result any, err error) {
 		return encodeScriptNumber(req.Args)
 	case "scriptnum.decode":
 		return decodeScriptNumber(req.Args)
+	case "script.asm.decode":
+		var args struct {
+			Text string `json:"text"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		script, err := scriptpkg.NewFromASM(args.Text)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"bytes": hex.EncodeToString(script.Bytes())}, nil
+	case "script.asm.encode":
+		var args struct {
+			Bytes string `json:"bytes"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		script := scriptpkg.NewFromBytes(data)
+		return map[string]string{"text": script.ToASM()}, nil
+	case "script.asm.names":
+		var args struct{}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		names := make([]string, 256)
+		for raw := 0; raw < 256; raw++ {
+			name, present := scriptpkg.OpCodeValues[byte(raw)]
+			if !present {
+				return nil, categorizedError{"internal", "pinned Go opcode name table is incomplete"}
+			}
+			names[raw] = name
+		}
+		return map[string]any{"names": names}, nil
 	case "transaction.decode":
 		var args struct {
 			Bytes string `json:"bytes"`

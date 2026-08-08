@@ -56,6 +56,8 @@ func TestKnownStandardValues(t *testing.T) {
 		{"big.umod", `{"dividend":"-5","divisor":"3"}`, map[string]string{"value": "1"}},
 		{"scriptnum.encode", `{"value":"-128","era":"postGenesis"}`, map[string]string{"bytes": "8080"}},
 		{"scriptnum.decode", `{"bytes":"8080","era":"postGenesis","minimal":true,"maxBytes":"4"}`, map[string]string{"value": "-128"}},
+		{"script.asm.decode", `{"text":"OP_DUP OP_HASH160 0000000000000000000000000000000000000000 OP_EQUALVERIFY OP_CHECKSIG"}`, map[string]string{"bytes": "76a914000000000000000000000000000000000000000088ac"}},
+		{"script.asm.encode", `{"bytes":"0051b3ff"}`, map[string]string{"text": "OP_FALSE OP_TRUE OP_SUBSTR OP_INVALIDOPCODE"}},
 		{"transaction.decode", `{"bytes":"01000000000000000000"}`, map[string]string{
 			"bytes": "01000000000000000000", "inputs": "0", "lockTime": "0",
 			"outputs": "0", "txid": "d21633ba23f70118185227be58a63527675641ad37967e2aa461559f577aec43", "version": "1",
@@ -115,13 +117,63 @@ func TestBase64DecodePolicies(t *testing.T) {
 	}
 }
 
+func TestScriptASMNamesAndArtifacts(t *testing.T) {
+	result, err := execute(testRequest("script.asm.names", `{}`), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, ok := result.(map[string]any)["names"].([]string)
+	if !ok || len(names) != 256 {
+		t.Fatalf("unexpected opcode names result: %#v", result)
+	}
+	for raw, want := range map[int]string{
+		0x00: "OP_FALSE", 0x50: "OP_BASE", 0x51: "OP_TRUE",
+		0xb1: "OP_NOP2", 0xb2: "OP_NOP3", 0xb3: "OP_SUBSTR",
+		0xb6: "OP_LSHIFTNUM", 0xb7: "OP_RSHIFTNUM", 0xb8: "OP_NOP9",
+		0xb9: "OP_NOP10", 0xfa: "OP_SMALLINTEGER", 0xfb: "OP_PUBKEYS",
+		0xfc: "OP_UNKNOWN252", 0xfd: "OP_PUBKEYHASH", 0xfe: "OP_PUBKEY",
+		0xff: "OP_INVALIDOPCODE",
+	} {
+		if names[raw] != want {
+			t.Fatalf("opcode 0x%02x: got %q, want %q", raw, names[raw], want)
+		}
+	}
+
+	for _, tc := range []struct {
+		op, args string
+		want     any
+	}{
+		{"script.asm.encode", `{"bytes":"4c"}`, map[string]string{"text": ""}},
+		{"script.asm.encode", `{"bytes":"4c00"}`, map[string]string{"text": ""}},
+		{"script.asm.encode", `{"bytes":"4c01aa"}`, map[string]string{"text": "aa"}},
+		{"script.asm.decode", `{"text":"aa"}`, map[string]string{"bytes": "01aa"}},
+		{"script.asm.decode", `{"text":""}`, map[string]string{"bytes": ""}},
+		{"script.asm.decode", `{"text":"OP_PUSHDATA1"}`, map[string]string{"bytes": ""}},
+	} {
+		got, err := execute(testRequest(tc.op, tc.args), metadata{})
+		if err != nil {
+			t.Fatalf("%s %s: %v", tc.op, tc.args, err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s %s: got %#v, want %#v", tc.op, tc.args, got, tc.want)
+		}
+	}
+
+	for _, text := range []string{"not-an-opcode", "abc"} {
+		_, err := execute(testRequest("script.asm.decode", `{"text":"`+text+`"}`), metadata{})
+		if err == nil {
+			t.Fatalf("expected decode error for %q", text)
+		}
+	}
+}
+
 func TestCompleteOperationRegistry(t *testing.T) {
 	expected := []string{
 		"base58.decode", "base58.encode", "base58check.decode", "base58check.encode",
 		"base64.decode", "base64.encode", "big.umod", "bytes.reverse", "digest32.display",
 		"digest32.parse", "drbg.generate", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "metadata",
-		"scriptnum.decode", "scriptnum.encode", "transaction.decode", "u16.decode", "u16.encode",
+		"script.asm.decode", "script.asm.encode", "script.asm.names", "scriptnum.decode", "scriptnum.encode", "transaction.decode", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
 	}
@@ -156,6 +208,9 @@ func TestEveryOperationHasDeterministicSuccess(t *testing.T) {
 		testRequest("big.umod", `{"dividend":"-5","divisor":"3"}`),
 		testRequest("scriptnum.encode", `{"value":"-128","era":"postGenesis"}`),
 		testRequest("scriptnum.decode", `{"bytes":"8080","era":"postGenesis","minimal":true,"maxBytes":"4"}`),
+		testRequest("script.asm.decode", `{"text":"OP_DUP OP_HASH160 0000000000000000000000000000000000000000 OP_EQUALVERIFY OP_CHECKSIG"}`),
+		testRequest("script.asm.encode", `{"bytes":"0051b3ff"}`),
+		testRequest("script.asm.names", `{}`),
 		testRequest("transaction.decode", `{"bytes":"01000000000000000000"}`),
 	}
 	for _, tc := range cases {

@@ -241,6 +241,16 @@ struct GoOracleProtocolTests {
             try check("big.umod", ["dividend": .string("-5"), "divisor": .string("3")], .object(["value": .string("1")]))
             try check("scriptnum.encode", ["value": .string("-128"), "era": .string("postGenesis")], .object(["bytes": .string("8080")]))
             try check(
+                "script.asm.decode",
+                ["text": .string("OP_DUP OP_HASH160 0000000000000000000000000000000000000000 OP_EQUALVERIFY OP_CHECKSIG")],
+                .object(["bytes": .string("76a914000000000000000000000000000000000000000088ac")])
+            )
+            try check(
+                "script.asm.encode",
+                ["bytes": .string("0051b3ff")],
+                .object(["text": .string("OP_FALSE OP_TRUE OP_SUBSTR OP_INVALIDOPCODE")])
+            )
+            try check(
                 "transaction.decode",
                 ["bytes": .string("01000000000000000000")],
                 .object([

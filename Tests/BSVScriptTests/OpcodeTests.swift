@@ -31,12 +31,32 @@ struct OpcodeTests {
 
     @Test("Canonical names cover active and unknown opcodes")
     func names() {
-        #expect(Opcode.zero.name == "OP_0")
+        #expect(Opcode.zero.name == "OP_FALSE")
+        #expect(Opcode.one.name == "OP_TRUE")
         #expect(Opcode(rawValue: 20).name == "OP_DATA_20")
         #expect(Opcode.dup.name == "OP_DUP")
         #expect(Opcode.hash160.name == "OP_HASH160")
         #expect(Opcode.checkSig.name == "OP_CHECKSIG")
         #expect(Opcode.substring.name == "OP_SUBSTR")
-        #expect(Opcode(rawValue: 0xff).name == "OP_UNKNOWN255")
+        #expect(Opcode(rawValue: 0xff).name == "OP_INVALIDOPCODE")
+    }
+
+    @Test("Canonical, compact, and compatibility names parse")
+    func parsingNames() {
+        #expect(Opcode(asmName: "OP_FALSE", dialect: .brc106) == .zero)
+        #expect(Opcode(asmName: "OP_0", dialect: .brc106) == .zero)
+        #expect(Opcode(asmName: "false", dialect: .brc106) == .zero)
+        #expect(Opcode(asmName: "OP_TRUE", dialect: .brc106) == .one)
+        #expect(Opcode(asmName: "OP_1", dialect: .brc106) == .one)
+        #expect(Opcode(asmName: "dup", dialect: .brc106) == .dup)
+        #expect(Opcode(asmName: "OP_NOP4", dialect: .brc106) == .leftShiftNumber)
+        #expect(Opcode(asmName: "OP_NOP4", dialect: .goSDK) == .substring)
+        #expect(Opcode(asmName: "OP_INVALIDOPCODE", dialect: .brc106) == Opcode(rawValue: 0xff))
+        #expect(Opcode(rawValue: 0xb6).goSDKName == "OP_LSHIFTNUM")
+        #expect(Opcode.ten.compactName == "OP_10")
+        #expect(Opcode.sixteen.compactName == "OP_16")
+        #expect(Opcode(asmName: "not-an-opcode", dialect: .brc106) == nil)
+        #expect(Opcode(asmName: "FALSE", dialect: .brc106) == nil)
+        #expect(Opcode(asmName: "op_false", dialect: .brc106) == nil)
     }
 }
