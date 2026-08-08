@@ -92,7 +92,7 @@ differentials, and Fable review.
 
 ## Phase 6: Merkle proofs and transaction envelopes
 
-- Merkle paths and BUMP.
+- Merkle paths and BUMP. (Accepted)
 - BEEF and Atomic BEEF.
 - SPV validation using transaction-owned chain-tracker protocols.
 - Transaction graph operations and proof propagation.

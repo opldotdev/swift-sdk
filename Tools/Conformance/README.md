@@ -107,6 +107,9 @@ supports exactly one version byte.
 | `scriptnum.decode` | `{bytes,era,minimal,maxBytes}` | `{value}` |
 | `transaction.decode` | `{bytes}` | `{bytes,version,inputs,outputs,lockTime,txid}` |
 | `transaction.fee` | `{bytes,satoshisPerKilobyte,unlockingByteCounts}` | `{fee}` using actual nonempty scripts or one decimal-string/null estimate per input |
+| `transaction.merklepath.combine` | `{left,right}` | `{bytes}` for the combined canonical BRC-74 path |
+| `transaction.merklepath.decode` | `{bytes}` | `{bytes,blockHeight,treeHeight}` for canonical BRC-74 binary |
+| `transaction.merklepath.root` | `{bytes,txid}` | `{root}` using display-order txid/root strings |
 | `transaction.p2pkh.sign` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash,privateKey}` | `{unlockingScript}` using the pinned Go signer |
 | `transaction.sighash` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash}` | `{preimage,digest}` for the pinned Go replay-protected algorithm |
 

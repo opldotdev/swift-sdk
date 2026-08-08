@@ -133,6 +133,8 @@ print(account.neutered.serialized)
   PUSHDATA parsing, signed-magnitude numbers, and P2PK/P2PKH/P2SH/BRC-18 templates
 - Bounded legacy transaction parsing and canonical serialization, outpoints,
   transaction IDs, coinbase recognition, and checked satoshi totals
+- Bounded BRC-74 BUMP binary and strict JSON codecs, Merkle-root computation,
+  duplicate branches, compound paths, and conflict-checked proof merging
 - Redacted default descriptions for mnemonics and extended private keys, with
   explicitly named properties for intentional secret export
 - Swift 6 value semantics, structured errors, and `Sendable` public values

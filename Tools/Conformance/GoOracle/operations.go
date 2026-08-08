@@ -388,6 +388,75 @@ func execute(req request, meta metadata) (result any, err error) {
 			return nil, err
 		}
 		return map[string]string{"fee": strconv.FormatUint(fee, 10)}, nil
+	case "transaction.merklepath.combine":
+		var args struct {
+			Left  string `json:"left"`
+			Right string `json:"right"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		leftBytes, err := protocolHex(args.Left)
+		if err != nil {
+			return nil, err
+		}
+		rightBytes, err := protocolHex(args.Right)
+		if err != nil {
+			return nil, err
+		}
+		left, err := transaction.NewMerklePathFromBinary(leftBytes)
+		if err != nil {
+			return nil, err
+		}
+		right, err := transaction.NewMerklePathFromBinary(rightBytes)
+		if err != nil {
+			return nil, err
+		}
+		if err := left.Combine(right); err != nil {
+			return nil, err
+		}
+		return map[string]string{"bytes": hex.EncodeToString(left.Bytes())}, nil
+	case "transaction.merklepath.decode":
+		var args struct {
+			Bytes string `json:"bytes"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		path, err := transaction.NewMerklePathFromBinary(data)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{
+			"blockHeight": strconv.FormatUint(uint64(path.BlockHeight), 10),
+			"bytes":       hex.EncodeToString(path.Bytes()),
+			"treeHeight":  strconv.Itoa(len(path.Path)),
+		}, nil
+	case "transaction.merklepath.root":
+		var args struct {
+			Bytes string `json:"bytes"`
+			Txid  string `json:"txid"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		path, err := transaction.NewMerklePathFromBinary(data)
+		if err != nil {
+			return nil, err
+		}
+		root, err := path.ComputeRootHex(&args.Txid)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"root": root}, nil
 	case "transaction.sighash":
 		var args struct {
 			Bytes          string `json:"bytes"`
