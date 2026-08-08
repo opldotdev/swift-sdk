@@ -156,7 +156,7 @@ public enum PushDrop {
 
     private static let publicKeyLockByteCount = 35
 
-    private static func preflight(fields: [[UInt8]], limits: PushDropLimits) throws {
+    package static func preflight(fields: [[UInt8]], limits: PushDropLimits) throws {
         guard fields.count <= limits.maximumFieldCount else {
             throw PushDropError.fieldCountExceedsLimit(
                 actual: fields.count,

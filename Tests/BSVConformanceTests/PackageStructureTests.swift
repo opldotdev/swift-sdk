@@ -77,7 +77,7 @@ struct PackageStructureTests {
         try expectTarget(
             "BSVWallet",
             in: manifest,
-            dependencies: ["BSVCore", "BSVCrypto", "BSVKeys", "BSVTransaction"]
+            dependencies: ["BSVCore", "BSVCrypto", "BSVKeys", "BSVScript", "BSVTransaction"]
         )
         try expectTarget(
             "BSVAuth",

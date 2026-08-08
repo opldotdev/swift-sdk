@@ -11,6 +11,12 @@ public struct TransactionInput: Hashable, Sendable {
     /// public-key push occupy at most 107 bytes in total.
     public static let payToPublicKeyHashUnlockingScriptByteCount = 107
 
+    /// Maximum size of a canonical PushDrop unlocking script.
+    ///
+    /// A 71-byte DER signature, the hash-type byte, and the push operation use
+    /// at most 73 bytes.
+    public static let pushDropUnlockingScriptByteCount = 73
+
     public var previousOutput: Outpoint
     public var unlockingScript: Script
     public var sequence: UInt32

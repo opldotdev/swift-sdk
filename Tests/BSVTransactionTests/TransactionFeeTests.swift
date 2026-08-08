@@ -241,6 +241,33 @@ struct TransactionFeeTests {
             $0 <= TransactionInput.payToPublicKeyHashUnlockingScriptByteCount
         })
     }
+
+    @Test("PushDrop input construction projects a 73-byte unlocking script")
+    func pushDropProjection() throws {
+        let key = try PrivateKey([UInt8](repeating: 0, count: 31) + [1])
+        let lockingScript = try PushDrop.lockingScript(
+            fields: [[1]],
+            publicKey: key.publicKey
+        )
+        let unspent = UnspentTransactionOutput(
+            transactionID: try TransactionID(
+                wireBytes: [UInt8](repeating: 6, count: 32)
+            ),
+            outputIndex: 2,
+            satoshis: 20_000,
+            lockingScript: lockingScript
+        )
+        var transaction = Transaction()
+        let index = try transaction.addPushDropInput(spending: unspent)
+
+        #expect(index == 0)
+        #expect(transaction.inputs[0].sourceOutput == unspent.output)
+        #expect(
+            transaction.inputs[0].estimatedUnlockingScriptByteCount
+                == TransactionInput.pushDropUnlockingScriptByteCount
+        )
+        #expect(TransactionInput.pushDropUnlockingScriptByteCount == 73)
+    }
 }
 
 private func feeLimits() throws -> TransactionLimits {

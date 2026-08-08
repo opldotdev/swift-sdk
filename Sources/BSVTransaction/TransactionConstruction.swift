@@ -38,6 +38,20 @@ public extension Transaction {
         )
     }
 
+    /// Adds a PushDrop input with its safe maximum pre-signing size.
+    @discardableResult
+    mutating func addPushDropInput(
+        spending unspentOutput: UnspentTransactionOutput,
+        sequence: UInt32 = TransactionInput.finalSequence
+    ) throws -> Int {
+        try addInput(
+            spending: unspentOutput,
+            sequence: sequence,
+            estimatedUnlockingScriptByteCount:
+                TransactionInput.pushDropUnlockingScriptByteCount
+        )
+    }
+
     mutating func addOutput(_ output: TransactionOutput) {
         outputs.append(output)
     }
