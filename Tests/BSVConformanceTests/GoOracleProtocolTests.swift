@@ -67,12 +67,16 @@ struct GoOracleProtocolTests {
     func startupDeadline() throws {
         let script = try fakeOracle(metadata: validMetadata(), serve: .success, metadataHang: true)
         var configuration = testConfiguration(executable: script)
-        configuration.deadline = 2
+        configuration.deadline = 10
         configuration.startupDeadline = 0.2
         configuration.required = true
         let started = Date()
         #expect(throws: GoOracleClientError.timeout) { try GoOracleClient.connect(configuration: configuration) }
-        #expect(Date().timeIntervalSince(started) < 1.5)
+        // The client may spend up to two seconds terminating an unresponsive
+        // child after the 0.2-second startup deadline expires. Keep enough
+        // scheduler tolerance for loaded Linux runners while still proving
+        // that the independent 10-second request deadline was not used.
+        #expect(Date().timeIntervalSince(started) < 3.5)
     }
 
     @Test("Framing and normalized operation errors decode")
@@ -142,7 +146,9 @@ struct GoOracleProtocolTests {
         #expect(throws: GoOracleClientError.timeout) {
             try client.request(id: "one", operation: "metadata", arguments: [:])
         }
-        #expect(Date().timeIntervalSince(started) < 2.5)
+        // The bound is the 0.5-second request deadline plus the documented
+        // two-second termination grace and scheduler tolerance.
+        #expect(Date().timeIntervalSince(started) < 3.5)
         #expect(throws: GoOracleClientError.timeout) {
             try client.request(id: "two", operation: "metadata", arguments: [:])
         }

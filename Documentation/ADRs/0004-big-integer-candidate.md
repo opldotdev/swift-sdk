@@ -1,6 +1,6 @@
 # ADR 0004: Arbitrary-precision integer dependency
 
-- Status: Provisionally accepted; Linux CI scale gate pending
+- Status: Accepted
 - Date: 2026-08-07
 
 ## Context
@@ -84,9 +84,10 @@ The dependency may be added only after a Phase 1 packet demonstrates:
   32 MiB minus one/exact, with a separate limit-plus-one pre-construction gate.
 - `Tools/Conformance/check-public-api.sh` extracts every public module's symbol
   graph and fails if `BigInt` or `BigUInt` appears.
-- `.github/workflows/ci.yml` owns the remaining Swift 6.1 Linux test, public
-  API, and 768 MiB memory-capped release scale evidence. This ADR becomes fully
-  accepted only after that job passes on the shipped revision.
+- The shipped revision passed the Swift 6.1 Linux release scale suite in a
+  768 MiB memory-capped container, including the 750,000-byte and 32 MiB
+  boundaries and the pre-construction rejection gate. See GitHub Actions run
+  [31229942005](https://github.com/opldotdev/swift-sdk/actions/runs/31229942005).
 
 ## Timing side-channel position
 

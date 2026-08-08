@@ -2,7 +2,7 @@
 
 Status: P0 complete; foundational P1/P2 crypto and BIP-32/BIP-39 plus legacy
 P3 key-format packets accepted after independent and Fable review. The BigNum
-and initial Script foundation is implemented and awaiting its Linux CI gate.
+and initial Script foundation is accepted on macOS and memory-capped Linux CI.
 
 Each milestone ends with passing conformance tests, an updated compatibility
 matrix, and an advisor review at architectural or security-sensitive boundaries.
@@ -25,8 +25,8 @@ Milestone completion is based on behavior, not file count.
 Accepted checkpoint: bounded bytes/endian operations, CompactSize/VarBytes,
 fixed-width values and transaction-ID byte order, Hex, strict Base64, raw
 Bitcoin Base58, Base58Check, SHA-2, HMAC, RIPEMD-160, and HASH160. The bounded
-BigInt adapter and macOS 32 MiB resource gates are accepted provisionally;
-Linux CI remains the final dependency gate.
+BigInt adapter and 32 MiB resource gates are accepted on macOS and in the
+768 MiB memory-capped Linux CI job.
 
 - Bounded byte reader/writer and endian primitives.
 - Hex, Bitcoin VarInt, Base58, and Base58Check.
