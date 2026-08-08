@@ -1,5 +1,10 @@
 /// A private key encoded in Bitcoin Wallet Import Format (WIF).
-public struct WalletImportFormat: Hashable, Sendable, CustomStringConvertible {
+public struct WalletImportFormat:
+    Hashable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible,
+    CustomReflectable {
     public let privateKey: PrivateKey
     public let network: BitcoinNetwork
     public let isCompressed: Bool
@@ -50,7 +55,7 @@ public struct WalletImportFormat: Hashable, Sendable, CustomStringConvertible {
     }
 
     /// The canonical Base58Check WIF encoding.
-    public var description: String {
+    public var encoded: String {
         var payload = [wifVersion]
         payload.append(contentsOf: privateKey.bytes)
         if isCompressed {
@@ -58,6 +63,14 @@ public struct WalletImportFormat: Hashable, Sendable, CustomStringConvertible {
         }
         return Base58Check.encode(payload)
     }
+
+    /// A redacted description suitable for interpolation and diagnostic logging.
+    /// Use ``encoded`` only when intentionally exporting the private key.
+    public var description: String { "<redacted wallet import format>" }
+
+    public var debugDescription: String { description }
+
+    public var customMirror: Mirror { Mirror(reflecting: description) }
 
     private var wifVersion: UInt8 {
         switch network {

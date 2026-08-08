@@ -4,7 +4,12 @@ import P256K
 ///
 /// Swift arrays do not guarantee zeroization, and accessing ``bytes`` creates
 /// another copy. Avoid retaining unnecessary copies of long-lived private keys.
-public struct PrivateKey: Hashable, Sendable {
+public struct PrivateKey:
+    Hashable,
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible,
+    CustomReflectable {
     private let privateBytes: [UInt8]
     private let derivedPublicKey: PublicKey
 
@@ -34,6 +39,13 @@ public struct PrivateKey: Hashable, Sendable {
     public var publicKey: PublicKey {
         derivedPublicKey
     }
+
+    /// A redacted description suitable for interpolation and diagnostic logging.
+    public var description: String { "<redacted private key>" }
+
+    public var debugDescription: String { description }
+
+    public var customMirror: Mirror { Mirror(reflecting: description) }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.derivedPublicKey == rhs.derivedPublicKey

@@ -48,6 +48,24 @@ struct Secp256k1PrivateKeyTests {
         #expect(Set([key, reparsed, other]).count == 2)
     }
 
+    @Test("diagnostics and reflection redact the private scalar")
+    func diagnosticRedaction() throws {
+        let secretByte: UInt8 = 0xab
+        let key = try PrivateKey([UInt8](repeating: secretByte, count: 32))
+        let described = String(describing: key)
+        let reflected = String(reflecting: key)
+        var dumped = ""
+        dump(key, to: &dumped)
+
+        #expect(described == "<redacted private key>")
+        #expect(reflected == "<redacted private key>")
+        #expect(dumped.contains("<redacted private key>"))
+        #expect(Mirror(reflecting: key).children.isEmpty)
+        for diagnostic in [described, reflected, dumped] {
+            #expect(!diagnostic.contains(String(secretByte)))
+        }
+    }
+
     @Test("scalar one derives the SEC1 generator point")
     func generatorDerivation() throws {
         var scalar = [UInt8](repeating: 0, count: 32)

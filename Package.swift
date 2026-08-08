@@ -74,6 +74,7 @@ let package = Package(
             name: "BSVKeys",
             dependencies: [
                 "BSVCore",
+                "BSVBigNum",
                 "BSVCrypto",
                 .product(name: "P256K", package: "swift-secp256k1"),
             ]

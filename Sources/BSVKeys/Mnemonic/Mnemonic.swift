@@ -26,7 +26,7 @@ public enum MnemonicError: Error, Equatable, Sendable {
 /// bytes, and parsing stops after 24 words or eight scalars in a word. Output
 /// always uses one ASCII space.
 public struct Mnemonic: Hashable, Sendable, CustomStringConvertible,
-    CustomDebugStringConvertible {
+    CustomDebugStringConvertible, CustomReflectable {
     private static let allowedEntropyByteCounts: Set<Int> = [16, 20, 24, 28, 32]
     private static let allowedWordCounts: Set<Int> = [12, 15, 18, 21, 24]
     private static let maximumPhraseUTF8ByteCount = 4_096
@@ -50,6 +50,8 @@ public struct Mnemonic: Hashable, Sendable, CustomStringConvertible,
     public var description: String { "<redacted mnemonic>" }
 
     public var debugDescription: String { description }
+
+    public var customMirror: Mirror { Mirror(reflecting: description) }
 
     /// Creates the exact English BIP-39 mnemonic for supported entropy.
     public init(entropy: [UInt8]) throws {

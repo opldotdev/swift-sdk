@@ -7,7 +7,7 @@ import BSVCrypto
 /// Swift arrays do not guarantee zeroization; avoid retaining unnecessary copies
 /// of seeds, private keys, and derived HMAC input.
 public struct ExtendedPrivateKey: Hashable, Sendable, CustomStringConvertible,
-    CustomDebugStringConvertible {
+    CustomDebugStringConvertible, CustomReflectable {
     public let key: PrivateKey
     public let chainCode: Hash256
     public let depth: UInt8
@@ -108,6 +108,8 @@ public struct ExtendedPrivateKey: Hashable, Sendable, CustomStringConvertible,
     public var description: String { "<redacted extended private key>" }
 
     public var debugDescription: String { description }
+
+    public var customMirror: Mirror { Mirror(reflecting: description) }
 
     /// Derives the exact serialized child number without retrying another index.
     public func derived(at childNumber: UInt32) throws -> Self {

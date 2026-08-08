@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -197,15 +199,466 @@ func TestScriptASMNamesAndArtifacts(t *testing.T) {
 func TestCompleteOperationRegistry(t *testing.T) {
 	expected := []string{
 		"base58.decode", "base58.encode", "base58check.decode", "base58check.encode",
-		"base64.decode", "base64.encode", "big.umod", "brc42.private.derive", "brc42.public.derive", "brc94.generate", "brc94.verify", "bytes.reverse", "digest32.display",
-		"digest32.parse", "drbg.generate", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
-		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "metadata",
+		"base64.decode", "base64.encode", "big.umod", "brc42.private.derive", "brc42.public.derive", "brc94.generate", "brc94.verify", "bsm.recover", "bsm.sign", "bytes.reverse", "digest32.display",
+		"digest32.parse", "drbg.generate", "ecies.bitcore.decrypt", "ecies.bitcore.encrypt", "ecies.electrum.decrypt", "ecies.electrum.encrypt", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
+		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "keyshares.recover", "keyshares.split", "metadata",
 		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.execute", "scriptnum.decode", "scriptnum.encode", "spv.verify", "symmetric.decrypt", "symmetric.encrypt", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
 	}
 	if !reflect.DeepEqual(operations, expected) {
 		t.Fatalf("registry mismatch\n got: %v\nwant: %v", operations, expected)
+	}
+}
+
+func TestKeySharesSplitRecoverAndSubsets(t *testing.T) {
+	privateKey := strings.Repeat("00", 31) + "2a"
+	for _, tc := range []struct {
+		threshold, shareCount int
+		subsets               [][]int
+	}{
+		{2, 3, [][]int{{0, 1}, {0, 2}, {1, 2}}},
+		{3, 5, [][]int{{0, 1, 2}, {0, 2, 4}, {1, 3, 4}}},
+	} {
+		t.Run(fmt.Sprintf("%d-of-%d", tc.threshold, tc.shareCount), func(t *testing.T) {
+			shares := splitSharesForTest(t, privateKey, tc.threshold, tc.shareCount)
+			if len(shares) != tc.shareCount {
+				t.Fatalf("got %d shares, want %d", len(shares), tc.shareCount)
+			}
+			for index, subsetIndexes := range tc.subsets {
+				subset := make([]string, len(subsetIndexes))
+				for i, shareIndex := range subsetIndexes {
+					subset[i] = shares[shareIndex]
+				}
+				got := recoverSharesForTest(t, fmt.Sprintf("subset-%d", index), subset)
+				if got != privateKey {
+					t.Fatalf("recovered key got %s, want %s", got, privateKey)
+				}
+			}
+		})
+	}
+}
+
+func TestKeySharesStrictBoundsAndFailures(t *testing.T) {
+	privateKey := strings.Repeat("00", 31) + "01"
+	for _, tc := range []struct {
+		name, operation, arguments, category string
+	}{
+		{"threshold below minimum", "keyshares.split", `{"privateKey":"` + privateKey + `","threshold":"1","shareCount":"2"}`, "invalidEncoding"},
+		{"threshold above maximum", "keyshares.split", `{"privateKey":"` + privateKey + `","threshold":"21","shareCount":"21"}`, "invalidEncoding"},
+		{"count below minimum", "keyshares.split", `{"privateKey":"` + privateKey + `","threshold":"2","shareCount":"1"}`, "invalidEncoding"},
+		{"count above maximum", "keyshares.split", `{"privateKey":"` + privateKey + `","threshold":"2","shareCount":"21"}`, "invalidEncoding"},
+		{"threshold exceeds count", "keyshares.split", `{"privateKey":"` + privateKey + `","threshold":"3","shareCount":"2"}`, "invalidEncoding"},
+		{"noncanonical threshold", "keyshares.split", `{"privateKey":"` + privateKey + `","threshold":"02","shareCount":"3"}`, "invalidEncoding"},
+		{"numeric threshold", "keyshares.split", `{"privateKey":"` + privateKey + `","threshold":2,"shareCount":"3"}`, "invalidEncoding"},
+		{"unknown split argument", "keyshares.split", `{"privateKey":"` + privateKey + `","threshold":"2","shareCount":"3","extra":true}`, "invalidEncoding"},
+		{"missing split argument", "keyshares.split", `{"privateKey":"` + privateKey + `","threshold":"2"}`, "invalidEncoding"},
+		{"short private key", "keyshares.split", `{"privateKey":"01","threshold":"2","shareCount":"3"}`, "invalidLength"},
+		{"uppercase private key", "keyshares.split", `{"privateKey":"` + strings.Repeat("00", 31) + `0A","threshold":"2","shareCount":"3"}`, "invalidEncoding"},
+		{"zero private key", "keyshares.split", `{"privateKey":"` + strings.Repeat("00", 32) + `","threshold":"2","shareCount":"3"}`, "scalar"},
+		{"insufficient shares", "keyshares.recover", `{"shares":["invalid"]}`, "invalidLength"},
+		{"oversized share", "keyshares.recover", `{"shares":["` + strings.Repeat("z", 129) + `","invalid"]}`, "resourceLimit"},
+		{"malformed shares", "keyshares.recover", `{"shares":["invalid","invalid-2"]}`, "invalidEncoding"},
+		{"empty share field", "keyshares.recover", `{"shares":["2..2.00000000","3.3.2.00000000"]}`, "invalidEncoding"},
+		{"extra share field", "keyshares.recover", `{"shares":["2.2.2.00000000.extra","3.3.2.00000000"]}`, "invalidEncoding"},
+		{"unknown recover argument", "keyshares.recover", `{"shares":["invalid","invalid-2"],"extra":true}`, "invalidEncoding"},
+		{"missing recover argument", "keyshares.recover", `{}`, "invalidEncoding"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := execute(testRequest(tc.operation, tc.arguments), metadata{})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			got := normalizeError(err).Category
+			if got != tc.category {
+				t.Fatalf("got %s, want %s (%v)", got, tc.category, err)
+			}
+			if got == "oraclePanic" {
+				t.Fatalf("malformed request panicked: %v", err)
+			}
+		})
+	}
+
+	shares := splitSharesForTest(t, privateKey, 2, 3)
+	arguments, err := json.Marshal(map[string]any{"shares": []string{shares[0], shares[0]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = execute(testRequest("keyshares.recover", string(arguments)), metadata{})
+	if err == nil || normalizeError(err).Category != "invalidEncoding" {
+		t.Fatalf("duplicate shares got %v, want invalidEncoding", err)
+	}
+
+	twentyOne := make([]string, 21)
+	for index := range twentyOne {
+		twentyOne[index] = fmt.Sprintf("invalid-%d", index)
+	}
+	arguments, err = json.Marshal(map[string]any{"shares": twentyOne})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = execute(testRequest("keyshares.recover", string(arguments)), metadata{})
+	if err == nil || normalizeError(err).Category != "invalidLength" {
+		t.Fatalf("excess shares got %v, want invalidLength", err)
+	}
+}
+
+func splitSharesForTest(t *testing.T, privateKey string, threshold, shareCount int) []string {
+	t.Helper()
+	result, err := execute(testRequest(
+		"keyshares.split",
+		fmt.Sprintf(
+			`{"privateKey":"%s","threshold":"%d","shareCount":"%d"}`,
+			privateKey,
+			threshold,
+			shareCount,
+		),
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("split result has unexpected type %T", result)
+	}
+	shares, ok := fields["shares"].([]string)
+	if !ok {
+		t.Fatalf("split shares have unexpected type %T", fields["shares"])
+	}
+	return shares
+}
+
+func recoverSharesForTest(t *testing.T, name string, shares []string) string {
+	t.Helper()
+	arguments, err := json.Marshal(map[string]any{"shares": shares})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := execute(testRequest("keyshares.recover", string(arguments)), metadata{})
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	fields, ok := result.(map[string]string)
+	if !ok {
+		t.Fatalf("recover result has unexpected type %T", result)
+	}
+	return fields["privateKey"]
+}
+
+func TestBitcoinSignedMessageDeterministicSignAndRecover(t *testing.T) {
+	privateKey := strings.Repeat("00", 31) + "01"
+	message := "6f7261636c652d62736d"
+	publicKey := "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+	cases := []struct {
+		name       string
+		compressed bool
+		signature  string
+	}{
+		{
+			name:       "compressed",
+			compressed: true,
+			signature:  "20643e48c5d55f7ff53d73c8079b03ac226f1520abe523fa1a783aa77aef056f22405495163cd405dc68f4fd9f074450a79bcfb1b8e72b1b46f49bf0d2cd9d3c7f",
+		},
+		{
+			name:       "uncompressed",
+			compressed: false,
+			signature:  "1c643e48c5d55f7ff53d73c8079b03ac226f1520abe523fa1a783aa77aef056f22405495163cd405dc68f4fd9f074450a79bcfb1b8e72b1b46f49bf0d2cd9d3c7f",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := fmt.Sprintf(
+				`{"privateKey":"%s","message":"%s","compressed":%t}`,
+				privateKey,
+				message,
+				tc.compressed,
+			)
+			wantSignature := map[string]string{"signature": tc.signature}
+			for range 2 {
+				got, err := execute(testRequest("bsm.sign", args), metadata{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(got, wantSignature) {
+					t.Fatalf("got %#v, want %#v", got, wantSignature)
+				}
+			}
+
+			got, err := execute(testRequest(
+				"bsm.recover",
+				fmt.Sprintf(`{"signature":"%s","message":"%s"}`, tc.signature, message),
+			), metadata{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantRecovery := map[string]any{
+				"publicKey":  publicKey,
+				"compressed": tc.compressed,
+			}
+			if !reflect.DeepEqual(got, wantRecovery) {
+				t.Fatalf("got %#v, want %#v", got, wantRecovery)
+			}
+		})
+	}
+}
+
+func TestBitcoinSignedMessageStrictArguments(t *testing.T) {
+	privateKey := strings.Repeat("00", 31) + "01"
+	validSignature := "20643e48c5d55f7ff53d73c8079b03ac226f1520abe523fa1a783aa77aef056f22405495163cd405dc68f4fd9f074450a79bcfb1b8e72b1b46f49bf0d2cd9d3c7f"
+	cases := []struct {
+		name, operation, arguments, category string
+	}{
+		{"sign unknown argument", "bsm.sign", fmt.Sprintf(`{"privateKey":"%s","message":"","compressed":true,"extra":false}`, privateKey), "invalidEncoding"},
+		{"recover unknown argument", "bsm.recover", fmt.Sprintf(`{"signature":"%s","message":"","extra":""}`, validSignature), "invalidEncoding"},
+		{"missing compression", "bsm.sign", fmt.Sprintf(`{"privateKey":"%s","message":""}`, privateKey), "invalidEncoding"},
+		{"short private key", "bsm.sign", `{"privateKey":"01","message":"","compressed":true}`, "invalidLength"},
+		{"zero private key", "bsm.sign", fmt.Sprintf(`{"privateKey":"%s","message":"","compressed":true}`, strings.Repeat("00", 32)), "scalar"},
+		{"odd message hex", "bsm.sign", fmt.Sprintf(`{"privateKey":"%s","message":"0","compressed":true}`, privateKey), "invalidLength"},
+		{"uppercase message hex", "bsm.sign", fmt.Sprintf(`{"privateKey":"%s","message":"AA","compressed":true}`, privateKey), "invalidEncoding"},
+		{"short signature", "bsm.recover", fmt.Sprintf(`{"signature":"%s","message":""}`, strings.Repeat("00", 64)), "invalidLength"},
+		{"long signature", "bsm.recover", fmt.Sprintf(`{"signature":"%s","message":""}`, strings.Repeat("00", 66)), "invalidLength"},
+		{"odd signature hex", "bsm.recover", `{"signature":"0","message":""}`, "invalidLength"},
+		{"invalid signature header", "bsm.recover", fmt.Sprintf(`{"signature":"00%s","message":""}`, validSignature[2:]), "signature"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := execute(testRequest(tc.operation, tc.arguments), metadata{})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if got := normalizeError(err).Category; got != tc.category {
+				t.Fatalf("got %s, want %s (%v)", got, tc.category, err)
+			}
+		})
+	}
+}
+
+func TestECIESDeterministicFramingAndDecryptPaths(t *testing.T) {
+	senderPrivate := strings.Repeat("00", 31) + "07"
+	recipientPrivate := strings.Repeat("00", 31) + "0d"
+	sender, err := protocolPrivateKey(senderPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient, err := protocolPrivateKey(recipientPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	senderPublic := hex.EncodeToString(sender.PubKey().Compressed())
+	recipientPublic := hex.EncodeToString(recipient.PubKey().Compressed())
+	initializationVector := "000102030405060708090a0b0c0d0e0f"
+
+	for _, plaintextByteCount := range []int{0, 16, 17, 31, 80} {
+		plaintextBytes := make([]byte, plaintextByteCount)
+		for i := range plaintextBytes {
+			plaintextBytes[i] = byte(i*29 + 7)
+		}
+		plaintext := hex.EncodeToString(plaintextBytes)
+		paddedByteCount := (plaintextByteCount/16 + 1) * 16
+
+		electrumLayouts := []bool{false}
+		if plaintextByteCount <= 31 {
+			electrumLayouts = append(electrumLayouts, true)
+		}
+		for _, omit := range electrumLayouts {
+			args := fmt.Sprintf(
+				`{"plaintext":"%s","recipientPublicKey":"%s","senderPrivateKey":"%s","omitSenderPublicKey":%t}`,
+				plaintext,
+				recipientPublic,
+				senderPrivate,
+				omit,
+			)
+			first, err := execute(testRequest("ecies.electrum.encrypt", args), metadata{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := execute(testRequest("ecies.electrum.encrypt", args), metadata{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(first, second) {
+				t.Fatalf("Electrum encryption is not deterministic: %#v != %#v", first, second)
+			}
+			envelopeHex := first.(map[string]string)["envelope"]
+			envelope, err := hex.DecodeString(envelopeHex)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantLength := 4 + paddedByteCount + 32
+			if !omit {
+				wantLength += 33
+			}
+			if len(envelope) != wantLength {
+				t.Fatalf("Electrum envelope length got %d, want %d", len(envelope), wantLength)
+			}
+			if !bytes.Equal(envelope[:4], []byte("BIE1")) {
+				t.Fatalf("Electrum magic is wrong: %x", envelope[:4])
+			}
+			if !omit && !bytes.Equal(envelope[4:37], sender.PubKey().Compressed()) {
+				t.Fatalf("Electrum embedded sender is wrong: %x", envelope[4:37])
+			}
+			decryptSender := senderPublic
+			if !omit {
+				decryptSender = ""
+			}
+			decrypted, err := execute(testRequest(
+				"ecies.electrum.decrypt",
+				fmt.Sprintf(
+					`{"envelope":"%s","recipientPrivateKey":"%s","senderPublicKey":"%s"}`,
+					envelopeHex,
+					recipientPrivate,
+					decryptSender,
+				),
+			), metadata{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := (map[string]string{"plaintext": plaintext}); !reflect.DeepEqual(decrypted, want) {
+				t.Fatalf("Electrum decrypt got %#v, want %#v", decrypted, want)
+			}
+		}
+
+		bitcoreArgs := fmt.Sprintf(
+			`{"plaintext":"%s","recipientPublicKey":"%s","senderPrivateKey":"%s","initializationVector":"%s"}`,
+			plaintext,
+			recipientPublic,
+			senderPrivate,
+			initializationVector,
+		)
+		first, err := execute(testRequest("ecies.bitcore.encrypt", bitcoreArgs), metadata{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := execute(testRequest("ecies.bitcore.encrypt", bitcoreArgs), metadata{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(first, second) {
+			t.Fatalf("Bitcore encryption is not deterministic: %#v != %#v", first, second)
+		}
+		envelopeHex := first.(map[string]string)["envelope"]
+		envelope, err := hex.DecodeString(envelopeHex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantLength := 33 + 16 + paddedByteCount + 32
+		if len(envelope) != wantLength {
+			t.Fatalf("Bitcore envelope length got %d, want %d", len(envelope), wantLength)
+		}
+		if !bytes.Equal(envelope[:33], sender.PubKey().Compressed()) {
+			t.Fatalf("Bitcore sender is wrong: %x", envelope[:33])
+		}
+		if got := hex.EncodeToString(envelope[33:49]); got != initializationVector {
+			t.Fatalf("Bitcore IV got %s, want %s", got, initializationVector)
+		}
+		decrypted, err := execute(testRequest(
+			"ecies.bitcore.decrypt",
+			fmt.Sprintf(
+				`{"envelope":"%s","recipientPrivateKey":"%s"}`,
+				envelopeHex,
+				recipientPrivate,
+			),
+		), metadata{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := (map[string]string{"plaintext": plaintext}); !reflect.DeepEqual(decrypted, want) {
+			t.Fatalf("Bitcore decrypt got %#v, want %#v", decrypted, want)
+		}
+	}
+}
+
+func TestECIESOmittedLongPacketArtifactIsNontrapping(t *testing.T) {
+	senderPrivate := strings.Repeat("00", 31) + "07"
+	recipientPrivate := strings.Repeat("00", 31) + "0d"
+	sender, err := protocolPrivateKey(senderPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient, err := protocolPrivateKey(recipientPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext := hex.EncodeToString(bytes.Repeat([]byte{0x5a}, 33))
+	encrypted, err := execute(testRequest(
+		"ecies.electrum.encrypt",
+		fmt.Sprintf(
+			`{"plaintext":"%s","recipientPublicKey":"%s","senderPrivateKey":"%s","omitSenderPublicKey":true}`,
+			plaintext,
+			hex.EncodeToString(recipient.PubKey().Compressed()),
+			senderPrivate,
+		),
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelopeHex := encrypted.(map[string]string)["envelope"]
+	_, err = execute(testRequest(
+		"ecies.electrum.decrypt",
+		fmt.Sprintf(
+			`{"envelope":"%s","recipientPrivateKey":"%s","senderPublicKey":"%s"}`,
+			envelopeHex,
+			recipientPrivate,
+			hex.EncodeToString(sender.PubKey().Compressed()),
+		),
+	), metadata{})
+	if err == nil {
+		t.Fatal("expected pinned Go omitted-layout heuristic failure")
+	}
+	if got := normalizeError(err).Category; got != "invalidLength" {
+		t.Fatalf("got %s, want invalidLength (%v)", got, err)
+	}
+}
+
+func TestECIESStrictArgumentsAndMalformedPackets(t *testing.T) {
+	privateKey := strings.Repeat("00", 31) + "01"
+	publicKey := "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+	embeddedBadKey := "42494531" + strings.Repeat("00", 33+16+32)
+	bitcoreBadKey := strings.Repeat("00", 33+16+16+32)
+	electrumEmbeddedNonBlock := "42494531" + publicKey + strings.Repeat("00", 17+32)
+	electrumExternalNonBlock := "42494531" + strings.Repeat("00", 17+32)
+	bitcoreNonBlock := publicKey + strings.Repeat("00", 16+17+32)
+	cases := []struct {
+		name, operation, arguments, category string
+	}{
+		{"Electrum encrypt unknown argument", "ecies.electrum.encrypt", fmt.Sprintf(`{"plaintext":"","recipientPublicKey":"%s","senderPrivateKey":"%s","omitSenderPublicKey":false,"extra":true}`, publicKey, privateKey), "invalidEncoding"},
+		{"Electrum encrypt missing layout", "ecies.electrum.encrypt", fmt.Sprintf(`{"plaintext":"","recipientPublicKey":"%s","senderPrivateKey":"%s"}`, publicKey, privateKey), "invalidEncoding"},
+		{"Electrum encrypt short public key", "ecies.electrum.encrypt", fmt.Sprintf(`{"plaintext":"","recipientPublicKey":"02","senderPrivateKey":"%s","omitSenderPublicKey":false}`, privateKey), "invalidLength"},
+		{"Electrum encrypt zero private key", "ecies.electrum.encrypt", fmt.Sprintf(`{"plaintext":"","recipientPublicKey":"%s","senderPrivateKey":"%s","omitSenderPublicKey":false}`, publicKey, strings.Repeat("00", 32)), "scalar"},
+		{"Electrum encrypt uppercase plaintext", "ecies.electrum.encrypt", fmt.Sprintf(`{"plaintext":"AA","recipientPublicKey":"%s","senderPrivateKey":"%s","omitSenderPublicKey":false}`, publicKey, privateKey), "invalidEncoding"},
+		{"Electrum embedded short envelope", "ecies.electrum.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s","senderPublicKey":""}`, strings.Repeat("00", 84), privateKey), "invalidLength"},
+		{"Electrum external short envelope", "ecies.electrum.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s","senderPublicKey":"%s"}`, strings.Repeat("00", 51), privateKey, publicKey), "invalidLength"},
+		{"Electrum decrypt missing sender argument", "ecies.electrum.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s"}`, strings.Repeat("00", 85), privateKey), "invalidEncoding"},
+		{"Electrum bad magic", "ecies.electrum.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s","senderPublicKey":""}`, strings.Repeat("00", 85), privateKey), "invalidEncoding"},
+		{"Electrum bad embedded key", "ecies.electrum.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s","senderPublicKey":""}`, embeddedBadKey, privateKey), "key"},
+		{"Electrum bad external key", "ecies.electrum.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s","senderPublicKey":"04%s"}`, strings.Repeat("00", 52), privateKey, strings.Repeat("00", 32)), "key"},
+		{"Electrum embedded non-block ciphertext", "ecies.electrum.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s","senderPublicKey":""}`, electrumEmbeddedNonBlock, privateKey), "invalidLength"},
+		{"Electrum external non-block ciphertext", "ecies.electrum.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s","senderPublicKey":"%s"}`, electrumExternalNonBlock, privateKey, publicKey), "invalidLength"},
+		{"Bitcore encrypt unknown argument", "ecies.bitcore.encrypt", fmt.Sprintf(`{"plaintext":"","recipientPublicKey":"%s","senderPrivateKey":"%s","initializationVector":"%s","extra":true}`, publicKey, privateKey, strings.Repeat("00", 16)), "invalidEncoding"},
+		{"Bitcore encrypt missing IV", "ecies.bitcore.encrypt", fmt.Sprintf(`{"plaintext":"","recipientPublicKey":"%s","senderPrivateKey":"%s"}`, publicKey, privateKey), "invalidEncoding"},
+		{"Bitcore encrypt short IV", "ecies.bitcore.encrypt", fmt.Sprintf(`{"plaintext":"","recipientPublicKey":"%s","senderPrivateKey":"%s","initializationVector":"%s"}`, publicKey, privateKey, strings.Repeat("00", 15)), "invalidLength"},
+		{"Bitcore encrypt long IV", "ecies.bitcore.encrypt", fmt.Sprintf(`{"plaintext":"","recipientPublicKey":"%s","senderPrivateKey":"%s","initializationVector":"%s"}`, publicKey, privateKey, strings.Repeat("00", 17)), "invalidLength"},
+		{"Bitcore decrypt short envelope", "ecies.bitcore.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s"}`, strings.Repeat("00", 96), privateKey), "invalidLength"},
+		{"Bitcore decrypt bad sender key", "ecies.bitcore.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s"}`, bitcoreBadKey, privateKey), "key"},
+		{"Bitcore decrypt non-block ciphertext", "ecies.bitcore.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s"}`, bitcoreNonBlock, privateKey), "invalidLength"},
+		{"Bitcore decrypt zero recipient", "ecies.bitcore.decrypt", fmt.Sprintf(`{"envelope":"%s","recipientPrivateKey":"%s"}`, bitcoreNonBlock, strings.Repeat("00", 32)), "scalar"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := execute(testRequest(tc.operation, tc.arguments), metadata{})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if got := normalizeError(err).Category; got != tc.category {
+				t.Fatalf("got %s, want %s (%v)", got, tc.category, err)
+			}
+			if got := normalizeError(err).Category; got == "oraclePanic" {
+				t.Fatalf("malformed request panicked: %v", err)
+			}
+		})
 	}
 }
 

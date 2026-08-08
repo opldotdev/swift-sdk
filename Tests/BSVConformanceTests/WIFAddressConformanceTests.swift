@@ -33,7 +33,7 @@ struct WIFAddressConformanceTests {
                 isCompressed: vector.compressed
             )
 
-            #expect(expected.description == vector.encoded)
+            #expect(expected.encoded == vector.encoded)
             #expect(try WalletImportFormat(vector.encoded) == expected)
         }
 

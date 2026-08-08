@@ -18,6 +18,24 @@ struct SymmetricKeyTests {
         }
     }
 
+    @Test("diagnostics and reflection redact key bytes")
+    func diagnosticRedaction() throws {
+        let secretByte: UInt8 = 0xab
+        let key = try SymmetricKey([UInt8](repeating: secretByte, count: 32))
+        let described = String(describing: key)
+        let reflected = String(reflecting: key)
+        var dumped = ""
+        dump(key, to: &dumped)
+
+        #expect(described == "<redacted symmetric key>")
+        #expect(reflected == "<redacted symmetric key>")
+        #expect(dumped.contains("<redacted symmetric key>"))
+        #expect(Mirror(reflecting: key).children.isEmpty)
+        for diagnostic in [described, reflected, dumped] {
+            #expect(!diagnostic.contains(String(secretByte)))
+        }
+    }
+
     @Test("empty and oversized keys are rejected")
     func invalidKeyLengths() {
         for count in [0, 33, 1_024] {

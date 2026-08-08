@@ -76,6 +76,36 @@ accepts upper- or lowercase 64-character hexadecimal and emits internal bytes,
 while display is lowercase. Base58Check is the COMP-017 adapter policy and
 supports exactly one version byte.
 
+Bitcoin Signed Message operations use the pinned SDK's legacy 65-byte compact
+format only. Messages are exact bytes rather than normalized text. Signing
+accepts an exact private scalar and explicit compression flag; recovery emits a
+canonical compressed SEC1 public key while separately preserving the header's
+compression flag. BIP-137 SegWit headers and raw DER verification are outside
+this adapter.
+
+ECIES operations require explicit deterministic sender keys, and Bitcore also
+requires an exact 16-byte IV. Electrum's empty `senderPublicKey` string selects
+the embedded-key layout; a nonempty compressed key selects the omitted-key
+layout. The pinned Go decryptor uses `len > 69` as an unsafe proxy for an
+embedded key even when an external key is supplied. Consequently, omitted-key
+packets whose padded ciphertext exceeds 32 bytes are mis-sliced by pinned Go
+(the first affected plaintext length is 32 bytes). The adapter reports this as
+`invalidLength` before Go's CBC implementation can panic. Swift's explicit
+layout continues to decrypt these packets safely; differential coverage uses
+valid Go omitted layouts through 31 plaintext bytes and records a 33-byte case
+as the intentional compatibility artifact.
+
+BRC-140 key-share operations are bounded interoperability probes for accepted
+backup strings. Splitting requires an exact 32-byte private scalar and canonical
+decimal-string values satisfying `2 <= threshold <= shareCount <= 20`.
+Recovery accepts 2 through 20 shares, caps each UTF-8 share at 128 bytes, and
+rejects malformed four-field framing before invoking pinned Go. Pinned Go
+normalizes decoded coordinates modulo the field prime, while Swift deliberately
+requires canonical, nonzero coordinates below the prime; differential tests use
+the shared accepted policy and record malformed rejection only where both agree.
+Go split output is fresh random secret-bearing material and is never cached,
+printed, or committed.
+
 | Operation | Args | Result |
 | --- | --- | --- |
 | `metadata` | `{}` | validated metadata object |
@@ -104,6 +134,14 @@ supports exactly one version byte.
 | `brc42.public.derive` | `{recipientPublicKey,senderPrivateKey,invoiceNumber}` | `{publicKey}` in compressed SEC1 form |
 | `brc94.generate` | `{proverPrivateKey,counterpartyPublicKey}` | Fresh `{proverPublicKey,sharedSecret,noncePublicKey,nonceSharedSecret,response}` proof fields |
 | `brc94.verify` | `{proverPublicKey,counterpartyPublicKey,sharedSecret,noncePublicKey,nonceSharedSecret,response}` | `{valid}` for both BRC-94 proof equations |
+| `bsm.sign` | `{privateKey,message,compressed}` | `{signature}` as exact 65-byte lowercase hex from legacy Bitcoin Signed Message signing |
+| `bsm.recover` | `{signature,message}` | `{publicKey,compressed}` with compressed SEC1 lowercase hex and the signature header's compression flag |
+| `ecies.electrum.encrypt` | `{plaintext,recipientPublicKey,senderPrivateKey,omitSenderPublicKey}` | Deterministic `{envelope}` from pinned Go Electrum ECIES |
+| `ecies.electrum.decrypt` | `{envelope,recipientPrivateKey,senderPublicKey}` | `{plaintext}`; empty sender selects the embedded key, nonempty selects an external key |
+| `ecies.bitcore.encrypt` | `{plaintext,recipientPublicKey,senderPrivateKey,initializationVector}` | Deterministic `{envelope}` from pinned Go Bitcore ECIES with an exact 16-byte IV |
+| `ecies.bitcore.decrypt` | `{envelope,recipientPrivateKey}` | `{plaintext}` from pinned Go Bitcore ECIES |
+| `keyshares.split` | `{privateKey,threshold,shareCount}` | Fresh `{shares}` from pinned Go BRC-140 splitting; threshold and count are canonical decimal strings |
+| `keyshares.recover` | `{shares}` | `{privateKey}` as exact 32-byte lowercase hex from pinned Go BRC-140 recovery |
 | `symmetric.encrypt` | `{key,plaintext,nonce}` | Deterministic `{envelope}` as `32-byte nonce || ciphertext || 16-byte tag` |
 | `symmetric.decrypt` | `{key,envelope}` | `{plaintext}` through pinned Go `SymmetricKey.Decrypt` |
 | `script.asm.decode` | `{text}` | `{bytes}` (Go SDK canonical ASM parser) |

@@ -15,15 +15,39 @@ struct WalletImportFormatTests {
                     network: network,
                     isCompressed: compressed
                 )
-                let text = original.description
+                let text = original.encoded
                 let decoded = try WalletImportFormat(text)
 
                 #expect(decoded == original)
-                #expect(decoded.description == text)
+                #expect(decoded.encoded == text)
                 #expect(decoded.privateKey.bytes == privateKey.bytes)
                 #expect(decoded.network == network)
                 #expect(decoded.isCompressed == compressed)
             }
+        }
+    }
+
+    @Test("explicit encoding round trips while diagnostics and reflection redact WIF")
+    func diagnosticRedaction() throws {
+        let original = WalletImportFormat(
+            privateKey: try PrivateKey([UInt8](repeating: 0xab, count: 32)),
+            network: .mainnet
+        )
+        let encoded = original.encoded
+        let decoded = try WalletImportFormat(encoded)
+        let described = String(describing: decoded)
+        let reflected = String(reflecting: decoded)
+        var dumped = ""
+        dump(decoded, to: &dumped)
+
+        #expect(decoded.encoded == encoded)
+        #expect(described == "<redacted wallet import format>")
+        #expect(reflected == "<redacted wallet import format>")
+        #expect(dumped.contains("<redacted wallet import format>"))
+        #expect(Mirror(reflecting: decoded).children.isEmpty)
+        for diagnostic in [described, reflected, dumped] {
+            #expect(!diagnostic.contains(encoded))
+            #expect(!diagnostic.contains("171"))
         }
     }
 
@@ -40,7 +64,7 @@ struct WalletImportFormatTests {
         let valid = WalletImportFormat(
             privateKey: try PrivateKey([UInt8](repeating: 0, count: 31) + [0x01]),
             network: .mainnet
-        ).description
+        ).encoded
         let checkedBytes = try Base58.decode(valid, maximumDecodedByteCount: 38)
 
         for checksumOffset in 0..<4 {

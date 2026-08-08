@@ -15,7 +15,11 @@ public enum SymmetricKeyError: Error, Equatable, Sendable {
 /// secp256k1 X-coordinate key material. Empty and oversized keys are rejected.
 /// Swift arrays cannot guarantee zeroization; avoid retaining copies returned
 /// by ``bytes`` longer than necessary.
-public struct SymmetricKey: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+public struct SymmetricKey:
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible,
+    CustomReflectable {
     public static let keyByteCount = 32
     public static let nonceByteCount = 32
     public static let authenticationTagByteCount = 16
@@ -74,6 +78,8 @@ public struct SymmetricKey: Sendable, CustomStringConvertible, CustomDebugString
     public var description: String { "<redacted symmetric key>" }
 
     public var debugDescription: String { description }
+
+    public var customMirror: Mirror { Mirror(reflecting: description) }
 
     /// Encrypts plaintext with a fresh 32-byte nonce and no AAD.
     ///

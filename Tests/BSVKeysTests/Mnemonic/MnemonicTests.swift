@@ -5,6 +5,26 @@ import Testing
 
 @Suite("English BIP-39 mnemonic")
 struct MnemonicTests {
+    @Test("diagnostics and reflection redact recovery words")
+    func diagnosticRedaction() throws {
+        let secretFragment = "abandon"
+        let mnemonic = try Mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        )
+        let described = String(describing: mnemonic)
+        let reflected = String(reflecting: mnemonic)
+        var dumped = ""
+        dump(mnemonic, to: &dumped)
+
+        #expect(described == "<redacted mnemonic>")
+        #expect(reflected == "<redacted mnemonic>")
+        #expect(dumped.contains("<redacted mnemonic>"))
+        #expect(Mirror(reflecting: mnemonic).children.isEmpty)
+        for diagnostic in [described, reflected, dumped] {
+            #expect(!diagnostic.contains(secretFragment))
+        }
+    }
+
     @Test("all supported entropy and word sizes have exact encodings")
     func allSupportedSizes() throws {
         let cases: [(Int, String)] = [

@@ -8,6 +8,25 @@ struct BIP32Tests {
     private let vectorOneXprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi"
     private let vectorOneXpub = "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8"
 
+    @Test("diagnostics and reflection redact extended private key material")
+    func diagnosticRedaction() throws {
+        let key = try ExtendedPrivateKey(seed: vectorOneSeed, network: .mainnet)
+        let secretByte = String(key.key.bytes[0])
+        let described = String(describing: key)
+        let reflected = String(reflecting: key)
+        var dumped = ""
+        dump(key, to: &dumped)
+
+        #expect(described == "<redacted extended private key>")
+        #expect(reflected == "<redacted extended private key>")
+        #expect(dumped.contains("<redacted extended private key>"))
+        #expect(Mirror(reflecting: key).children.isEmpty)
+        for diagnostic in [described, reflected, dumped] {
+            #expect(!diagnostic.contains(secretByte))
+            #expect(!diagnostic.contains(key.serialized))
+        }
+    }
+
     @Test("master metadata and mainnet/testnet versions round trip")
     func masterAndNetworks() throws {
         let main = try ExtendedPrivateKey(seed: vectorOneSeed, network: .mainnet)

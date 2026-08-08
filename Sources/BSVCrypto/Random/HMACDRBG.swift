@@ -16,7 +16,11 @@ public enum HMACDRBGError: Error, Equatable, Sendable {
 /// cryptographically secure entropy when initializing or reseeding it.
 /// Copying the value forks its deterministic state and repeats the same future
 /// output sequence. Its internal arrays are not guaranteed to be zeroized.
-public struct HMACDRBG: Sendable {
+public struct HMACDRBG:
+    Sendable,
+    CustomStringConvertible,
+    CustomDebugStringConvertible,
+    CustomReflectable {
     /// The Go SDK compatibility profile requires at least 256 bits of entropy.
     public static let minimumEntropyByteCount = 32
     /// The Go SDK compatibility profile permits at most 937 bytes per request.
@@ -29,6 +33,13 @@ public struct HMACDRBG: Sendable {
 
     /// The next generation request number for the current seed.
     public private(set) var reseedCounter: Int
+
+    /// A redacted description suitable for diagnostic logging.
+    public var description: String { "<redacted HMAC-DRBG>" }
+
+    public var debugDescription: String { description }
+
+    public var customMirror: Mirror { Mirror(reflecting: description) }
 
     /// Creates deterministic state from entropy followed directly by an optional nonce.
     public init(entropy: [UInt8], nonce: [UInt8] = []) throws {

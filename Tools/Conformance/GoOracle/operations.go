@@ -20,6 +20,8 @@ import (
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	base58 "github.com/bsv-blockchain/go-sdk/compat/base58"
+	bsmcompat "github.com/bsv-blockchain/go-sdk/compat/bsm"
+	eciescompat "github.com/bsv-blockchain/go-sdk/compat/ecies"
 	aesgcmprimitive "github.com/bsv-blockchain/go-sdk/primitives/aesgcm"
 	drbgprimitive "github.com/bsv-blockchain/go-sdk/primitives/drbg"
 	ecprimitive "github.com/bsv-blockchain/go-sdk/primitives/ec"
@@ -625,6 +627,232 @@ func execute(req request, meta metadata) (result any, err error) {
 			},
 		)
 		return map[string]bool{"valid": valid}, nil
+	case "bsm.sign":
+		var args struct {
+			PrivateKey string `json:"privateKey"`
+			Message    string `json:"message"`
+			Compressed bool   `json:"compressed"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		privateKey, err := protocolPrivateKey(args.PrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		message, err := protocolHex(args.Message)
+		if err != nil {
+			return nil, err
+		}
+		if len(message) > maxLineBytes {
+			return nil, categorizedError{"resourceLimit", "BSM message exceeds protocol resource limit"}
+		}
+		signature, err := bsmcompat.SignMessageWithCompression(
+			privateKey,
+			message,
+			args.Compressed,
+		)
+		if err != nil {
+			return nil, categorizedError{"signature", err.Error()}
+		}
+		if len(signature) != 65 {
+			return nil, categorizedError{"internal", "pinned Go BSM signer returned an invalid signature length"}
+		}
+		return map[string]string{"signature": hex.EncodeToString(signature)}, nil
+	case "bsm.recover":
+		var args struct {
+			Signature string `json:"signature"`
+			Message   string `json:"message"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		signature, err := protocolHex(args.Signature)
+		if err != nil {
+			return nil, err
+		}
+		if len(signature) != 65 {
+			return nil, categorizedError{"invalidLength", "BSM signature must be exactly 65 bytes"}
+		}
+		message, err := protocolHex(args.Message)
+		if err != nil {
+			return nil, err
+		}
+		if len(message) > maxLineBytes {
+			return nil, categorizedError{"resourceLimit", "BSM message exceeds protocol resource limit"}
+		}
+		publicKey, compressed, err := bsmcompat.PubKeyFromSignature(signature, message)
+		if err != nil {
+			return nil, categorizedError{"signature", err.Error()}
+		}
+		return map[string]any{
+			"publicKey":  hex.EncodeToString(publicKey.Compressed()),
+			"compressed": compressed,
+		}, nil
+	case "ecies.electrum.encrypt":
+		var args struct {
+			Plaintext           string `json:"plaintext"`
+			RecipientPublicKey  string `json:"recipientPublicKey"`
+			SenderPrivateKey    string `json:"senderPrivateKey"`
+			OmitSenderPublicKey bool   `json:"omitSenderPublicKey"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		plaintext, err := protocolHex(args.Plaintext)
+		if err != nil {
+			return nil, err
+		}
+		recipient, err := protocolPublicKey(args.RecipientPublicKey)
+		if err != nil {
+			return nil, err
+		}
+		sender, err := protocolPrivateKey(args.SenderPrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		envelope, err := eciescompat.ElectrumEncrypt(
+			plaintext,
+			recipient,
+			sender,
+			args.OmitSenderPublicKey,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"envelope": hex.EncodeToString(envelope)}, nil
+	case "ecies.electrum.decrypt":
+		var args struct {
+			Envelope            string `json:"envelope"`
+			RecipientPrivateKey string `json:"recipientPrivateKey"`
+			SenderPublicKey     string `json:"senderPublicKey"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		envelope, err := protocolHex(args.Envelope)
+		if err != nil {
+			return nil, err
+		}
+		recipient, err := protocolPrivateKey(args.RecipientPrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		var sender *ecprimitive.PublicKey
+		headerByteCount := 4
+		minimumByteCount := 4 + 16 + 32
+		if args.SenderPublicKey == "" {
+			headerByteCount += ecprimitive.PubKeyBytesLenCompressed
+			minimumByteCount += ecprimitive.PubKeyBytesLenCompressed
+		} else {
+			sender, err = protocolPublicKey(args.SenderPublicKey)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if len(envelope) < minimumByteCount {
+			return nil, categorizedError{"invalidLength", "Electrum ECIES envelope is below its minimum length"}
+		}
+		if !bytes.Equal(envelope[:4], []byte("BIE1")) {
+			return nil, categorizedError{"invalidEncoding", "Electrum ECIES magic is invalid"}
+		}
+		if args.SenderPublicKey == "" {
+			if _, err := protocolPublicKey(hex.EncodeToString(envelope[4:37])); err != nil {
+				return nil, err
+			}
+		} else if len(envelope) > 69 {
+			// Pinned Go treats every external-key packet over 69 bytes as though a
+			// 33-byte key were embedded. Reject the resulting non-block slice here
+			// instead of allowing cipher.BlockMode.CryptBlocks to panic.
+			goHeuristicCiphertextByteCount := len(envelope) - 37 - 32
+			if goHeuristicCiphertextByteCount <= 0 || goHeuristicCiphertextByteCount%16 != 0 {
+				return nil, categorizedError{"invalidLength", "pinned Go Electrum external-key heuristic misclassifies this omitted-key envelope"}
+			}
+		}
+		ciphertextByteCount := len(envelope) - headerByteCount - 32
+		if ciphertextByteCount <= 0 || ciphertextByteCount%16 != 0 {
+			return nil, categorizedError{"invalidLength", "Electrum ECIES ciphertext must be nonempty and block aligned"}
+		}
+		plaintext, err := eciescompat.ElectrumDecrypt(envelope, recipient, sender)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"plaintext": hex.EncodeToString(plaintext)}, nil
+	case "ecies.bitcore.encrypt":
+		var args struct {
+			Plaintext            string `json:"plaintext"`
+			RecipientPublicKey   string `json:"recipientPublicKey"`
+			SenderPrivateKey     string `json:"senderPrivateKey"`
+			InitializationVector string `json:"initializationVector"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		plaintext, err := protocolHex(args.Plaintext)
+		if err != nil {
+			return nil, err
+		}
+		recipient, err := protocolPublicKey(args.RecipientPublicKey)
+		if err != nil {
+			return nil, err
+		}
+		sender, err := protocolPrivateKey(args.SenderPrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		initializationVector, err := protocolHex(args.InitializationVector)
+		if err != nil {
+			return nil, err
+		}
+		if len(initializationVector) != 16 {
+			return nil, categorizedError{"invalidLength", "Bitcore ECIES initialization vector must be exactly 16 bytes"}
+		}
+		envelope, err := eciescompat.BitcoreEncrypt(
+			plaintext,
+			recipient,
+			sender,
+			initializationVector,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"envelope": hex.EncodeToString(envelope)}, nil
+	case "ecies.bitcore.decrypt":
+		var args struct {
+			Envelope            string `json:"envelope"`
+			RecipientPrivateKey string `json:"recipientPrivateKey"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		envelope, err := protocolHex(args.Envelope)
+		if err != nil {
+			return nil, err
+		}
+		recipient, err := protocolPrivateKey(args.RecipientPrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		const bitcoreMinimumEnvelopeByteCount = 33 + 16 + 16 + 32
+		if len(envelope) < bitcoreMinimumEnvelopeByteCount {
+			return nil, categorizedError{"invalidLength", "Bitcore ECIES envelope is below its minimum length"}
+		}
+		if _, err := protocolPublicKey(hex.EncodeToString(envelope[:33])); err != nil {
+			return nil, err
+		}
+		ciphertextByteCount := len(envelope) - 33 - 16 - 32
+		if ciphertextByteCount <= 0 || ciphertextByteCount%16 != 0 {
+			return nil, categorizedError{"invalidLength", "Bitcore ECIES ciphertext must be nonempty and block aligned"}
+		}
+		plaintext, err := eciescompat.BitcoreDecrypt(envelope, recipient)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"plaintext": hex.EncodeToString(plaintext)}, nil
+	case "keyshares.split":
+		return splitKeyShares(req.Args)
+	case "keyshares.recover":
+		return recoverKeyShares(req.Args)
 	case "scriptnum.encode":
 		return encodeScriptNumber(req.Args)
 	case "scriptnum.decode":
@@ -1221,6 +1449,95 @@ func execute(req request, meta metadata) (result any, err error) {
 	default:
 		return nil, categorizedError{"unsupportedOperation", "operation is not in the pinned registry"}
 	}
+}
+
+func splitKeyShares(raw json.RawMessage) (any, error) {
+	var args struct {
+		PrivateKey string `json:"privateKey"`
+		Threshold  string `json:"threshold"`
+		ShareCount string `json:"shareCount"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	privateKey, err := protocolPrivateKey(args.PrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	threshold, err := decimalUint(args.Threshold, 8)
+	if err != nil {
+		return nil, err
+	}
+	shareCount, err := decimalUint(args.ShareCount, 8)
+	if err != nil {
+		return nil, err
+	}
+	if threshold < 2 || threshold > 20 || shareCount < 2 || shareCount > 20 || threshold > shareCount {
+		return nil, categorizedError{"invalidEncoding", "key-share threshold and count must satisfy 2 <= threshold <= shareCount <= 20"}
+	}
+
+	shares, err := privateKey.ToBackupShares(int(threshold), int(shareCount))
+	if err != nil {
+		return nil, categorizedError{"internal", "pinned Go key-share split failed"}
+	}
+	if len(shares) != int(shareCount) {
+		return nil, categorizedError{"internal", "pinned Go key-share split returned an unexpected count"}
+	}
+	for _, share := range shares {
+		fields := strings.Split(share, ".")
+		if len([]byte(share)) == 0 || len([]byte(share)) > 128 || len(fields) != 4 {
+			return nil, categorizedError{"internal", "pinned Go key-share split returned invalid framing"}
+		}
+		for _, field := range fields {
+			if field == "" {
+				return nil, categorizedError{"internal", "pinned Go key-share split returned invalid framing"}
+			}
+		}
+	}
+	return map[string]any{"shares": shares}, nil
+}
+
+func recoverKeyShares(raw json.RawMessage) (any, error) {
+	var args struct {
+		Shares []string `json:"shares"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return nil, err
+	}
+	if len(args.Shares) < 2 || len(args.Shares) > 20 {
+		return nil, categorizedError{"invalidLength", "key-share recovery requires 2 through 20 shares"}
+	}
+	seen := make(map[string]struct{}, len(args.Shares))
+	for _, share := range args.Shares {
+		if len([]byte(share)) > 128 {
+			return nil, categorizedError{"resourceLimit", "key-share text exceeds 128 UTF-8 bytes"}
+		}
+		fields := strings.Split(share, ".")
+		if len(fields) != 4 {
+			return nil, categorizedError{"invalidEncoding", "key share must contain exactly four fields"}
+		}
+		for _, field := range fields {
+			if field == "" {
+				return nil, categorizedError{"invalidEncoding", "key-share fields must not be empty"}
+			}
+		}
+		if _, duplicate := seen[share]; duplicate {
+			return nil, categorizedError{"invalidEncoding", "duplicate key share"}
+		}
+		seen[share] = struct{}{}
+	}
+
+	privateKey, err := ecprimitive.PrivateKeyFromBackupShares(args.Shares)
+	if err != nil || privateKey == nil {
+		// Go errors may echo complete share strings. Keep secret-bearing backup
+		// material out of the normalized protocol error surface.
+		return nil, categorizedError{"invalidEncoding", "pinned Go key-share recovery rejected the shares"}
+	}
+	serialized := privateKey.Serialize()
+	if len(serialized) != ecprimitive.PrivateKeyBytesLen {
+		return nil, categorizedError{"internal", "pinned Go key-share recovery returned an invalid key length"}
+	}
+	return map[string]string{"privateKey": hex.EncodeToString(serialized)}, nil
 }
 
 type fixedLengthUnlocker uint32

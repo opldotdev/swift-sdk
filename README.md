@@ -125,8 +125,12 @@ print(account.neutered.serialized)
   public-key parsing backed by libsecp256k1
 - Deterministic digest-level ECDSA with strict DER and compact signatures
 - Deterministic recoverable ECDSA with typed, nontrapping recovery failures
+- Bitcoin Signed Message signing, public-key recovery, and network-aware legacy
+  address verification
 - Raw-point ECDH plus additive and multiplicative secp256k1 key tweaks
 - BRC-42 bilateral child-key derivation and BRC-94 verifiable shared-secret proofs
+- Electrum- and Bitcore-compatible legacy ECIES encryption and decryption
+- BRC-140 threshold secret sharing for offline private-key backups
 - Wallet Import Format and legacy P2PKH addresses on mainnet and testnet
 - English BIP-39 mnemonics with NFKD normalization and fixed
   PBKDF2-HMAC-SHA512 seed derivation
@@ -147,8 +151,9 @@ print(account.neutered.serialized)
   resolution, checked fees, and Script execution through the `BSVSPV` façade
 - Immutable BEEF graph merge, proof propagation, BRC-96 txid-only projection,
   and known-ID trimming with stable parent-before-child ordering
-- Redacted default descriptions for mnemonics and extended private keys, with
-  explicitly named properties for intentional secret export
+- Redacted default descriptions and reflection for private keys, symmetric keys,
+  mnemonics, extended private keys, Wallet Import Format, HMAC-DRBG state, and
+  key shares, with explicitly named properties for intentional secret export
 - Swift 6 value semantics, structured errors, and `Sendable` public values
 - Unified `BSV` import plus focused core, cryptography, and key libraries
 

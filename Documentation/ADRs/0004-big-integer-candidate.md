@@ -8,8 +8,8 @@
 The SDK needs arbitrary-precision integers below both `BSVCrypto` and
 `BSVScript`:
 
-- Shamir/key-share polynomial arithmetic requires modular operations over the
-  secp256k1 order.
+- BRC-140 Shamir/key-share polynomial arithmetic requires modular operations
+  over the secp256k1 field prime `p` (not the scalar group order `n`).
 - Bitcoin Script uses signed-magnitude little-endian integers whose permitted
   sizes depend on the active consensus era.
 - Chronicle configurations can admit values up to 32 MiB, so correct arithmetic

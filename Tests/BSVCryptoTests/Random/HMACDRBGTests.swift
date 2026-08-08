@@ -5,6 +5,24 @@ import Testing
 struct HMACDRBGTests {
     private let entropy32 = (0..<32).map { UInt8($0) }
 
+    @Test("diagnostics and reflection redact deterministic state")
+    func diagnosticRedaction() throws {
+        let secretStateByte = "191"
+        let generator = try HMACDRBG(entropy: entropy32)
+        let described = String(describing: generator)
+        let reflected = String(reflecting: generator)
+        var dumped = ""
+        dump(generator, to: &dumped)
+
+        #expect(described == "<redacted HMAC-DRBG>")
+        #expect(reflected == "<redacted HMAC-DRBG>")
+        #expect(dumped.contains("<redacted HMAC-DRBG>"))
+        #expect(Mirror(reflecting: generator).children.isEmpty)
+        for diagnostic in [described, reflected, dumped] {
+            #expect(!diagnostic.contains(secretStateByte))
+        }
+    }
+
     @Test("entropy minimum accepts 32 and 33 bytes but rejects 31")
     func entropyBoundaries() throws {
         #expect(

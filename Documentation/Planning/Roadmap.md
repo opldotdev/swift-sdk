@@ -48,7 +48,8 @@ key tweaks. BRC-42 bilateral private/public derivation and BRC-94 verifiable
 shared-secret proofs are accepted with bidirectional pinned-Go differentials.
 The injectable operating-system secure-randomness seam and Go-compatible
 AES-256-GCM symmetric-key envelope are accepted with bidirectional pinned-Go
-differentials. Key-sharing and backup work remains open.
+differentials. BRC-140 key sharing and recovery are accepted with strict
+canonical parsing and bounded offline interpolation.
 
 - AES block/CBC/GCM and PKCS#7 behavior.
 - HMAC-DRBG.
@@ -60,18 +61,19 @@ differentials. Key-sharing and backup work remains open.
 - BRC-42 private/public derivation and BRC-94 proof behavior. (Accepted)
 - Injectable secure randomness. (Accepted)
 - Symmetric key envelopes. (Accepted)
-- Key shares and backups.
+- BRC-140 key shares and backups. (Accepted)
 
 ## Phase 3: Key compatibility formats
 
 Accepted checkpoint: bounded WIF and legacy P2PKH addresses for mainnet and
-testnet, BIP-32 hierarchical deterministic keys, and English BIP-39 mnemonics
-with the fixed standard PBKDF2 profile.
+testnet, BIP-32 hierarchical deterministic keys, English BIP-39 mnemonics with
+the fixed standard PBKDF2 profile, Bitcoin Signed Message, and Electrum- and
+Bitcore-compatible ECIES.
 
 - WIF and legacy addresses. (Accepted)
 - BIP-32 and BIP-39. (Accepted)
-- Bitcoin Signed Message.
-- Electrum- and Bitcore-compatible ECIES.
+- Bitcoin Signed Message. (Accepted)
+- Electrum- and Bitcore-compatible ECIES. (Accepted)
 
 ## Phase 4: Script and transaction models
 
