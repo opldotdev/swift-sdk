@@ -38,6 +38,7 @@ Dependency pins:
 | DER/recovery/RFC6979 | Decred secp256k1 ECDSA tests and P256K binding tests | ISC / MIT | P2; strict DER, compact, recovery header/id, high-S normalization. |
 | Base58/Base58Check/WIF/address | `bitcoinsv/bsvutil` tests | ISC | Raw Base58 P1-B; checksum/key/address façades later. |
 | Script ASM and standard templates | Independently authored BRC-106/BRC-18 examples plus pinned Go differential queries | Original / oracle-only | Canonical `OP_FALSE`/`OP_TRUE`, aliases, push normalization, P2PK/P2PKH/P2SH, false-return parts, malformed and bounded input. No BRC repository text is copied because that repository has no identified license. |
+| ForkID signature hashing | Bitcoin BIP-143 native P2WPKH example at `bitcoin/bips` revision `ed4ffcb6a48d4dc4fdfc11cdba783c233db8c66e` | Public domain | The final hash-type word is independently transformed from `0x01` to BSV ForkID `0x41`; all six modes and compressed P2PKH signing are then checked live against pinned Go v1.3.3. Source file SHA-256: `62bc71351563e68baeb12643c68355d217953ae9eb6a6e68b2b0323275b6beec`. |
 | Script number small corpus | btcd v0.24.2 `txscript/scriptnum_test.go` | ISC | BigNum concepts P1-D; production era-aware codec later. |
 
 Wycheproof provenance recorded by the selected dependencies identifies Apache
@@ -135,6 +136,9 @@ big.umod
 scriptnum.encode|decode
 drbg.generate
 transaction.decode
+transaction.p2pkh.sign
+transaction.sighash
+script.asm.decode|encode|names
 ```
 
 Later operations extend the same versioned envelope for AES, secp keys,

@@ -112,6 +112,7 @@ print(account.neutered.serialized)
 - Canonical Bitcoin CompactSize integers and length-prefixed byte strings
 - Bounded Hex, Base64, Bitcoin Base58, and Base58Check encoding and decoding
 - Transaction identifiers with explicit wire and display byte order
+- Bounded ForkID signature preimages and transactional P2PKH input signing
 - Fixed-width `Hash160`, `Hash256`, and `Hash512` value types
 - SHA-256, double-SHA-256, SHA-512, HMAC, RIPEMD-160, and HASH160
 - HMAC-SHA256 deterministic random bit generation

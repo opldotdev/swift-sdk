@@ -173,12 +173,25 @@ func TestCompleteOperationRegistry(t *testing.T) {
 		"base64.decode", "base64.encode", "big.umod", "bytes.reverse", "digest32.display",
 		"digest32.parse", "drbg.generate", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "metadata",
-		"script.asm.decode", "script.asm.encode", "script.asm.names", "scriptnum.decode", "scriptnum.encode", "transaction.decode", "u16.decode", "u16.encode",
+		"script.asm.decode", "script.asm.encode", "script.asm.names", "scriptnum.decode", "scriptnum.encode", "transaction.decode", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
 	}
 	if !reflect.DeepEqual(operations, expected) {
 		t.Fatalf("registry mismatch\n got: %v\nwant: %v", operations, expected)
+	}
+}
+
+func TestTransactionSighashRejectsNonForkIDFlags(t *testing.T) {
+	transactionBytes := `0100000001` + strings.Repeat("00", 32) + `0000000000ffffffff0100000000000000000000000000`
+	for _, flag := range []string{"0", "1", "64", "68", "97", "255"} {
+		_, err := execute(testRequest("transaction.sighash", `{"bytes":"`+transactionBytes+`","inputIndex":"0","sourceSatoshis":"0","sourceScript":"","signatureHash":"`+flag+`"}`), metadata{})
+		if err == nil {
+			t.Fatalf("expected flag %s to be rejected", flag)
+		}
+		if got := normalizeError(err).Category; got != "invalidEncoding" {
+			t.Fatalf("flag %s: got %s, want invalidEncoding", flag, got)
+		}
 	}
 }
 
@@ -212,6 +225,8 @@ func TestEveryOperationHasDeterministicSuccess(t *testing.T) {
 		testRequest("script.asm.encode", `{"bytes":"0051b3ff"}`),
 		testRequest("script.asm.names", `{}`),
 		testRequest("transaction.decode", `{"bytes":"01000000000000000000"}`),
+		testRequest("transaction.p2pkh.sign", `{"bytes":"0100000001`+strings.Repeat("00", 32)+`0000000000ffffffff0100000000000000000000000000","inputIndex":"0","sourceSatoshis":"0","sourceScript":"","signatureHash":"65","privateKey":"`+strings.Repeat("00", 31)+`01"}`),
+		testRequest("transaction.sighash", `{"bytes":"0100000001`+strings.Repeat("00", 32)+`0000000000ffffffff0100000000000000000000000000","inputIndex":"0","sourceSatoshis":"0","sourceScript":"","signatureHash":"65"}`),
 	}
 	for _, tc := range cases {
 		t.Run(tc.Op, func(t *testing.T) {

@@ -19,10 +19,13 @@ import (
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	base58 "github.com/bsv-blockchain/go-sdk/compat/base58"
 	drbgprimitive "github.com/bsv-blockchain/go-sdk/primitives/drbg"
+	ecprimitive "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	primitives "github.com/bsv-blockchain/go-sdk/primitives/hash"
 	scriptpkg "github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/script/interpreter"
 	"github.com/bsv-blockchain/go-sdk/transaction"
+	sighashpkg "github.com/bsv-blockchain/go-sdk/transaction/sighash"
+	p2pkhpkg "github.com/bsv-blockchain/go-sdk/transaction/template/p2pkh"
 	"github.com/bsv-blockchain/go-sdk/util"
 )
 
@@ -345,6 +348,123 @@ func execute(req request, meta metadata) (result any, err error) {
 			"txid":     tx.TxID().String(),
 			"version":  strconv.FormatUint(uint64(tx.Version), 10),
 		}, nil
+	case "transaction.sighash":
+		var args struct {
+			Bytes          string `json:"bytes"`
+			InputIndex     string `json:"inputIndex"`
+			SourceSatoshis string `json:"sourceSatoshis"`
+			SourceScript   string `json:"sourceScript"`
+			SignatureHash  string `json:"signatureHash"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		inputIndex, err := decimalUint(args.InputIndex, 32)
+		if err != nil {
+			return nil, err
+		}
+		satoshis, err := decimalUint(args.SourceSatoshis, 64)
+		if err != nil {
+			return nil, err
+		}
+		sourceScript, err := protocolHex(args.SourceScript)
+		if err != nil {
+			return nil, err
+		}
+		flag, err := protocolForkIDFlag(args.SignatureHash)
+		if err != nil {
+			return nil, err
+		}
+		tx, err := transaction.NewTransactionFromBytes(data)
+		if err != nil {
+			return nil, err
+		}
+		if inputIndex >= uint64(len(tx.Inputs)) {
+			return nil, categorizedError{"invalidIndex", "input index is outside transaction inputs"}
+		}
+		tx.Inputs[inputIndex].SetSourceTxOutput(&transaction.TransactionOutput{
+			Satoshis:      satoshis,
+			LockingScript: scriptpkg.NewFromBytes(sourceScript),
+		})
+		preimage, err := tx.CalcInputPreimage(uint32(inputIndex), flag)
+		if err != nil {
+			return nil, err
+		}
+		digest, err := tx.CalcInputSignatureHash(uint32(inputIndex), flag)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{
+			"digest":   hex.EncodeToString(digest),
+			"preimage": hex.EncodeToString(preimage),
+		}, nil
+	case "transaction.p2pkh.sign":
+		var args struct {
+			Bytes          string `json:"bytes"`
+			InputIndex     string `json:"inputIndex"`
+			SourceSatoshis string `json:"sourceSatoshis"`
+			SourceScript   string `json:"sourceScript"`
+			SignatureHash  string `json:"signatureHash"`
+			PrivateKey     string `json:"privateKey"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		inputIndex, err := decimalUint(args.InputIndex, 32)
+		if err != nil {
+			return nil, err
+		}
+		satoshis, err := decimalUint(args.SourceSatoshis, 64)
+		if err != nil {
+			return nil, err
+		}
+		sourceScript, err := protocolHex(args.SourceScript)
+		if err != nil {
+			return nil, err
+		}
+		flag, err := protocolForkIDFlag(args.SignatureHash)
+		if err != nil {
+			return nil, err
+		}
+		privateKeyBytes, err := protocolHex(args.PrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		if len(privateKeyBytes) != 32 {
+			return nil, categorizedError{"invalidLength", "privateKey must contain exactly 32 bytes"}
+		}
+		privateKey, _ := ecprimitive.PrivateKeyFromBytes(privateKeyBytes)
+		if privateKey.D.Sign() <= 0 || privateKey.D.Cmp(ecprimitive.S256().Params().N) >= 0 {
+			return nil, categorizedError{"invalidKey", "privateKey scalar is outside secp256k1 range"}
+		}
+		tx, err := transaction.NewTransactionFromBytes(data)
+		if err != nil {
+			return nil, err
+		}
+		if inputIndex >= uint64(len(tx.Inputs)) {
+			return nil, categorizedError{"invalidIndex", "input index is outside transaction inputs"}
+		}
+		tx.Inputs[inputIndex].SetSourceTxOutput(&transaction.TransactionOutput{
+			Satoshis:      satoshis,
+			LockingScript: scriptpkg.NewFromBytes(sourceScript),
+		})
+		unlocker, err := p2pkhpkg.Unlock(privateKey, &flag)
+		if err != nil {
+			return nil, err
+		}
+		unlockingScript, err := unlocker.Sign(tx, uint32(inputIndex))
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"unlockingScript": hex.EncodeToString(*unlockingScript)}, nil
 	default:
 		return nil, categorizedError{"unsupportedOperation", "operation is not in the pinned registry"}
 	}
@@ -494,6 +614,21 @@ func decimalUint(text string, bits int) (uint64, error) {
 		return 0, categorizedError{"overflow", "integer is outside requested width"}
 	}
 	return value, nil
+}
+
+func protocolForkIDFlag(text string) (sighashpkg.Flag, error) {
+	value, err := decimalUint(text, 8)
+	if err != nil {
+		return 0, err
+	}
+	flag := sighashpkg.Flag(value)
+	baseFlag := flag & sighashpkg.Mask
+	if !flag.Has(sighashpkg.ForkID) ||
+		(baseFlag != sighashpkg.All && baseFlag != sighashpkg.None && baseFlag != sighashpkg.Single) ||
+		flag & ^(sighashpkg.AnyOneCanPay|sighashpkg.ForkID|sighashpkg.Mask) != 0 {
+		return 0, categorizedError{"invalidEncoding", "signatureHash must be one of the six ForkID combinations"}
+	}
+	return flag, nil
 }
 
 func canonicalInt(value *big.Int) string {

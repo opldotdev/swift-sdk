@@ -29,6 +29,9 @@ public enum TransactionError: Error, Equatable, Sendable {
     case malformed(field: TransactionField, offset: Int, cause: BinaryDecodingError)
     case invalidHex(TextEncodingError)
     case serializedSizeOverflow
+    case invalidInputIndex(Int)
     case missingSourceOutput(inputIndex: Int)
+    case sourceOutputIsNotPayToPublicKeyHash(inputIndex: Int)
+    case privateKeyDoesNotMatchSourceOutput(inputIndex: Int)
     case satoshiTotalOverflow
 }
