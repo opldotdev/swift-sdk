@@ -26,8 +26,10 @@ struct InterpreterReferenceNumberBoundaryTests {
         #expect(afterChronicle.maximumPushDataByteCount == Int(Int32.max))
         #expect(afterChronicle.maximumStackItemCount == Int(Int32.max))
         #expect(afterChronicle.maximumOperationCountPerScript == Int(Int32.max))
-        #expect(afterChronicle.maximumScriptNumberByteCount == 32 * 1_024 * 1_024)
-        #expect(afterChronicle.maximumScriptNumberByteCount + 1 == 32 * 1_024 * 1_024 + 1)
+        let chronicleMaximum = 32 * 1_024 * 1_024
+        let chroniclePlusOne = chronicleMaximum + 1
+        #expect(afterChronicle.maximumScriptNumberByteCount == chronicleMaximum)
+        #expect(afterChronicle.maximumScriptNumberByteCount + 1 == chroniclePlusOne)
     }
 
     @Test("after-Genesis executes the exact number ceiling and rejects plus one")
