@@ -907,6 +907,10 @@ func execute(req request, meta metadata) (result any, err error) {
 			names[raw] = name
 		}
 		return map[string]any{"names": names}, nil
+	case "script.bip276.decode":
+		return executeCompatibilityTailBIP276Decode(req.Args)
+	case "script.bip276.encode":
+		return executeCompatibilityTailBIP276Encode(req.Args)
 	case "spv.verify":
 		var args struct {
 			Bytes               string  `json:"bytes"`

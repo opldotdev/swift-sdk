@@ -188,7 +188,7 @@ private func requireSuccess(_ response: HTTPResponse) throws {
     guard (200...299).contains(response.statusCode) else {
         throw NetworkServiceError.httpStatus(
             code: response.statusCode,
-            message: sanitizedErrorExcerpt(response.body)
+            message: sanitizedProviderText(response.body)
         )
     }
 }
@@ -242,18 +242,4 @@ private func hexNibble(_ character: UInt8) -> UInt8? {
     case 97...102: return character - 87
     default: return nil
     }
-}
-
-private func sanitizedErrorExcerpt(_ body: Data) -> String? {
-    let decoded = String(decoding: body, as: UTF8.self)
-    var result = ""
-    var byteCount = 0
-    for scalar in decoded.unicodeScalars {
-        guard scalar.properties.generalCategory != .control else { continue }
-        let scalarByteCount = scalar.utf8.count
-        guard byteCount + scalarByteCount <= 1_024 else { break }
-        result.unicodeScalars.append(scalar)
-        byteCount += scalarByteCount
-    }
-    return result.isEmpty ? nil : result
 }

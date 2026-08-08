@@ -3,10 +3,10 @@
 Status: P0 complete; foundational P1/P2 crypto and P3 key formats are accepted
 after independent and Fable review. BigNum, Script, bounded raw and Extended
 Format transactions, BRC-74 Merkle paths, and BEEF v1/v2 plus Atomic BEEF are
-accepted. The first network, wallet, and portable-message checkpoints in
-Phases 7, 8, and 9 are also accepted. Work proceeds by dependency and can land
-out of phase order; an accepted checkpoint does not imply every earlier phase
-is complete.
+accepted. BIP-276, BRC-307 inscriptions, ARC, the offline BRC-52 certificate
+engine, and the first wallet and portable-message checkpoints are also
+accepted. Work proceeds by dependency and can land out of phase order. An
+accepted checkpoint does not imply that every earlier phase is complete.
 
 Each milestone ends with passing conformance tests, an updated compatibility
 matrix, and an advisor review at architectural or security-sensitive boundaries.
@@ -87,12 +87,16 @@ implemented with permissive fixtures, pinned-Go differentials, and Fable
 review. Extended Format carries each input's source output; raw serialization,
 transaction IDs, equality, and hashing remain unchanged. Parsing requires an
 explicit wire format so marker-like raw transactions are never auto-detected.
+BIP-276 text and BRC-307 inscription construction are also accepted with
+explicit input and output limits.
 
 - Transaction value/graph semantics and ADR. (Accepted)
 - Script representation, parsing, ASM, opcodes, and templates that do not sign.
 - Resource-bounded script numbers and era configuration.
 - Transaction model, parsing, serialization, IDs, and outpoints. (Accepted)
 - Extended Format parsing and serialization with source outputs. (Accepted)
+- Bounded BIP-276 text encoding and decoding. (Accepted)
+- BRC-307 basic, enriched, and specific-ordinal inscriptions. (Accepted)
 - Fee models and checked equal change distribution. (Accepted)
 - ForkID sighash variants and P2PKH transaction signing. (Accepted)
 
@@ -138,15 +142,17 @@ transient retries. The WhatsOnChain broadcaster submits each transaction once
 and accepts the result only when the provider's canonical transaction ID
 matches the locally computed ID. A cancellation or transport failure after the
 POST begins can still leave delivery uncertain; callers must reconcile before
-submitting again.
+submitting again. The ARC client uses the same one-POST rule, validates ARC
+status responses, and reports every non-rejection response failure after POST
+as uncertain delivery.
 
 - Bounded cross-platform HTTP transport and mockable package transport seam.
   (Accepted)
 - Unauthenticated WhatsOnChain height and Merkle-root tracking. (Accepted)
 - One-shot WhatsOnChain broadcasting with local transaction-ID verification.
   (Accepted)
-- Additional broadcasters, authenticated service clients, and configurable
-  provider endpoints. (Future)
+- ARC broadcasting and status lookup with bounded responses. (Accepted)
+- Additional broadcasters and authenticated service clients. (Future)
 - Linux WebSocket viability spike and fallback ADR if FoundationNetworking is
   insufficient. (Future)
 
@@ -155,31 +161,40 @@ submitting again.
 Accepted checkpoint: `BSVWallet` provides the offline BRC-100 cryptographic
 kernel: validated identifiers and request/result values, stateless BRC-42 key
 derivation, bounded JSON, and `ProtoWallet` public-key, encryption, HMAC, and
-signature operations. The checkpoint has no persistence, network substrate, or
-interactive permission policy.
+signature operations. The offline BRC-52 certificate checkpoint supplies
+bounded certificate values, keyrings, signing, field encryption, acquisition,
+projection, and cryptographic verification. These checkpoints have no
+persistence, network substrate, revocation lookup, or interactive permission
+policy.
 
 - BRC-100 crypto protocol types and capability protocols. (Accepted)
 - ProtoWallet key derivation, public-key, encryption, HMAC, and signing flows.
   (Accepted)
 - Bounded Go-compatible request/result JSON for the seven cryptographic calls.
   (Accepted)
+- Offline BRC-52 certificate values, keyrings, and binary codecs. (Accepted)
 - Persistent wallet state, request/response substrates, and permission policy.
   (Future)
-- Wallet certificate flows. (Future)
+- Chain-aware certificate revocation checks. (Future)
 
 ## Phase 9: Messages and authentication
 
 Accepted checkpoint: `BSVAuth` provides canonical BRC-77 portable signed
 messages and BRC-78 portable encrypted messages, including recipient-specific
-BRC-42 derivation and the BRC-77 anyone mode.
+BRC-42 derivation and the BRC-77 anyone mode. It also supplies offline BRC-52
+issue, acquire, project, and verify workflows.
 
 - BRC-77 portable signed messages. (Accepted)
 - BRC-78 portable encrypted messages. (Accepted)
+- Offline BRC-52 certificate workflows. (Accepted)
 - BRC-103 peer authentication. (Future)
 - BRC-104 authenticated HTTP and WebSocket transports. (Future)
 - Session, certificate, nonce, and replay protections. (Future)
 
 ## Phase 10: Overlay and application services
+
+`BSVServices` is currently a placeholder module. It does not yet supply these
+service families.
 
 - Overlay topic and lookup services, SHIP/SLAP, and admin tokens.
 - Identity and registry features.

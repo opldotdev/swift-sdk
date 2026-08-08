@@ -136,7 +136,7 @@ struct WhatsOnChainChainTrackerTests {
 
     @Test("non-success statuses produce sanitized bounded errors")
     func sanitizedHTTPError() async throws {
-        let unsafe = Data([0x41, 0x00, 0x0a, 0xff])
+        let unsafe = Data("A\u{202e}\u{200b}".utf8) + Data([0x00, 0x0a, 0xff])
             + Data(repeating: Character("x").asciiValue!, count: 2_000)
         let tracker = makeTracker(transport: ScriptedHTTPTransport([
             .success(HTTPResponse(statusCode: 418, body: unsafe)),
@@ -149,6 +149,8 @@ struct WhatsOnChainChainTrackerTests {
             let message = try #require(message)
             #expect(!message.contains("\0"))
             #expect(!message.contains("\n"))
+            #expect(!message.unicodeScalars.contains("\u{202e}"))
+            #expect(!message.unicodeScalars.contains("\u{200b}"))
             #expect(message.utf8.count <= 1_024)
             #expect(message.hasPrefix("A�"))
         } catch {

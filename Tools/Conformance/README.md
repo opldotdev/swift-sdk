@@ -119,6 +119,15 @@ both embedded keys. These preflights keep the pinned BRC-77 unchecked slices and
 short BRC-78 heuristic behind stable typed errors; panic recovery remains only a
 final generic defense and does not echo recovered values or request material.
 
+BIP-276 operations cap data at 32 KiB and prefixes at 128 printable ASCII
+bytes before calling the pinned SDK. Encode accepts nonzero decimal uint8
+version and network values. Pinned Go decode parses the hexadecimal fields and
+then re-encodes them in lowercase before checking the checksum. The Swift
+adapter requires canonical lowercase text at its public boundary and narrows
+prefixes to a lowercase ASCII letter followed only by lowercase letters,
+digits, or hyphens. This intentionally rejects the Go-accepted prefixes `A`,
+`a_b`, and `a.b`.
+
 | Operation | Args | Result |
 | --- | --- | --- |
 | `metadata` | `{}` | validated metadata object |
@@ -164,6 +173,8 @@ final generic defense and does not echo recovered values or request material.
 | `script.asm.decode` | `{text}` | `{bytes}` (Go SDK canonical ASM parser) |
 | `script.asm.encode` | `{bytes}` | `{text}` (Go SDK canonical ASM formatter) |
 | `script.asm.names` | `{}` | `{names}` (all 256 pinned Go SDK opcode names in byte order) |
+| `script.bip276.decode` | `{text}` | `{prefix,version,network,data}` using the pinned Go SDK checksum decoder |
+| `script.bip276.encode` | `{prefix,version,network,data}` | `{text}` using the pinned Go SDK lowercase encoder |
 | `script.execute` | `{unlockingScript,lockingScript,era,flags?,transactionVersion?}` | `{stack,valid}` for bounded context-free execution; `transactionVersion` is a canonical decimal string used by Chronicle version opcodes |
 | `scriptnum.encode` | `{value,era}` | `{bytes}` |
 | `scriptnum.decode` | `{bytes,era,minimal,maxBytes}` | `{value}` |
@@ -198,7 +209,7 @@ Stable error categories are `invalidEncoding`, `invalidCharacter`,
 `authentication`, `padding`, `numberTooLarge`, `nonminimal`, `divisionByZero`,
 `insufficientEntropy`, `invalidRequestedByteCount`, `invalidHex`,
 `invalidPrivateKey`, `invalidPublicKey`, `invalidSignature`,
-`unsupportedVersion`, `recipientMismatch`, `authenticationFailed`, `requestTooLarge`,
+`unsupportedVersion`, `unsupportedNetwork`, `recipientMismatch`, `authenticationFailed`, `requestTooLarge`,
 `reseedRequired`, `unsupportedOperation`, `oraclePanic`, `timeout`, `transport`,
 and `internal`.
 Typed errors take precedence. The one pinned message fallback is isolated and

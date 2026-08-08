@@ -54,9 +54,10 @@ public struct WhatsOnChainBroadcaster: Broadcaster, Sendable {
             guard response.statusCode == 200 else {
                 throw NetworkServiceError.httpStatus(
                     code: response.statusCode,
-                    message: sanitizedBroadcastErrorExcerpt(
+                    message: sanitizedProviderText(
                         response.body,
-                        redacting: transactionHex
+                        redacting: [transactionHex],
+                        redactingFieldNames: ["txhex"]
                     )
                 )
             }
@@ -124,66 +125,4 @@ private func parseCanonicalTransactionID(_ body: Data) throws -> TransactionID {
 
 private func isASCIISurroundingWhitespace(_ byte: UInt8) -> Bool {
     byte == 0x20 || (0x09...0x0d).contains(byte)
-}
-
-private func sanitizedBroadcastErrorExcerpt(
-    _ body: Data,
-    redacting transactionHex: String
-) -> String? {
-    let decoded = String(decoding: body, as: UTF8.self)
-    var withoutControls = ""
-    for scalar in decoded.unicodeScalars {
-        guard scalar.properties.generalCategory != .control else { continue }
-        withoutControls.unicodeScalars.append(scalar)
-    }
-    guard !withoutControls.isEmpty else { return nil }
-    let withoutRequestField = withoutControls.replacingOccurrences(
-        of: "txhex",
-        with: "[redacted-field]",
-        options: .caseInsensitive
-    ).replacingOccurrences(
-        of: transactionHex,
-        with: "[redacted]",
-        options: .caseInsensitive
-    )
-    return boundedErrorExcerpt(redactingLongHexRuns(withoutRequestField))
-}
-
-private func redactingLongHexRuns(_ text: String) -> String {
-    var result = ""
-    var hexRun = ""
-
-    func appendHexRun() {
-        result += hexRun.utf8.count >= 8 ? "[redacted]" : hexRun
-        hexRun.removeAll(keepingCapacity: true)
-    }
-
-    for scalar in text.unicodeScalars {
-        if isASCIIHex(scalar.value) {
-            hexRun.unicodeScalars.append(scalar)
-        } else {
-            appendHexRun()
-            result.unicodeScalars.append(scalar)
-        }
-    }
-    appendHexRun()
-    return result
-}
-
-private func isASCIIHex(_ value: UInt32) -> Bool {
-    (48...57).contains(value)
-        || (65...70).contains(value)
-        || (97...102).contains(value)
-}
-
-private func boundedErrorExcerpt(_ text: String) -> String? {
-    var result = ""
-    var byteCount = 0
-    for scalar in text.unicodeScalars {
-        let scalarByteCount = scalar.utf8.count
-        guard byteCount + scalarByteCount <= 1_024 else { break }
-        result.unicodeScalars.append(scalar)
-        byteCount += scalarByteCount
-    }
-    return result.isEmpty ? nil : result
 }

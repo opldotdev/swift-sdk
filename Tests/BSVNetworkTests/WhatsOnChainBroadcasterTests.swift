@@ -95,7 +95,7 @@ struct WhatsOnChainBroadcasterTests {
         199, 201, 204, 299, 300, 400, 404, 408, 429, 500, 503, 504,
     ])
     func nonSuccessStatus(_ status: Int) async throws {
-        let unsafe = Data([0x41, 0x00, 0x0a, 0xff])
+        let unsafe = Data("A\u{202e}\u{200b}".utf8) + Data([0x00, 0x0a, 0xff])
             + Data(repeating: Character("x").asciiValue!, count: 2_000)
         let transport = ScriptedBroadcastTransport([
             .success(HTTPResponse(statusCode: status, body: unsafe)),
@@ -114,6 +114,8 @@ struct WhatsOnChainBroadcasterTests {
             #expect(message.hasPrefix("A�"))
             #expect(!message.contains("\0"))
             #expect(!message.contains("\n"))
+            #expect(!message.unicodeScalars.contains("\u{202e}"))
+            #expect(!message.unicodeScalars.contains("\u{200b}"))
             #expect(message.utf8.count <= 1_024)
         } catch {
             Issue.record("Unexpected error: \(error)")

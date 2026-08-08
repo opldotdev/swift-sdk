@@ -197,7 +197,9 @@ let package = Package(
         ),
         .testTarget(
             name: "BSVAuthTests",
-            dependencies: ["BSVAuth", "BSVKeys", "BSVCrypto", "BSVCore"],
+            dependencies: [
+                "BSVAuth", "BSVWallet", "BSVTransaction", "BSVKeys", "BSVCrypto", "BSVCore",
+            ],
             exclude: ["README.md"]
         ),
         .testTarget(

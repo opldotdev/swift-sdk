@@ -43,3 +43,56 @@ jobs:
         env:
           BSV_BIG_NUM_SCALE: "1"
         run: swift test -c release --disable-sandbox --filter BigNumScaleTests
+
+  go-sdk-conformance:
+    name: Go SDK v1.3.3 conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout Swift SDK
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: swift-sdk
+      - name: Checkout pinned Go SDK
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: bsv-blockchain/go-sdk
+          ref: de26fdec57a945ddc06de5d5617f6c32374f3929
+          path: go-sdk
+      - name: Install Swift
+        uses: swift-actions/setup-swift@7591e4f04c00624cb043783da51a7fd6ee0a6bf6
+        with:
+          swift-version: "6.1"
+      - name: Install Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: "1.25.0"
+          cache: false
+      - name: Verify pinned Go checkout
+        working-directory: go-sdk
+        run: |
+          test "$(git rev-parse HEAD)" = "de26fdec57a945ddc06de5d5617f6c32374f3929"
+          test -z "$(git status --porcelain)"
+      - name: Populate the Go module cache
+        run: |
+          cd go-sdk
+          GOTOOLCHAIN=go1.25.0 go mod download
+          cd ../swift-sdk/Tools/Conformance/GoOracle
+          GOTOOLCHAIN=go1.25.0 go mod download
+      - name: Test the external Go adapter offline
+        working-directory: swift-sdk
+        env:
+          BSV_GO_SDK_PATH: ${{ github.workspace }}/go-sdk
+          GOTOOLCHAIN: go1.25.0
+          GOPROXY: "off"
+          GOSUMDB: "off"
+        run: Tools/Conformance/GoOracle/test-external.sh
+      - name: Run required Swift-to-Go differentials offline
+        working-directory: swift-sdk
+        env:
+          BSV_GO_SDK_PATH: ${{ github.workspace }}/go-sdk
+          BSV_ORACLE_REQUIRED: "1"
+          GOTOOLCHAIN: go1.25.0
+          GOPROXY: "off"
+          GOSUMDB: "off"
+        run: swift test --disable-sandbox
