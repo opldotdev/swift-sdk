@@ -472,16 +472,47 @@ final class GoOracleClient: @unchecked Sendable {
 
         let output = LockedData(maximumBytes: goOracleMaximumLineBytes)
         let diagnostics = LockedData(maximumBytes: goOracleMaximumLineBytes)
-        stdout.fileHandleForReading.readabilityHandler = { handle in
-            if !output.append(handle.availableData) { process.terminate() }
-        }
-        stderr.fileHandleForReading.readabilityHandler = { handle in
-            if !diagnostics.append(handle.availableData) { process.terminate() }
-        }
+        let reads = GoOracleReadResult()
+        let outputFinished = DispatchSemaphore(value: 0)
+        let diagnosticsFinished = DispatchSemaphore(value: 0)
         let completed = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in completed.signal() }
         do { try process.run() }
         catch { throw GoOracleClientError.transport("could not start oracle: \(error)") }
+
+        func drain(
+            _ handle: FileHandle,
+            into destination: LockedData,
+            label: String,
+            finished: DispatchSemaphore
+        ) {
+            DispatchQueue.global(qos: .userInitiated).async {
+                defer { finished.signal() }
+                do {
+                    while let chunk = try handle.read(upToCount: 64 * 1_024), !chunk.isEmpty {
+                        guard destination.append(chunk) else {
+                            process.terminate()
+                            return
+                        }
+                    }
+                } catch {
+                    reads.set(label: label, error: error)
+                    process.terminate()
+                }
+            }
+        }
+        drain(
+            stdout.fileHandleForReading,
+            into: output,
+            label: "stdout",
+            finished: outputFinished
+        )
+        drain(
+            stderr.fileHandleForReading,
+            into: diagnostics,
+            label: "stderr",
+            finished: diagnosticsFinished
+        )
         if let input {
             do { try stdin.fileHandleForWriting.write(contentsOf: input); try stdin.fileHandleForWriting.close() }
             catch { process.terminate(); throw GoOracleClientError.transport("could not write request: \(error)") }
@@ -493,14 +524,17 @@ final class GoOracleClient: @unchecked Sendable {
                 _ = kill(process.processIdentifier, SIGKILL)
                 _ = completed.wait(timeout: .now() + 0.25)
             }
-            stdout.fileHandleForReading.readabilityHandler = nil
-            stderr.fileHandleForReading.readabilityHandler = nil
+            _ = outputFinished.wait(timeout: .now() + 2)
+            _ = diagnosticsFinished.wait(timeout: .now() + 2)
             throw GoOracleClientError.timeout
         }
-        stdout.fileHandleForReading.readabilityHandler = nil
-        stderr.fileHandleForReading.readabilityHandler = nil
-        _ = output.append(stdout.fileHandleForReading.readDataToEndOfFile())
-        _ = diagnostics.append(stderr.fileHandleForReading.readDataToEndOfFile())
+        guard outputFinished.wait(timeout: .now() + 2) == .success,
+              diagnosticsFinished.wait(timeout: .now() + 2) == .success else {
+            throw GoOracleClientError.transport("oracle output pipes did not close")
+        }
+        if let readError = reads.errorDescription {
+            throw GoOracleClientError.transport(readError)
+        }
         if output.exceededLimit { throw GoOracleClientError.responseTooLarge }
         if diagnostics.exceededLimit { throw GoOracleClientError.transport("oracle diagnostics exceeded 1 MiB") }
         guard process.terminationStatus == 0 else { throw GoOracleClientError.processExited(process.terminationStatus) }
@@ -599,6 +633,17 @@ private final class GoOracleWriteResult: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: String?
     func set(error: Error) { lock.lock(); storage = String(describing: error); lock.unlock() }
+    var errorDescription: String? { lock.lock(); defer { lock.unlock() }; return storage }
+}
+
+private final class GoOracleReadResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: String?
+    func set(label: String, error: Error) {
+        lock.lock()
+        if storage == nil { storage = "could not read oracle \(label): \(error)" }
+        lock.unlock()
+    }
     var errorDescription: String? { lock.lock(); defer { lock.unlock() }; return storage }
 }
 
