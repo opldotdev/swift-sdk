@@ -21,7 +21,7 @@ public enum AESCBC {
             ciphertext = Array(
                 try AES._CBC.encrypt(
                     plaintext,
-                    using: SymmetricKey(data: key),
+                    using: Crypto.SymmetricKey(data: key),
                     iv: iv
                 )
             )
@@ -52,7 +52,7 @@ public enum AESCBC {
             return Array(
                 try AES._CBC.decrypt(
                     ciphertext,
-                    using: SymmetricKey(data: key),
+                    using: Crypto.SymmetricKey(data: key),
                     iv: iv
                 )
             )

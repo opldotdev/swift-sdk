@@ -120,6 +120,7 @@ print(account.neutered.serialized)
 - SHA-256, double-SHA-256, SHA-512, HMAC, RIPEMD-160, and HASH160
 - HMAC-SHA256 deterministic random bit generation
 - AES-CBC with PKCS#7 padding and detached AES-GCM authenticated encryption
+- Go-compatible AES-256-GCM symmetric keys with 32-byte nonce envelopes
 - Validated secp256k1 private keys and compressed, uncompressed, or hybrid
   public-key parsing backed by libsecp256k1
 - Deterministic digest-level ECDSA with strict DER and compact signatures

@@ -104,6 +104,8 @@ supports exactly one version byte.
 | `brc42.public.derive` | `{recipientPublicKey,senderPrivateKey,invoiceNumber}` | `{publicKey}` in compressed SEC1 form |
 | `brc94.generate` | `{proverPrivateKey,counterpartyPublicKey}` | Fresh `{proverPublicKey,sharedSecret,noncePublicKey,nonceSharedSecret,response}` proof fields |
 | `brc94.verify` | `{proverPublicKey,counterpartyPublicKey,sharedSecret,noncePublicKey,nonceSharedSecret,response}` | `{valid}` for both BRC-94 proof equations |
+| `symmetric.encrypt` | `{key,plaintext,nonce}` | Deterministic `{envelope}` as `32-byte nonce || ciphertext || 16-byte tag` |
+| `symmetric.decrypt` | `{key,envelope}` | `{plaintext}` through pinned Go `SymmetricKey.Decrypt` |
 | `script.asm.decode` | `{text}` | `{bytes}` (Go SDK canonical ASM parser) |
 | `script.asm.encode` | `{bytes}` | `{text}` (Go SDK canonical ASM formatter) |
 | `script.asm.names` | `{}` | `{names}` (all 256 pinned Go SDK opcode names in byte order) |

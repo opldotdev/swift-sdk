@@ -200,7 +200,7 @@ func TestCompleteOperationRegistry(t *testing.T) {
 		"base64.decode", "base64.encode", "big.umod", "brc42.private.derive", "brc42.public.derive", "brc94.generate", "brc94.verify", "bytes.reverse", "digest32.display",
 		"digest32.parse", "drbg.generate", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "metadata",
-		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.execute", "scriptnum.decode", "scriptnum.encode", "spv.verify", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
+		"script.asm.decode", "script.asm.encode", "script.asm.names", "script.execute", "scriptnum.decode", "scriptnum.encode", "spv.verify", "symmetric.decrypt", "symmetric.encrypt", "transaction.beef.decode", "transaction.beef.merge", "transaction.beef.reencode", "transaction.beef.trim", "transaction.beef.txidonly", "transaction.beef.validate", "transaction.beef.verify", "transaction.decode", "transaction.fee", "transaction.merklepath.combine", "transaction.merklepath.decode", "transaction.merklepath.root", "transaction.p2pkh.sign", "transaction.sighash", "u16.decode", "u16.encode",
 		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
 	}
@@ -276,6 +276,45 @@ func TestBRC94GeneratedProofVerifies(t *testing.T) {
 	}
 	if !verified.(map[string]bool)["valid"] {
 		t.Fatal("generated BRC-94 proof did not verify")
+	}
+}
+
+func TestSymmetricEnvelopeComposition(t *testing.T) {
+	shortKey := "01"
+	paddedKey := strings.Repeat("00", 31) + "01"
+	nonce := strings.Repeat("a5", 32)
+	plaintext := "000102ff"
+
+	encryptedShort, err := execute(testRequest(
+		"symmetric.encrypt",
+		`{"key":"`+shortKey+`","plaintext":"`+plaintext+`","nonce":"`+nonce+`"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encryptedPadded, err := execute(testRequest(
+		"symmetric.encrypt",
+		`{"key":"`+paddedKey+`","plaintext":"`+plaintext+`","nonce":"`+nonce+`"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(encryptedShort, encryptedPadded) {
+		t.Fatal("left-zero-padded key did not match exact 32-byte key")
+	}
+	envelope := encryptedShort.(map[string]string)["envelope"]
+	if len(envelope) != (32+4+16)*2 || !strings.HasPrefix(envelope, nonce) {
+		t.Fatalf("unexpected symmetric envelope: %s", envelope)
+	}
+	decrypted, err := execute(testRequest(
+		"symmetric.decrypt",
+		`{"key":"`+shortKey+`","envelope":"`+envelope+`"}`,
+	), metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decrypted.(map[string]string)["plaintext"]; got != plaintext {
+		t.Fatalf("got plaintext %s, want %s", got, plaintext)
 	}
 }
 

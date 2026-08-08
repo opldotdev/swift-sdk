@@ -30,7 +30,7 @@ public enum AESGCM {
             let cryptoNonce = try AES.GCM.Nonce(data: nonce)
             let sealedBox = try AES.GCM.seal(
                 plaintext,
-                using: SymmetricKey(data: key),
+                using: Crypto.SymmetricKey(data: key),
                 nonce: cryptoNonce,
                 authenticating: additionalAuthenticatedData
             )
@@ -68,7 +68,7 @@ public enum AESGCM {
             return Array(
                 try AES.GCM.open(
                     cryptoSealedBox,
-                    using: SymmetricKey(data: key),
+                    using: Crypto.SymmetricKey(data: key),
                     authenticating: additionalAuthenticatedData
                 )
             )

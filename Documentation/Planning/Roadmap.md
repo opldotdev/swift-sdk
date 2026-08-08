@@ -46,7 +46,9 @@ public key parsing/serialization, deterministic digest-level ECDSA with strict
 DER and compact/recoverable forms, raw-point ECDH, and additive/multiplicative
 key tweaks. BRC-42 bilateral private/public derivation and BRC-94 verifiable
 shared-secret proofs are accepted with bidirectional pinned-Go differentials.
-Symmetric envelopes and key-sharing work remains open.
+The injectable operating-system secure-randomness seam and Go-compatible
+AES-256-GCM symmetric-key envelope are accepted with bidirectional pinned-Go
+differentials. Key-sharing and backup work remains open.
 
 - AES block/CBC/GCM and PKCS#7 behavior.
 - HMAC-DRBG.
@@ -56,7 +58,9 @@ Symmetric envelopes and key-sharing work remains open.
 - Wrap and vector-test normalization of externally supplied high-S signatures;
   locally produced P256K signatures are already low-S.
 - BRC-42 private/public derivation and BRC-94 proof behavior. (Accepted)
-- Symmetric key envelopes, key shares, and backups.
+- Injectable secure randomness. (Accepted)
+- Symmetric key envelopes. (Accepted)
+- Key shares and backups.
 
 ## Phase 3: Key compatibility formats
 

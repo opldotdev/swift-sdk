@@ -20,6 +20,7 @@ import (
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	base58 "github.com/bsv-blockchain/go-sdk/compat/base58"
+	aesgcmprimitive "github.com/bsv-blockchain/go-sdk/primitives/aesgcm"
 	drbgprimitive "github.com/bsv-blockchain/go-sdk/primitives/drbg"
 	ecprimitive "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	primitives "github.com/bsv-blockchain/go-sdk/primitives/hash"
@@ -719,6 +720,62 @@ func execute(req request, meta metadata) (result any, err error) {
 			return nil, err
 		}
 		return map[string]bool{"valid": valid}, nil
+	case "symmetric.encrypt":
+		var args struct {
+			Key       string `json:"key"`
+			Plaintext string `json:"plaintext"`
+			Nonce     string `json:"nonce"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		key, err := protocolSymmetricKey(args.Key)
+		if err != nil {
+			return nil, err
+		}
+		plaintext, err := protocolHex(args.Plaintext)
+		if err != nil {
+			return nil, err
+		}
+		nonce, err := protocolHex(args.Nonce)
+		if err != nil {
+			return nil, err
+		}
+		if len(nonce) != 32 {
+			return nil, categorizedError{"invalidLength", "symmetric nonce must be 32 bytes"}
+		}
+		ciphertext, tag, err := aesgcmprimitive.AESGCMEncrypt(
+			plaintext, key.ToBytes(), nonce, []byte{},
+		)
+		if err != nil {
+			return nil, err
+		}
+		envelope := make([]byte, 0, len(nonce)+len(ciphertext)+len(tag))
+		envelope = append(envelope, nonce...)
+		envelope = append(envelope, ciphertext...)
+		envelope = append(envelope, tag...)
+		return map[string]string{"envelope": hex.EncodeToString(envelope)}, nil
+	case "symmetric.decrypt":
+		var args struct {
+			Key      string `json:"key"`
+			Envelope string `json:"envelope"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		key, err := protocolSymmetricKey(args.Key)
+		if err != nil {
+			return nil, err
+		}
+		envelope, err := protocolHex(args.Envelope)
+		if err != nil {
+			return nil, err
+		}
+		plaintext, err := key.Decrypt(envelope)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"plaintext": hex.EncodeToString(plaintext)}, nil
 	case "transaction.decode":
 		var args struct {
 			Bytes string `json:"bytes"`
@@ -1340,6 +1397,17 @@ func protocolPublicKey(text string) (*ecprimitive.PublicKey, error) {
 		return nil, categorizedError{"key", "public key is invalid"}
 	}
 	return publicKey, nil
+}
+
+func protocolSymmetricKey(text string) (*ecprimitive.SymmetricKey, error) {
+	data, err := protocolHex(text)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) < 1 || len(data) > 32 {
+		return nil, categorizedError{"invalidLength", "symmetric key must contain 1 through 32 bytes"}
+	}
+	return ecprimitive.NewSymmetricKey(data), nil
 }
 
 func decimalUint(text string, bits int) (uint64, error) {

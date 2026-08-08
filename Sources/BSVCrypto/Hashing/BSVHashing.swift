@@ -40,7 +40,7 @@ public enum BSVHashing {
     public static func hmacSHA256(_ message: [UInt8], key: [UInt8]) -> Hash256 {
         let code = HMAC<SHA256>.authenticationCode(
             for: message,
-            using: SymmetricKey(data: key)
+            using: Crypto.SymmetricKey(data: key)
         )
         return Hash256(exactDigestBytesGuaranteed: Array(code))
     }
@@ -49,7 +49,7 @@ public enum BSVHashing {
     public static func hmacSHA512(_ message: [UInt8], key: [UInt8]) -> Hash512 {
         let code = HMAC<SHA512>.authenticationCode(
             for: message,
-            using: SymmetricKey(data: key)
+            using: Crypto.SymmetricKey(data: key)
         )
         return Hash512(exactDigestBytesGuaranteed: Array(code))
     }
@@ -63,7 +63,7 @@ public enum BSVHashing {
         HMAC<SHA256>.isValidAuthenticationCode(
             authenticationCode,
             authenticating: message,
-            using: SymmetricKey(data: key)
+            using: Crypto.SymmetricKey(data: key)
         )
     }
 
@@ -76,7 +76,7 @@ public enum BSVHashing {
         HMAC<SHA512>.isValidAuthenticationCode(
             authenticationCode,
             authenticating: message,
-            using: SymmetricKey(data: key)
+            using: Crypto.SymmetricKey(data: key)
         )
     }
 }
