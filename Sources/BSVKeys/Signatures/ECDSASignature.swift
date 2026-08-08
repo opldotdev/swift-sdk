@@ -70,6 +70,20 @@ public struct ECDSASignature: Hashable, Sendable {
         self.canonicalDERBytes = Array(dependencySignature.derRepresentation)
     }
 
+    /// Parses the signature encoding accepted by Bitcoin Script. Strict mode
+    /// requires canonical DER; compatibility mode accepts the pinned Go SDK's
+    /// historical unsigned, padded one-byte-length BER form.
+    package init(scriptBytes: [UInt8], strict: Bool) throws {
+        if strict {
+            try self.init(derBytes: scriptBytes)
+            return
+        }
+        guard let compact = PermissiveECDSABER.decode(scriptBytes) else {
+            throw ECDSASignatureError.invalidDEREncoding
+        }
+        try self.init(compactBytes: compact)
+    }
+
     /// The canonical 64-byte big-endian `r || s` encoding.
     public var compactBytes: [UInt8] {
         canonicalCompactBytes
@@ -84,6 +98,30 @@ public struct ECDSASignature: Hashable, Sendable {
         try? P256K.Signing.ECDSASignature(
             compactRepresentation: canonicalCompactBytes
         )
+    }
+
+    package var isLowS: Bool {
+        Array(canonicalCompactBytes[32..<64])
+            .lexicographicallyPrecedesOrEqual(to: Secp256k1SignatureScalar.halfOrder)
+    }
+
+    package func verifiesInScript(publicKey: PublicKey, digest: Hash256) -> Bool {
+        let compact = isLowS
+            ? canonicalCompactBytes
+            : Array(canonicalCompactBytes[..<32])
+                + Secp256k1SignatureScalar.negatedScalar(
+                    Array(canonicalCompactBytes[32..<64])
+                )
+        guard let signature = try? P256K.Signing.ECDSASignature(
+                  compactRepresentation: compact
+              ),
+              let key = try? P256K.Signing.PublicKey(
+                  dataRepresentation: publicKey.compressedBytes,
+                  format: .compressed
+              ) else {
+            return false
+        }
+        return key.isValidSignature(signature, for: HashDigest(digest.bytes))
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
@@ -135,11 +173,18 @@ public extension PublicKey {
 }
 
 private enum Secp256k1SignatureScalar {
-    private static let order: [UInt8] = [
+    static let order: [UInt8] = [
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
         0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b,
         0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+    ]
+
+    static let halfOrder: [UInt8] = [
+        0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0x5d, 0x57, 0x6e, 0x73, 0x57, 0xa4, 0x50, 0x1d,
+        0xdf, 0xe9, 0x2f, 0x46, 0x68, 0x1b, 0x20, 0xa0,
     ]
 
     static func isValid<C: Collection>(_ bytes: C) -> Bool where C.Element == UInt8 {
@@ -147,6 +192,65 @@ private enum Secp256k1SignatureScalar {
             return false
         }
         return bytes.lexicographicallyPrecedes(order)
+    }
+
+    static func negatedScalar(_ scalar: [UInt8]) -> [UInt8] {
+        var result = [UInt8](repeating: 0, count: 32)
+        var borrow = 0
+        for index in stride(from: 31, through: 0, by: -1) {
+            var difference = Int(order[index]) - Int(scalar[index]) - borrow
+            if difference < 0 {
+                difference += 256
+                borrow = 1
+            } else {
+                borrow = 0
+            }
+            result[index] = UInt8(difference)
+        }
+        return result
+    }
+}
+
+private enum PermissiveECDSABER {
+    static func decode(_ input: [UInt8]) -> [UInt8]? {
+        guard input.count >= 8, input[0] == 0x30 else { return nil }
+        let encodedCount = Int(input[1]) + 2
+        guard encodedCount >= 8, encodedCount <= input.count else { return nil }
+        let bytes = Array(input[..<encodedCount])
+        var cursor = 2
+        guard let r = decodeInteger(bytes, cursor: &cursor),
+              let s = decodeInteger(bytes, cursor: &cursor),
+              cursor == bytes.count else {
+            return nil
+        }
+        return r + s
+    }
+
+    private static func decodeInteger(
+        _ bytes: [UInt8],
+        cursor: inout Int
+    ) -> [UInt8]? {
+        guard cursor + 2 <= bytes.count, bytes[cursor] == 0x02 else {
+            return nil
+        }
+        let count = Int(bytes[cursor + 1])
+        cursor += 2
+        guard count > 0, count <= bytes.count - cursor else { return nil }
+        var scalar = Array(bytes[cursor..<(cursor + count)])
+        cursor += count
+        while scalar.first == 0, scalar.count > 1 {
+            scalar.removeFirst()
+        }
+        guard scalar.count <= 32 else { return nil }
+        scalar.insert(contentsOf: repeatElement(0, count: 32 - scalar.count), at: 0)
+        guard Secp256k1SignatureScalar.isValid(scalar) else { return nil }
+        return scalar
+    }
+}
+
+private extension Array where Element == UInt8 {
+    func lexicographicallyPrecedesOrEqual(to other: [UInt8]) -> Bool {
+        self == other || lexicographicallyPrecedes(other)
     }
 }
 

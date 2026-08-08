@@ -33,6 +33,12 @@ func normalizeError(err error) oracleError {
 			return oracleError{Category: "verifyFailed", Message: err.Error()}
 		case interpretererrors.ErrEqualVerify:
 			return oracleError{Category: "equalVerifyFailed", Message: err.Error()}
+		case interpretererrors.ErrNumEqualVerify:
+			return oracleError{Category: "numericEqualVerifyFailed", Message: err.Error()}
+		case interpretererrors.ErrCheckSigVerify:
+			return oracleError{Category: "checkSignatureVerifyFailed", Message: err.Error()}
+		case interpretererrors.ErrCheckMultiSigVerify:
+			return oracleError{Category: "checkMultiSignatureVerifyFailed", Message: err.Error()}
 		case interpretererrors.ErrUnbalancedConditional:
 			return oracleError{Category: "unbalancedConditional", Message: err.Error()}
 		case interpretererrors.ErrReservedOpcode:
@@ -42,6 +48,10 @@ func normalizeError(err error) oracleError {
 		case interpretererrors.ErrScriptTooBig, interpretererrors.ErrElementTooBig,
 			interpretererrors.ErrTooManyOperations, interpretererrors.ErrStackOverflow:
 			return oracleError{Category: "consensusLimit", Message: err.Error()}
+		case interpretererrors.ErrInvalidPubKeyCount:
+			return oracleError{Category: "invalidPublicKeyCount", Message: err.Error()}
+		case interpretererrors.ErrInvalidSignatureCount:
+			return oracleError{Category: "invalidSignatureCount", Message: err.Error()}
 		case interpretererrors.ErrNotPushOnly:
 			return oracleError{Category: "notPushOnly", Message: err.Error()}
 		case interpretererrors.ErrCleanStack:
@@ -50,6 +60,25 @@ func normalizeError(err error) oracleError {
 			return oracleError{Category: "numberTooLarge", Message: err.Error()}
 		case interpretererrors.ErrMinimalData:
 			return oracleError{Category: "nonminimal", Message: err.Error()}
+		case interpretererrors.ErrInvalidSigHashType:
+			return oracleError{Category: "invalidSignatureHashType", Message: err.Error()}
+		case interpretererrors.ErrSigTooShort, interpretererrors.ErrSigTooLong,
+			interpretererrors.ErrSigInvalidSeqID, interpretererrors.ErrSigInvalidDataLen,
+			interpretererrors.ErrSigMissingSTypeID, interpretererrors.ErrSigMissingSLen,
+			interpretererrors.ErrSigInvalidSLen, interpretererrors.ErrSigInvalidRIntID,
+			interpretererrors.ErrSigZeroRLen, interpretererrors.ErrSigNegativeR,
+			interpretererrors.ErrSigTooMuchRPadding, interpretererrors.ErrSigInvalidSIntID,
+			interpretererrors.ErrSigZeroSLen, interpretererrors.ErrSigNegativeS,
+			interpretererrors.ErrSigTooMuchSPadding, interpretererrors.ErrSigHighS:
+			return oracleError{Category: "invalidSignatureEncoding", Message: err.Error()}
+		case interpretererrors.ErrPubKeyType:
+			return oracleError{Category: "invalidPublicKeyEncoding", Message: err.Error()}
+		case interpretererrors.ErrSigNullDummy:
+			return oracleError{Category: "nullDummy", Message: err.Error()}
+		case interpretererrors.ErrNullFail:
+			return oracleError{Category: "nullFail", Message: err.Error()}
+		case interpretererrors.ErrIllegalForkID:
+			return oracleError{Category: "illegalForkID", Message: err.Error()}
 		case interpretererrors.ErrDivideByZero:
 			return oracleError{Category: "divisionByZero", Message: err.Error()}
 		}

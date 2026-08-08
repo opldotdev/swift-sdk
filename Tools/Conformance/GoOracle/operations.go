@@ -45,6 +45,9 @@ func executeScriptPair(raw json.RawMessage) (any, error) {
 		Era                string   `json:"era"`
 		Flags              []string `json:"flags,omitempty"`
 		TransactionVersion *string  `json:"transactionVersion,omitempty"`
+		Transaction        *string  `json:"transaction,omitempty"`
+		InputIndex         *string  `json:"inputIndex,omitempty"`
+		SourceSatoshis     *string  `json:"sourceSatoshis,omitempty"`
 	}
 	if err := decodeArgs(raw, &args); err != nil {
 		return nil, err
@@ -73,6 +76,20 @@ func executeScriptPair(raw json.RawMessage) (any, error) {
 			flags |= scriptflag.VerifyMinimalIf
 		case "signaturePushOnly":
 			flags |= scriptflag.VerifySigPushOnly
+		case "strictMultiSignatureDummy":
+			flags |= scriptflag.StrictMultiSig
+		case "derSignatures":
+			flags |= scriptflag.VerifyDERSignatures
+		case "lowS":
+			flags |= scriptflag.VerifyLowS
+		case "nullFail":
+			flags |= scriptflag.VerifyNullFail
+		case "enableForkID":
+			flags |= scriptflag.EnableSighashForkID
+		case "strictEncoding":
+			flags |= scriptflag.VerifyStrictEncoding
+		case "bip143SignatureHash":
+			flags |= scriptflag.VerifyBip143SigHash
 		default:
 			return nil, categorizedError{"invalidEncoding", "unknown script flag: " + name}
 		}
@@ -81,6 +98,54 @@ func executeScriptPair(raw json.RawMessage) (any, error) {
 	options := []interpreter.ExecutionOptionFunc{
 		interpreter.WithScripts(lockingScript, unlockingScript),
 		interpreter.WithFlags(flags),
+	}
+	contextFieldCount := 0
+	if args.Transaction != nil {
+		contextFieldCount++
+	}
+	if args.InputIndex != nil {
+		contextFieldCount++
+	}
+	if args.SourceSatoshis != nil {
+		contextFieldCount++
+	}
+	if contextFieldCount != 0 && contextFieldCount != 3 {
+		return nil, categorizedError{"invalidEncoding", "transaction, inputIndex, and sourceSatoshis must be supplied together"}
+	}
+	if contextFieldCount == 3 {
+		if args.TransactionVersion != nil {
+			return nil, categorizedError{"invalidEncoding", "transactionVersion cannot accompany a complete transaction"}
+		}
+		transactionBytes, err := protocolHex(*args.Transaction)
+		if err != nil {
+			return nil, err
+		}
+		tx, err := transaction.NewTransactionFromBytes(transactionBytes)
+		if err != nil {
+			return nil, err
+		}
+		inputIndex, err := decimalUint(*args.InputIndex, 32)
+		if err != nil {
+			return nil, err
+		}
+		if inputIndex >= uint64(len(tx.Inputs)) {
+			return nil, categorizedError{"invalidIndex", "input index is outside transaction inputs"}
+		}
+		if !bytes.Equal(tx.Inputs[inputIndex].UnlockingScript.Bytes(), unlockingBytes) {
+			return nil, categorizedError{"invalidEncoding", "transaction unlocking script does not match request"}
+		}
+		satoshis, err := decimalUint(*args.SourceSatoshis, 64)
+		if err != nil {
+			return nil, err
+		}
+		options = append(options, interpreter.WithTx(
+			tx,
+			int(inputIndex),
+			&transaction.TransactionOutput{
+				Satoshis:      satoshis,
+				LockingScript: lockingScript,
+			},
+		))
 	}
 	if args.TransactionVersion != nil {
 		version, err := decimalUint(*args.TransactionVersion, 32)
@@ -820,7 +885,7 @@ func execute(req request, meta metadata) (result any, err error) {
 		if err != nil {
 			return nil, err
 		}
-		flag, err := protocolForkIDFlag(args.SignatureHash)
+		flag, err := protocolSignatureHashFlag(args.SignatureHash)
 		if err != nil {
 			return nil, err
 		}
@@ -835,7 +900,12 @@ func execute(req request, meta metadata) (result any, err error) {
 			Satoshis:      satoshis,
 			LockingScript: scriptpkg.NewFromBytes(sourceScript),
 		})
-		preimage, err := tx.CalcInputPreimage(uint32(inputIndex), flag)
+		var preimage []byte
+		if flag.Has(sighashpkg.ForkID) {
+			preimage, err = tx.CalcInputPreimage(uint32(inputIndex), flag)
+		} else {
+			preimage, err = tx.CalcInputPreimageLegacy(uint32(inputIndex), flag)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1082,6 +1152,20 @@ func protocolForkIDFlag(text string) (sighashpkg.Flag, error) {
 		(baseFlag != sighashpkg.All && baseFlag != sighashpkg.None && baseFlag != sighashpkg.Single) ||
 		flag & ^(sighashpkg.AnyOneCanPay|sighashpkg.ForkID|sighashpkg.Mask) != 0 {
 		return 0, categorizedError{"invalidEncoding", "signatureHash must be one of the six ForkID combinations"}
+	}
+	return flag, nil
+}
+
+func protocolSignatureHashFlag(text string) (sighashpkg.Flag, error) {
+	value, err := decimalUint(text, 8)
+	if err != nil {
+		return 0, err
+	}
+	flag := sighashpkg.Flag(value)
+	baseFlag := flag & sighashpkg.Mask
+	if (baseFlag != sighashpkg.All && baseFlag != sighashpkg.None && baseFlag != sighashpkg.Single) ||
+		flag & ^(sighashpkg.AnyOneCanPay|sighashpkg.ForkID|sighashpkg.Mask) != 0 {
+		return 0, categorizedError{"invalidEncoding", "signatureHash must be a canonical legacy or ForkID combination"}
 	}
 	return flag, nil
 }

@@ -74,6 +74,34 @@ public extension Transaction {
         scriptCode: Script? = nil,
         limits: TransactionLimits
     ) throws -> [UInt8] {
+        try forkIDSignaturePreimage(
+            inputIndex: inputIndex,
+            rawHashType: hashType.rawValue,
+            scriptCode: scriptCode,
+            limits: limits
+        )
+    }
+
+    package func forkIDSignatureHash(
+        inputIndex: Int,
+        rawHashType: UInt8,
+        scriptCode: Script,
+        limits: TransactionLimits
+    ) throws -> Hash256 {
+        BSVHashing.sha256d(try forkIDSignaturePreimage(
+            inputIndex: inputIndex,
+            rawHashType: rawHashType,
+            scriptCode: scriptCode,
+            limits: limits
+        ))
+    }
+
+    private func forkIDSignaturePreimage(
+        inputIndex: Int,
+        rawHashType: UInt8,
+        scriptCode: Script?,
+        limits: TransactionLimits
+    ) throws -> [UInt8] {
         guard inputs.indices.contains(inputIndex) else {
             throw TransactionError.invalidInputIndex(inputIndex)
         }
@@ -94,7 +122,9 @@ public extension Transaction {
 
         let zeroHash = [UInt8](repeating: 0, count: 32)
         let hashPreviousOutputs: [UInt8]
-        if hashType.anyoneCanPay {
+        let anyoneCanPay = rawHashType & ForkIDSignatureHashType.anyoneCanPayMask != 0
+        let outputMode = SignatureHashOutputs(rawValue: rawHashType & 0x1f) ?? .all
+        if anyoneCanPay {
             hashPreviousOutputs = zeroHash
         } else {
             let (capacity, overflow) = inputs.count.multipliedReportingOverflow(by: 36)
@@ -107,7 +137,7 @@ public extension Transaction {
         }
 
         let hashSequences: [UInt8]
-        if hashType.anyoneCanPay || hashType.outputs != .all {
+        if anyoneCanPay || outputMode != .all {
             hashSequences = zeroHash
         } else {
             let (capacity, overflow) = inputs.count.multipliedReportingOverflow(by: 4)
@@ -120,7 +150,7 @@ public extension Transaction {
         }
 
         let hashOutputs: [UInt8]
-        switch hashType.outputs {
+        switch outputMode {
         case .all:
             var writer = ByteWriter()
             for output in outputs {
@@ -153,7 +183,7 @@ public extension Transaction {
         writer.writeUInt32LE(inputs[inputIndex].sequence)
         writer.write(hashOutputs)
         writer.writeUInt32LE(lockTime)
-        writer.writeUInt32LE(UInt32(hashType.rawValue))
+        writer.writeUInt32LE(UInt32(rawHashType))
         return writer.bytes
     }
 

@@ -341,9 +341,9 @@ func TestBEEFGraphTransformValues(t *testing.T) {
 	}
 }
 
-func TestTransactionSighashRejectsNonForkIDFlags(t *testing.T) {
+func TestTransactionSighashRejectsNoncanonicalFlags(t *testing.T) {
 	transactionBytes := `0100000001` + strings.Repeat("00", 32) + `0000000000ffffffff0100000000000000000000000000`
-	for _, flag := range []string{"0", "1", "64", "68", "97", "255"} {
+	for _, flag := range []string{"0", "4", "64", "68", "97", "255"} {
 		_, err := execute(testRequest("transaction.sighash", `{"bytes":"`+transactionBytes+`","inputIndex":"0","sourceSatoshis":"0","sourceScript":"","signatureHash":"`+flag+`"}`), metadata{})
 		if err == nil {
 			t.Fatalf("expected flag %s to be rejected", flag)

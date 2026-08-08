@@ -415,12 +415,25 @@ package struct ScriptMachine {
                 let valid = try executeCheckSignature(
                     opcode: opcode,
                     script: script,
+                    phase: phase,
                     codeSeparatorOffset: lastCodeSeparatorOffset
                 )
                 if opcode == .checkSig {
                     mainStack.push(scriptBooleanBytes(valid))
                 } else if !valid {
                     throw ScriptExecutionError.consensus(.checkSignatureVerifyFailed)
+                }
+            case Opcode.checkMultiSig.rawValue, Opcode.checkMultiSigVerify.rawValue:
+                let valid = try executeCheckMultiSignature(
+                    opcode: opcode,
+                    script: script,
+                    phase: phase,
+                    codeSeparatorOffset: lastCodeSeparatorOffset
+                )
+                if opcode == .checkMultiSig {
+                    mainStack.push(scriptBooleanBytes(valid))
+                } else if !valid {
+                    throw ScriptExecutionError.consensus(.checkMultiSignatureVerifyFailed)
                 }
             case Opcode.leftShiftNumber.rawValue, Opcode.rightShiftNumber.rawValue:
                 if configuration.era == .chronicle {
@@ -828,13 +841,11 @@ package struct ScriptMachine {
     private mutating func executeCheckSignature(
         opcode: Opcode,
         script: Script,
+        phase: ScriptPhase,
         codeSeparatorOffset: Int
     ) throws -> Bool {
         guard let context else {
             throw ScriptExecutionError.missingExecutionContext(opcode: opcode)
-        }
-        guard configuration.flags.contains(.enableForkID) else {
-            throw ScriptExecutionError.unsupportedOpcode(opcode)
         }
         try mainStack.require(2)
         let publicKeyBytes = try mainStack.pop()
@@ -843,67 +854,284 @@ package struct ScriptMachine {
             return false
         }
 
-        let hashType: ForkIDSignatureHashType
-        do {
-            hashType = try ForkIDSignatureHashType(rawValue: rawHashType)
-        } catch {
-            if configuration.flags.contains(.strictEncoding) {
-                throw ScriptExecutionError.consensus(.invalidSignatureHashType(rawHashType))
-            }
-            return try signatureFailure(signatureWithHashType)
-        }
-
-        let signature: ECDSASignature
-        do {
-            signature = try ECDSASignature(
-                derBytes: Array(signatureWithHashType.dropLast())
-            )
-        } catch {
-            if configuration.flags.contains(.derSignatures)
-                || configuration.flags.contains(.strictEncoding)
-                || configuration.flags.contains(.lowS) {
-                throw ScriptExecutionError.consensus(.invalidSignatureEncoding)
-            }
-            return try signatureFailure(signatureWithHashType)
-        }
-
-        let publicKey: PublicKey
-        do {
-            publicKey = try PublicKey(publicKeyBytes)
-        } catch {
-            if configuration.flags.contains(.strictEncoding) {
-                throw ScriptExecutionError.consensus(.invalidPublicKeyEncoding)
-            }
-            return try signatureFailure(signatureWithHashType)
-        }
+        try checkHashTypeEncoding(rawHashType)
+        let signatureBytes = Array(signatureWithHashType.dropLast())
+        let signature = try parseScriptSignature(signatureBytes)
+        try checkPublicKeyEncoding(publicKeyBytes)
+        guard let signature else { return false }
+        guard let publicKey = try? PublicKey(publicKeyBytes) else { return false }
 
         var transaction = context.transaction
         transaction.inputs[context.inputIndex].sourceOutput = context.spentOutput
-        let scriptCode: Script
+        let cleansLegacyScript = !configuration.flags.contains(.enableForkID)
+            || rawHashType & ForkIDSignatureHashType.forkIDMask == 0
+        let scriptCode = try signatureScriptCode(
+            script: script,
+            phase: phase,
+            codeSeparatorOffset: codeSeparatorOffset,
+            signaturesToRemove: cleansLegacyScript ? [signatureWithHashType] : []
+        )
+        let digest = try signatureDigest(
+            transaction: transaction,
+            context: context,
+            rawHashType: rawHashType,
+            scriptCode: scriptCode
+        )
+        let valid = signature.verifiesInScript(publicKey: publicKey, digest: digest)
+        if !valid { return try signatureFailure(signatureBytes) }
+        return true
+    }
+
+    private struct MultiSignatureInfo {
+        let bytes: [UInt8]
+        var parsed: ECDSASignature?
+        var didParse = false
+    }
+
+    private mutating func executeCheckMultiSignature(
+        opcode: Opcode,
+        script: Script,
+        phase: ScriptPhase,
+        codeSeparatorOffset: Int
+    ) throws -> Bool {
+        guard let context else {
+            throw ScriptExecutionError.missingExecutionContext(opcode: opcode)
+        }
+
+        let rawPublicKeyCount = try popNativeNumber()
+        let maximumPublicKeys = configuration.era == .legacy ? 20 : Int64(Int32.max)
+        guard rawPublicKeyCount >= 0, rawPublicKeyCount <= maximumPublicKeys else {
+            throw ScriptExecutionError.consensus(.invalidPublicKeyCount(rawPublicKeyCount))
+        }
+        let publicKeyCount = Int(rawPublicKeyCount)
+        try countOperations(publicKeyCount)
+        try mainStack.require(publicKeyCount)
+        var publicKeys: [[UInt8]] = []
+        publicKeys.reserveCapacity(publicKeyCount)
+        for _ in 0..<publicKeyCount { publicKeys.append(try mainStack.pop()) }
+
+        let rawSignatureCount = try popNativeNumber()
+        guard rawSignatureCount >= 0, rawSignatureCount <= rawPublicKeyCount else {
+            throw ScriptExecutionError.consensus(.invalidSignatureCount(rawSignatureCount))
+        }
+        let signatureCount = Int(rawSignatureCount)
+        try mainStack.require(signatureCount + 1)
+        var signatures: [MultiSignatureInfo] = []
+        signatures.reserveCapacity(signatureCount)
+        for _ in 0..<signatureCount {
+            signatures.append(MultiSignatureInfo(bytes: try mainStack.pop()))
+        }
+        let dummy = try mainStack.pop()
+        if configuration.flags.contains(.strictMultiSignatureDummy), !dummy.isEmpty {
+            throw ScriptExecutionError.consensus(.nullDummy)
+        }
+
+        let signaturesToRemove = signatures.compactMap { info -> [UInt8]? in
+            let hasForkID = info.bytes.last.map {
+                $0 & ForkIDSignatureHashType.forkIDMask != 0
+            } ?? false
+            return !configuration.flags.contains(.enableForkID) || !hasForkID
+                ? info.bytes
+                : nil
+        }
+        let scriptCode = try signatureScriptCode(
+            script: script,
+            phase: phase,
+            codeSeparatorOffset: codeSeparatorOffset,
+            signaturesToRemove: signaturesToRemove
+        )
+        var transaction = context.transaction
+        transaction.inputs[context.inputIndex].sourceOutput = context.spentOutput
+
+        var remainingSignatures = signatureCount
+        // The early-impossibility check counts the key selected in the current
+        // iteration as still available, matching Bitcoin's historical loop.
+        var remainingPublicKeys = publicKeyCount + 1
+        var signatureIndex = 0
+        var publicKeyIndex = 0
+        var success = true
+        var cachedDigests: [UInt8: Hash256] = [:]
+
+        while remainingSignatures > 0 {
+            remainingPublicKeys -= 1
+            if remainingSignatures > remainingPublicKeys {
+                success = false
+                break
+            }
+
+            let rawSignature = signatures[signatureIndex].bytes
+            let publicKeyBytes = publicKeys[publicKeyIndex]
+            publicKeyIndex += 1
+            guard let rawHashType = rawSignature.last else { continue }
+
+            if !signatures[signatureIndex].didParse {
+                try checkHashTypeEncoding(rawHashType)
+                signatures[signatureIndex].parsed = try parseScriptSignature(
+                    Array(rawSignature.dropLast())
+                )
+                signatures[signatureIndex].didParse = true
+            }
+            guard let signature = signatures[signatureIndex].parsed else { continue }
+            try checkPublicKeyEncoding(publicKeyBytes)
+            guard let publicKey = try? PublicKey(publicKeyBytes) else { continue }
+
+            let digest: Hash256
+            if let cached = cachedDigests[rawHashType] {
+                digest = cached
+            } else {
+                digest = try signatureDigest(
+                    transaction: transaction,
+                    context: context,
+                    rawHashType: rawHashType,
+                    scriptCode: scriptCode
+                )
+                cachedDigests[rawHashType] = digest
+            }
+            if signature.verifiesInScript(publicKey: publicKey, digest: digest) {
+                signatureIndex += 1
+                remainingSignatures -= 1
+            }
+        }
+
+        if !success, configuration.flags.contains(.nullFail),
+           signatures.contains(where: { !$0.bytes.isEmpty }) {
+            throw ScriptExecutionError.consensus(.nullFail)
+        }
+        return success
+    }
+
+    private func checkHashTypeEncoding(_ rawHashType: UInt8) throws {
+        guard configuration.flags.contains(.strictEncoding) else { return }
+        var normalized = rawHashType & ~ForkIDSignatureHashType.anyoneCanPayMask
+        if configuration.flags.contains(.bip143SignatureHash) {
+            normalized ^= ForkIDSignatureHashType.forkIDMask
+            guard rawHashType & ForkIDSignatureHashType.forkIDMask != 0 else {
+                throw ScriptExecutionError.consensus(.invalidSignatureHashType(rawHashType))
+            }
+        }
+        if normalized & ForkIDSignatureHashType.forkIDMask == 0 {
+            guard (1...3).contains(normalized) else {
+                throw ScriptExecutionError.consensus(.invalidSignatureHashType(rawHashType))
+            }
+            return
+        }
+        guard (0x41...0x43).contains(normalized) else {
+            throw ScriptExecutionError.consensus(.invalidSignatureHashType(rawHashType))
+        }
+        let hasForkID = rawHashType & ForkIDSignatureHashType.forkIDMask != 0
+        guard configuration.flags.contains(.enableForkID) == hasForkID else {
+            throw ScriptExecutionError.consensus(.illegalForkID(rawHashType))
+        }
+    }
+
+    private func parseScriptSignature(_ bytes: [UInt8]) throws -> ECDSASignature? {
+        let requiresStrictDER = configuration.flags.contains(.strictEncoding)
+            || configuration.flags.contains(.derSignatures)
+            || configuration.flags.contains(.lowS)
+        let signature: ECDSASignature
         do {
-            scriptCode = try Script(
-                bytes: Array(script.bytes[codeSeparatorOffset...]),
-                maximumByteCount: configuration.resourceLimits.maximumScriptByteCount
+            signature = try ECDSASignature(
+                scriptBytes: bytes,
+                strict: requiresStrictDER
             )
         } catch {
-            throw ScriptExecutionError.resourceBudgetExceeded(.scriptByteCount(
-                actual: script.byteCount - codeSeparatorOffset,
-                maximum: configuration.resourceLimits.maximumScriptByteCount
-            ))
+            if requiresStrictDER {
+                throw ScriptExecutionError.consensus(.invalidSignatureEncoding)
+            }
+            return nil
         }
-        let digest: Hash256
+        if configuration.flags.contains(.lowS), !signature.isLowS {
+            throw ScriptExecutionError.consensus(.invalidSignatureEncoding)
+        }
+        return signature
+    }
+
+    private func checkPublicKeyEncoding(_ bytes: [UInt8]) throws {
+        guard configuration.flags.contains(.strictEncoding) else { return }
+        let compressed = bytes.count == 33 && (bytes[0] == 0x02 || bytes[0] == 0x03)
+        let uncompressed = bytes.count == 65 && bytes[0] == 0x04
+        guard compressed || uncompressed else {
+            throw ScriptExecutionError.consensus(.invalidPublicKeyEncoding)
+        }
+    }
+
+    private func signatureDigest(
+        transaction: Transaction,
+        context: ScriptExecutionContext,
+        rawHashType: UInt8,
+        scriptCode: Script
+    ) throws -> Hash256 {
         do {
-            digest = try transaction.forkIDSignatureHash(
+            if rawHashType & ForkIDSignatureHashType.forkIDMask != 0 {
+                return try transaction.forkIDSignatureHash(
+                    inputIndex: context.inputIndex,
+                    rawHashType: rawHashType,
+                    scriptCode: scriptCode,
+                    limits: context.transactionLimits
+                )
+            }
+            return try transaction.legacySignatureHash(
                 inputIndex: context.inputIndex,
-                hashType: hashType,
+                rawHashType: rawHashType,
                 scriptCode: scriptCode,
                 limits: context.transactionLimits
             )
         } catch let error as TransactionError {
             throw ScriptExecutionError.transaction(error)
         }
-        let valid = publicKey.verify(signature, digest: digest)
-        if !valid { return try signatureFailure(signatureWithHashType) }
+    }
+
+    private func signatureScriptCode(
+        script: Script,
+        phase: ScriptPhase,
+        codeSeparatorOffset: Int,
+        signaturesToRemove: [[UInt8]]
+    ) throws -> Script {
+        let bytes = Array(script.bytes[codeSeparatorOffset...])
+        guard !signaturesToRemove.isEmpty else {
+            return try Script(
+                bytes: bytes,
+                maximumByteCount: configuration.resourceLimits.maximumScriptByteCount
+            )
+        }
+
+        var result: [UInt8] = []
+        result.reserveCapacity(bytes.count)
+        var offset = 0
+        while offset < bytes.count {
+            let start = offset
+            let instruction = try ScriptInstructionDecoder.next(
+                bytes: bytes,
+                offset: &offset,
+                phase: phase,
+                maximumConsensusPushByteCount: consensusLimits.maximumPushDataByteCount,
+                maximumResourcePushByteCount: configuration.resourceLimits.maximumPushDataByteCount
+            )
+            if instruction.opcode == .codeSeparator { continue }
+            let candidate = instruction.data ?? []
+            let removesInstruction = isCanonicalSignatureRemovalCandidate(instruction)
+                && signaturesToRemove.contains { candidate.containsSubsequence($0) }
+            if !removesInstruction { result.append(contentsOf: bytes[start..<offset]) }
+        }
+        return try Script(
+            bytes: result,
+            maximumByteCount: configuration.resourceLimits.maximumScriptByteCount
+        )
+    }
+
+    private func isCanonicalSignatureRemovalCandidate(
+        _ instruction: DecodedScriptInstruction
+    ) -> Bool {
+        let opcode = instruction.opcode.rawValue
+        let data = instruction.data ?? []
+        if opcode > Opcode.sixteen.rawValue { return true }
+        if opcode > Opcode.zero.rawValue, opcode < Opcode.pushData1.rawValue,
+           data.count == 1, data[0] <= 16 { return false }
+        if opcode == Opcode.pushData1.rawValue, data.count < Int(Opcode.pushData1.rawValue) {
+            return false
+        }
+        if opcode == Opcode.pushData2.rawValue, data.count <= 0xff { return false }
+        if opcode == Opcode.pushData4.rawValue, data.count <= 0xffff { return false }
         return true
     }
 
@@ -990,8 +1218,15 @@ package struct ScriptMachine {
     }
 
     private mutating func countOperation() throws {
-        operationsInCurrentScript += 1
-        operationCount += 1
+        try countOperations(1)
+    }
+
+    private mutating func countOperations(_ additional: Int) throws {
+        let (scriptTotal, scriptOverflow) = operationsInCurrentScript
+            .addingReportingOverflow(additional)
+        let (overallTotal, overallOverflow) = operationCount.addingReportingOverflow(additional)
+        operationsInCurrentScript = scriptOverflow ? Int.max : scriptTotal
+        operationCount = overallOverflow ? Int.max : overallTotal
         if operationsInCurrentScript > consensusLimits.maximumOperationCountPerScript {
             throw ScriptExecutionError.consensus(.tooManyOperations(
                 actual: operationsInCurrentScript,
@@ -1073,5 +1308,19 @@ package struct ScriptMachine {
         default:
             false
         }
+    }
+}
+
+private extension Array where Element == UInt8 {
+    func containsSubsequence(_ needle: [UInt8]) -> Bool {
+        guard !needle.isEmpty else { return true }
+        guard needle.count <= count else { return false }
+        if needle.count == count { return self == needle }
+        for start in 0...(count - needle.count) {
+            if self[start..<(start + needle.count)].elementsEqual(needle) {
+                return true
+            }
+        }
+        return false
     }
 }

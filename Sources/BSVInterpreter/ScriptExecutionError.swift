@@ -41,8 +41,13 @@ public enum ScriptConsensusFailure: Error, Equatable, Sendable {
     case invalidSignatureEncoding
     case invalidPublicKeyEncoding
     case invalidSignatureHashType(UInt8)
+    case illegalForkID(UInt8)
+    case invalidPublicKeyCount(Int64)
+    case invalidSignatureCount(Int64)
+    case nullDummy
     case nullFail
     case checkSignatureVerifyFailed
+    case checkMultiSignatureVerifyFailed
     case unsatisfiedLockTime
     case unsatisfiedSequence
 }

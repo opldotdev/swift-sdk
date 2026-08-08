@@ -1,5 +1,7 @@
 import BSVCore
+import BSVCrypto
 import BSVInterpreter
+import BSVKeys
 import BSVScript
 import BSVTransaction
 import Testing
@@ -380,6 +382,175 @@ struct InterpreterConformanceTests {
         }
     }
 
+    @Test("legacy CHECKSIG and CHECKMULTISIG match complete pinned Go transaction execution")
+    func legacySignatureDifferentials() throws {
+        let limits = try TransactionLimits(
+            maximumTransactionByteCount: 10_000,
+            maximumInputCount: 10,
+            maximumOutputCount: 10,
+            maximumScriptByteCount: 10_000
+        )
+        let keys = try (1...3).map {
+            try PrivateKey(Array(repeating: 0, count: 31) + [UInt8($0)])
+        }
+
+        let checkSignature = try Script.payToPublicKey(
+            keys[0].publicKey,
+            maximumByteCount: 10_000
+        )
+        var checkSignatureTransaction = try signatureTransaction(
+            locking: checkSignature
+        )
+        let signatureDigest = try checkSignatureTransaction.legacySignatureHash(
+            inputIndex: 0,
+            scriptCode: checkSignature,
+            limits: limits
+        )
+        checkSignatureTransaction.inputs[0].unlockingScript = try pushOnlyScript([
+            try keys[0].sign(digest: signatureDigest).derBytes + [0x01],
+        ])
+
+        var checkMultiSignature = try Script(bytes: [], maximumByteCount: 10_000)
+        try checkMultiSignature.append(.two, maximumScriptByteCount: 10_000)
+        for key in keys {
+            try checkMultiSignature.appendPushData(
+                key.publicKey.compressedBytes,
+                maximumScriptByteCount: 10_000
+            )
+        }
+        try checkMultiSignature.append(.three, maximumScriptByteCount: 10_000)
+        try checkMultiSignature.append(.checkMultiSig, maximumScriptByteCount: 10_000)
+        var checkMultiSignatureTransaction = try signatureTransaction(
+            locking: checkMultiSignature
+        )
+        let multiDigest = try checkMultiSignatureTransaction.legacySignatureHash(
+            inputIndex: 0,
+            scriptCode: checkMultiSignature,
+            limits: limits
+        )
+        checkMultiSignatureTransaction.inputs[0].unlockingScript = try pushOnlyScript([
+            [],
+            try keys[0].sign(digest: multiDigest).derBytes + [0x01],
+            try keys[2].sign(digest: multiDigest).derBytes + [0x01],
+        ])
+
+        var cleanedScriptCode = try Script(
+            bytes: [Opcode.drop.rawValue],
+            maximumByteCount: 10_000
+        )
+        try cleanedScriptCode.appendPushData(
+            keys[1].publicKey.compressedBytes,
+            maximumScriptByteCount: 10_000
+        )
+        try cleanedScriptCode.append(.checkSig, maximumScriptByteCount: 10_000)
+        var cleanupTransaction = try signatureTransaction(locking: cleanedScriptCode)
+        let cleanupDigest = try cleanupTransaction.legacySignatureHash(
+            inputIndex: 0,
+            scriptCode: cleanedScriptCode,
+            limits: limits
+        )
+        let cleanupSignature = try keys[1].sign(digest: cleanupDigest).derBytes + [0x01]
+        var cleanupLocking = try Script(
+            bytes: [Opcode.codeSeparator.rawValue],
+            maximumByteCount: 10_000
+        )
+        try cleanupLocking.appendPushData(
+            cleanupSignature,
+            maximumScriptByteCount: 10_000
+        )
+        try cleanupLocking.append(.drop, maximumScriptByteCount: 10_000)
+        try cleanupLocking.appendPushData(
+            keys[1].publicKey.compressedBytes,
+            maximumScriptByteCount: 10_000
+        )
+        try cleanupLocking.append(.checkSig, maximumScriptByteCount: 10_000)
+        cleanupTransaction.inputs[0].sourceOutput = TransactionOutput(
+            satoshis: 20_000,
+            lockingScript: cleanupLocking
+        )
+        cleanupTransaction.inputs[0].unlockingScript = try pushOnlyScript([
+            cleanupSignature,
+        ])
+
+        let cases: [(String, Transaction, Script, [String], ScriptVerificationFlags)] = [
+            (
+                "checksig",
+                checkSignatureTransaction,
+                checkSignature,
+                ["strictEncoding", "derSignatures", "lowS", "nullFail"],
+                [.strictEncoding, .derSignatures, .lowS, .nullFail]
+            ),
+            (
+                "checkmultisig",
+                checkMultiSignatureTransaction,
+                checkMultiSignature,
+                [
+                    "strictEncoding", "strictMultiSignatureDummy",
+                    "derSignatures", "lowS", "nullFail",
+                ],
+                [
+                    .strictEncoding, .strictMultiSignatureDummy,
+                    .derSignatures, .lowS, .nullFail,
+                ]
+            ),
+            (
+                "signature-cleanup",
+                cleanupTransaction,
+                cleanupLocking,
+                ["strictEncoding", "derSignatures", "lowS"],
+                [.strictEncoding, .derSignatures, .lowS]
+            ),
+        ]
+
+        let oracleConfiguration = GoOracleConfiguration.default()
+        switch try GoOracleClient.connect(configuration: oracleConfiguration) {
+        case .unavailable(let reason):
+            #expect(!oracleConfiguration.required)
+            print("Script signature Go oracle unavailable: \(reason)")
+        case .available(let client):
+            defer { client.close() }
+            for testCase in cases {
+                let spentOutput = TransactionOutput(
+                    satoshis: 20_000,
+                    lockingScript: testCase.2
+                )
+                let local = try ScriptInterpreter.execute(
+                    unlockingScript: testCase.1.inputs[0].unlockingScript,
+                    lockingScript: testCase.2,
+                    configuration: ScriptExecutionConfiguration(
+                        era: .legacy,
+                        flags: testCase.4,
+                        resourceLimits: .standard
+                    ),
+                    context: ScriptExecutionContext(
+                        transaction: testCase.1,
+                        inputIndex: 0,
+                        spentOutput: spentOutput,
+                        transactionLimits: limits
+                    )
+                )
+                let response = try client.request(
+                    id: "script-signature-\(testCase.0)",
+                    operation: "script.execute",
+                    arguments: [
+                        "unlockingScript": .string(testCase.1.inputs[0].unlockingScript.hex),
+                        "lockingScript": .string(testCase.2.hex),
+                        "era": .string("legacy"),
+                        "flags": .array(testCase.3.map(GoOracleJSON.string)),
+                        "transaction": .string(Hex.encode(try testCase.1.serialized(limits: limits))),
+                        "inputIndex": .string("0"),
+                        "sourceSatoshis": .string("20000"),
+                    ]
+                )
+                #expect(response.ok)
+                #expect(response.result == .object([
+                    "stack": .array(local.stack.map { .string(Hex.encode($0)) }),
+                    "valid": .bool(true),
+                ]))
+            }
+        }
+    }
+
     private func execute(_ testCase: Case) throws -> ScriptExecutionResult {
         let maximum = 32 * 1_024 * 1_024
         return try ScriptInterpreter.execute(
@@ -397,5 +568,33 @@ struct InterpreterConformanceTests {
                 resourceLimits: .standard
             )
         )
+    }
+
+    private func signatureTransaction(locking: Script) throws -> Transaction {
+        let empty = try Script(bytes: [], maximumByteCount: 0)
+        return Transaction(
+            inputs: [TransactionInput(
+                previousOutput: try Outpoint(
+                    transactionID: TransactionID(
+                        wireBytes: Array(repeating: 0x55, count: 32)
+                    ),
+                    outputIndex: 1
+                ),
+                unlockingScript: empty,
+                sourceOutput: TransactionOutput(satoshis: 20_000, lockingScript: locking)
+            )],
+            outputs: [TransactionOutput(
+                satoshis: 19_000,
+                lockingScript: try Script(bytes: [Opcode.one.rawValue], maximumByteCount: 1)
+            )]
+        )
+    }
+
+    private func pushOnlyScript(_ values: [[UInt8]]) throws -> Script {
+        var script = try Script(bytes: [], maximumByteCount: 10_000)
+        for value in values {
+            try script.appendPushData(value, maximumScriptByteCount: 10_000)
+        }
+        return script
     }
 }

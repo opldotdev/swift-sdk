@@ -84,15 +84,15 @@ differentials, and Fable review.
 ## Phase 5: Script execution
 
 Accepted checkpoint: the bounded interpreter now covers stack/control flow,
-splice, bitwise, arbitrary-precision arithmetic, hashing, P2SH, ForkID
-`CHECKSIG`, CLTV/CSV, and Chronicle version/slice/shift rules. Exact pinned-Go
-stack and failure differentials cover the consensus-sensitive era transitions.
-Legacy non-ForkID signature hashing and `CHECKMULTISIG` remain the next packet.
+splice, bitwise, arbitrary-precision arithmetic, hashing, P2SH, legacy and
+ForkID `CHECKSIG`, `CHECKMULTISIG`, CLTV/CSV, and Chronicle version/slice/shift
+rules. Exact pinned-Go stack, failure, full-transaction signature, and script
+cleanup differentials cover the consensus-sensitive paths.
 
 - Stack and control flow. (Accepted)
-- Arithmetic, bitwise, splice, and crypto opcodes. (Accepted except multisignature)
+- Arithmetic, bitwise, splice, and crypto opcodes. (Accepted)
 - Pre-Genesis, Genesis, and Chronicle rules and limits. (Accepted checkpoint)
-- Legacy signature hashing and `CHECKMULTISIG`/`CHECKMULTISIGVERIFY`.
+- Legacy signature hashing and `CHECKMULTISIG`/`CHECKMULTISIGVERIFY`. (Accepted)
 - Full valid/invalid transaction and reference-script suites.
 - Explicit compatibility rulings for Go script-number artifacts, including
   pre-Genesis clamping, overflow-until-reinterpretation, and in-place minimal

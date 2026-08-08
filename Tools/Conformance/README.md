@@ -119,7 +119,7 @@ supports exactly one version byte.
 | `transaction.merklepath.decode` | `{bytes}` | `{bytes,blockHeight,treeHeight}` for canonical BRC-74 binary |
 | `transaction.merklepath.root` | `{bytes,txid}` | `{root}` using display-order txid/root strings |
 | `transaction.p2pkh.sign` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash,privateKey}` | `{unlockingScript}` using the pinned Go signer |
-| `transaction.sighash` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash}` | `{preimage,digest}` for the pinned Go replay-protected algorithm |
+| `transaction.sighash` | `{bytes,inputIndex,sourceSatoshis,sourceScript,signatureHash}` | `{preimage,digest}` for canonical legacy or replay-protected signature-hash flags |
 
 Stable error categories are `invalidEncoding`, `invalidCharacter`,
 `invalidLength`, `truncated`, `trailingData`, `noncanonical`, `overflow`,

@@ -677,6 +677,194 @@ struct ScriptInterpreterTests {
         }
     }
 
+    @Test("legacy CHECKSIG accepts consensus BER and normalizes high-S only for verification")
+    func legacyCheckSignatureCompatibility() throws {
+        let key = try PrivateKey(Array(repeating: 0, count: 31) + [1])
+        let locking = try Script.payToPublicKey(
+            key.publicKey,
+            maximumByteCount: maximumScriptByteCount
+        )
+        let (unsigned, spentOutput, limits) = try signatureTransaction(locking: locking)
+        let digest = try unsigned.legacySignatureHash(
+            inputIndex: 0,
+            hashType: .all,
+            scriptCode: locking,
+            limits: limits
+        )
+        let low = try key.sign(digest: digest)
+
+        var canonical = unsigned
+        canonical.inputs[0].unlockingScript = try pushedScript(low.derBytes + [0x01])
+        #expect(try executeTransaction(
+            canonical,
+            spentOutput: spentOutput,
+            limits: limits,
+            flags: [.derSignatures, .lowS]
+        ).stack == [[1]])
+
+        let high = try ECDSASignature(
+            compactBytes: Array(low.compactBytes[..<32])
+                + subtract(Array(low.compactBytes[32...]), from: curveOrder)
+        )
+        var highSTransaction = unsigned
+        highSTransaction.inputs[0].unlockingScript = try pushedScript(high.derBytes + [0x01])
+        #expect(try executeTransaction(
+            highSTransaction,
+            spentOutput: spentOutput,
+            limits: limits,
+            flags: [.derSignatures]
+        ).stack == [[1]])
+        #expect(throws: ScriptExecutionError.consensus(.invalidSignatureEncoding)) {
+            try executeTransaction(
+                highSTransaction,
+                spentOutput: spentOutput,
+                limits: limits,
+                flags: [.lowS]
+            )
+        }
+
+        let padded = try paddedBER(low.derBytes) + [0x01]
+        var permissive = unsigned
+        permissive.inputs[0].unlockingScript = try pushedScript(padded)
+        #expect(try executeTransaction(
+            permissive,
+            spentOutput: spentOutput,
+            limits: limits
+        ).stack == [[1]])
+        #expect(throws: ScriptExecutionError.consensus(.invalidSignatureEncoding)) {
+            try executeTransaction(
+                permissive,
+                spentOutput: spentOutput,
+                limits: limits,
+                flags: [.derSignatures]
+            )
+        }
+
+        var malformed = unsigned
+        malformed.inputs[0].unlockingScript = try pushedScript([0x01])
+        #expect(throws: ScriptExecutionError.consensus(.evaluatedFalse)) {
+            try executeTransaction(
+                malformed,
+                spentOutput: spentOutput,
+                limits: limits,
+                flags: [.nullFail]
+            )
+        }
+    }
+
+    @Test("legacy signature hashing removes the signature and code separators from scriptCode")
+    func legacySignatureScriptCleanup() throws {
+        let key = try PrivateKey(Array(repeating: 0, count: 31) + [4])
+        var cleaned = try script([Opcode.drop.rawValue])
+        try cleaned.appendPushData(
+            key.publicKey.compressedBytes,
+            maximumScriptByteCount: maximumScriptByteCount
+        )
+        try cleaned.append(.checkSig, maximumScriptByteCount: maximumScriptByteCount)
+        let (unsigned, _, limits) = try signatureTransaction(locking: cleaned)
+        let digest = try unsigned.legacySignatureHash(
+            inputIndex: 0,
+            scriptCode: cleaned,
+            limits: limits
+        )
+        let fullSignature = try key.sign(digest: digest).derBytes + [0x01]
+
+        var locking = try script([Opcode.codeSeparator.rawValue])
+        try locking.appendPushData(
+            fullSignature,
+            maximumScriptByteCount: maximumScriptByteCount
+        )
+        try locking.append(.drop, maximumScriptByteCount: maximumScriptByteCount)
+        try locking.appendPushData(
+            key.publicKey.compressedBytes,
+            maximumScriptByteCount: maximumScriptByteCount
+        )
+        try locking.append(.checkSig, maximumScriptByteCount: maximumScriptByteCount)
+        let spentOutput = TransactionOutput(satoshis: 20_000, lockingScript: locking)
+        var transaction = unsigned
+        transaction.inputs[0].sourceOutput = spentOutput
+        transaction.inputs[0].unlockingScript = try pushedScript(fullSignature)
+
+        #expect(try executeTransaction(
+            transaction,
+            spentOutput: spentOutput,
+            limits: limits,
+            flags: [.strictEncoding, .derSignatures, .lowS]
+        ).stack == [[1]])
+    }
+
+    @Test("legacy CHECKMULTISIG preserves ordered matching and dummy/nullfail rules")
+    func legacyCheckMultiSignature() throws {
+        let keys = try (1...3).map { value in
+            try PrivateKey(Array(repeating: 0, count: 31) + [UInt8(value)])
+        }
+        var locking = try script([])
+        try locking.append(.two, maximumScriptByteCount: maximumScriptByteCount)
+        for key in keys {
+            try locking.appendPushData(
+                key.publicKey.compressedBytes,
+                maximumScriptByteCount: maximumScriptByteCount
+            )
+        }
+        try locking.append(.three, maximumScriptByteCount: maximumScriptByteCount)
+        try locking.append(.checkMultiSig, maximumScriptByteCount: maximumScriptByteCount)
+
+        let (unsigned, spentOutput, limits) = try signatureTransaction(locking: locking)
+        let digest = try unsigned.legacySignatureHash(
+            inputIndex: 0,
+            hashType: .all,
+            scriptCode: locking,
+            limits: limits
+        )
+        let first = try keys[0].sign(digest: digest).derBytes + [0x01]
+        let third = try keys[2].sign(digest: digest).derBytes + [0x01]
+
+        var valid = unsigned
+        valid.inputs[0].unlockingScript = try multiSignatureUnlocking(
+            dummy: [],
+            signatures: [first, third]
+        )
+        let flags: ScriptVerificationFlags = [
+            .strictMultiSignatureDummy, .derSignatures, .lowS, .nullFail,
+        ]
+        let result = try executeTransaction(
+            valid,
+            spentOutput: spentOutput,
+            limits: limits,
+            flags: flags
+        )
+        #expect(result.stack == [[1]])
+        #expect(result.operationCount == 4)
+
+        var nonNullDummy = valid
+        nonNullDummy.inputs[0].unlockingScript = try multiSignatureUnlocking(
+            dummy: [1],
+            signatures: [first, third]
+        )
+        #expect(throws: ScriptExecutionError.consensus(.nullDummy)) {
+            try executeTransaction(
+                nonNullDummy,
+                spentOutput: spentOutput,
+                limits: limits,
+                flags: flags
+            )
+        }
+
+        var wrongOrder = valid
+        wrongOrder.inputs[0].unlockingScript = try multiSignatureUnlocking(
+            dummy: [],
+            signatures: [third, first]
+        )
+        #expect(throws: ScriptExecutionError.consensus(.nullFail)) {
+            try executeTransaction(
+                wrongOrder,
+                spentOutput: spentOutput,
+                limits: limits,
+                flags: flags
+            )
+        }
+    }
+
     @Test("signature opcodes never execute with partial or absent context")
     func missingSignatureContext() throws {
         #expect(throws: ScriptExecutionError.missingExecutionContext(opcode: .checkSig)) {
@@ -856,5 +1044,112 @@ struct ScriptInterpreterTests {
 
     private func script(_ bytes: [UInt8]) throws -> Script {
         try Script(bytes: bytes, maximumByteCount: maximumScriptByteCount)
+    }
+
+    private func signatureTransaction(
+        locking: Script
+    ) throws -> (Transaction, TransactionOutput, TransactionLimits) {
+        let limits = try TransactionLimits(
+            maximumTransactionByteCount: 10_000,
+            maximumInputCount: 10,
+            maximumOutputCount: 10,
+            maximumScriptByteCount: 10_000
+        )
+        let spentOutput = TransactionOutput(satoshis: 20_000, lockingScript: locking)
+        let transaction = Transaction(
+            inputs: [TransactionInput(
+                previousOutput: try Outpoint(
+                    transactionID: TransactionID(
+                        wireBytes: Array(repeating: 0x33, count: 32)
+                    ),
+                    outputIndex: 1
+                ),
+                unlockingScript: try script([]),
+                sourceOutput: spentOutput
+            )],
+            outputs: [TransactionOutput(
+                satoshis: 19_000,
+                lockingScript: try script([Opcode.one.rawValue])
+            )]
+        )
+        return (transaction, spentOutput, limits)
+    }
+
+    private func executeTransaction(
+        _ transaction: Transaction,
+        spentOutput: TransactionOutput,
+        limits: TransactionLimits,
+        flags: ScriptVerificationFlags = []
+    ) throws -> ScriptExecutionResult {
+        try ScriptInterpreter.execute(
+            unlockingScript: transaction.inputs[0].unlockingScript,
+            lockingScript: spentOutput.lockingScript,
+            configuration: configuration(era: .legacy, flags: flags),
+            context: ScriptExecutionContext(
+                transaction: transaction,
+                inputIndex: 0,
+                spentOutput: spentOutput,
+                transactionLimits: limits
+            )
+        )
+    }
+
+    private func pushedScript(_ data: [UInt8]) throws -> Script {
+        var result = try script([])
+        try result.appendPushData(data, maximumScriptByteCount: maximumScriptByteCount)
+        return result
+    }
+
+    private func multiSignatureUnlocking(
+        dummy: [UInt8],
+        signatures: [[UInt8]]
+    ) throws -> Script {
+        var result = try script([])
+        try result.appendPushData(dummy, maximumScriptByteCount: maximumScriptByteCount)
+        for signature in signatures {
+            try result.appendPushData(
+                signature,
+                maximumScriptByteCount: maximumScriptByteCount
+            )
+        }
+        return result
+    }
+
+    private func paddedBER(_ der: [UInt8]) throws -> [UInt8] {
+        guard der.count >= 8 else { throw ECDSASignatureError.invalidDEREncoding }
+        let rCount = Int(der[3])
+        let sMarker = 4 + rCount
+        guard sMarker + 2 <= der.count else {
+            throw ECDSASignatureError.invalidDEREncoding
+        }
+        let sCount = Int(der[sMarker + 1])
+        let r = Array(der[4..<(4 + rCount)])
+        let s = Array(der[(sMarker + 2)..<(sMarker + 2 + sCount)])
+        return [0x30, UInt8(5 + r.count + s.count)]
+            + [0x02, UInt8(r.count + 1), 0x00] + r
+            + [0x02, UInt8(s.count)] + s
+    }
+
+    private let curveOrder: [UInt8] = [
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+        0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b,
+        0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+    ]
+
+    private func subtract(_ value: [UInt8], from minuend: [UInt8]) -> [UInt8] {
+        var result = [UInt8](repeating: 0, count: 32)
+        var borrow = 0
+        for index in stride(from: 31, through: 0, by: -1) {
+            var difference = Int(minuend[index]) - Int(value[index]) - borrow
+            if difference < 0 {
+                difference += 256
+                borrow = 1
+            } else {
+                borrow = 0
+            }
+            result[index] = UInt8(difference)
+        }
+        return result
     }
 }

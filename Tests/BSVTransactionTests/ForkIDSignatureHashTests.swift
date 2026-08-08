@@ -227,6 +227,27 @@ struct ForkIDSignatureHashTests {
         #expect(explicitPreimage[104...105] == [1, Opcode.one.rawValue])
     }
 
+    @Test("raw consensus flags mask output mode without changing the committed byte")
+    func rawConsensusFlags() throws {
+        let limits = try signingLimits()
+        let transaction = try transactionForFlagTests()
+        let scriptCode = try #require(transaction.inputs[1].sourceOutput?.lockingScript)
+        var expectedPreimage = try transaction.forkIDSignaturePreimage(
+            inputIndex: 1,
+            hashType: .all,
+            scriptCode: scriptCode,
+            limits: limits
+        )
+        expectedPreimage[expectedPreimage.count - 4] = 0x44
+
+        #expect(try transaction.forkIDSignatureHash(
+            inputIndex: 1,
+            rawHashType: 0x44,
+            scriptCode: scriptCode,
+            limits: limits
+        ) == BSVHashing.sha256d(expectedPreimage))
+    }
+
     private func transactionForFlagTests() throws -> Transaction {
         let empty = try Script(bytes: [], maximumByteCount: 0)
         let source = TransactionOutput(satoshis: 500, lockingScript: empty)

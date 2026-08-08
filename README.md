@@ -112,7 +112,8 @@ print(account.neutered.serialized)
 - Canonical Bitcoin CompactSize integers and length-prefixed byte strings
 - Bounded Hex, Base64, Bitcoin Base58, and Base58Check encoding and decoding
 - Transaction identifiers with explicit wire and display byte order
-- Bounded ForkID signature preimages and transactional P2PKH input signing
+- Bounded legacy and ForkID signature preimages, including historical
+  SIGHASH_SINGLE behavior, and transactional P2PKH input signing
 - UTXO-backed transaction construction, checked satoshi fees, projected
   unsigned-input sizes, and atomic equal change distribution
 - Fixed-width `Hash160`, `Hash256`, and `Hash512` value types
@@ -132,8 +133,8 @@ print(account.neutered.serialized)
 - Bounded Bitcoin Script bytes, BRC-106 ASM and compact SASM, raw opcode and
   PUSHDATA parsing, signed-magnitude numbers, and P2PK/P2PKH/P2SH/BRC-18 templates
 - Era-aware Bitcoin Script execution with control flow, stack, splice, bitwise,
-  arbitrary-precision numeric, hashing, P2SH, ForkID signature, CLTV/CSV, and
-  Chronicle opcode behavior under explicit resource limits
+  arbitrary-precision numeric, hashing, P2SH, legacy/ForkID CHECKSIG,
+  CHECKMULTISIG, CLTV/CSV, and Chronicle behavior under explicit resource limits
 - Bounded legacy transaction parsing and canonical serialization, outpoints,
   transaction IDs, coinbase recognition, and checked satoshi totals
 - Bounded BRC-74 BUMP binary and strict JSON codecs, Merkle-root computation,
