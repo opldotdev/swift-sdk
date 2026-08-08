@@ -31,10 +31,20 @@ struct BEEFTests {
         let path = try fixture.parentPath.serialized(limits: fixture.limits.merklePathLimits)
         let parent = try fixture.parent.serialized(limits: fixture.limits.transactionLimits)
         let child = try fixture.child.serialized(limits: fixture.limits.transactionLimits)
-        let expectedV1 = [0x01, 0x00, 0xbe, 0xef, 0x01] + path
-            + [0x02] + parent + [0x01, 0x00] + child + [0x00]
-        let expectedV2 = [0x02, 0x00, 0xbe, 0xef, 0x01] + path
-            + [0x02, 0x01, 0x00] + parent + [0x00] + child
+        var expectedV1: [UInt8] = [0x01, 0x00, 0xbe, 0xef, 0x01]
+        expectedV1.append(contentsOf: path)
+        expectedV1.append(0x02)
+        expectedV1.append(contentsOf: parent)
+        expectedV1.append(contentsOf: [0x01, 0x00])
+        expectedV1.append(contentsOf: child)
+        expectedV1.append(0x00)
+
+        var expectedV2: [UInt8] = [0x02, 0x00, 0xbe, 0xef, 0x01]
+        expectedV2.append(contentsOf: path)
+        expectedV2.append(contentsOf: [0x02, 0x01, 0x00])
+        expectedV2.append(contentsOf: parent)
+        expectedV2.append(0x00)
+        expectedV2.append(contentsOf: child)
 
         #expect(try v1.serialized(limits: fixture.limits) == expectedV1)
         #expect(try v2.serialized(limits: fixture.limits) == expectedV2)
