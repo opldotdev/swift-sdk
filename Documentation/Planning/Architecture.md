@@ -186,17 +186,16 @@ be tested in Phase 1 for:
 
 `attaswift/BigInt` 5.7.0 is exact-pinned behind the internal `BSVBigNum` target.
 The adapter, signed-magnitude codec, public-symbol isolation check, and macOS
-750 KB/32 MiB resource gates pass. Acceptance remains provisional until the
-memory-capped Linux Swift 6.1 CI gate recorded in ADR 0004 passes.
+and memory-capped Linux 750 KB/32 MiB resource gates pass. ADR 0004 records the
+accepted dependency and evidence.
 
 ## Transaction graph semantics
 
-The transaction model is not presumed to be a pure value type. Go inputs can
-reference source transactions, and BEEF/Atomic BEEF operate on a deduplicated
-ancestry graph. The first Phase 4 packet must prototype and decide between a
-controlled reference graph and a value model backed by an explicit transaction
-store keyed by transaction ID. The ADR must cover identity, mutation,
-`Sendable`, locking or actor isolation, copy behavior, and serialization.
+ADR 0005 selects value-semantic transactions backed by an explicit ancestry
+graph/store for BEEF and Atomic BEEF. Inputs may carry source-output signing
+metadata, but hydration does not affect wire serialization, equality, or
+hashing. Complete parent transactions are keyed by transaction ID outside the
+wire value, avoiding recursive aliasing while preserving graph deduplication.
 
 ## Phase 0 dependency gates
 

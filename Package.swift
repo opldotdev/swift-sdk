@@ -166,6 +166,11 @@ let package = Package(
             exclude: ["README.md"]
         ),
         .testTarget(
+            name: "BSVTransactionTests",
+            dependencies: ["BSVTransaction", "BSVCore", "BSVCrypto", "BSVScript"],
+            exclude: ["README.md"]
+        ),
+        .testTarget(
             name: "BSVConformanceTests",
             dependencies: [
                 Target.Dependency.target(name: "BSV"),

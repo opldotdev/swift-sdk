@@ -1,8 +1,8 @@
 # Delivery roadmap
 
 Status: P0 complete; foundational P1/P2 crypto and BIP-32/BIP-39 plus legacy
-P3 key-format packets accepted after independent and Fable review. The BigNum
-and initial Script foundation is accepted on macOS and memory-capped Linux CI.
+P3 key-format packets accepted after independent and Fable review. BigNum,
+initial Script, and bounded legacy transaction wire foundations are accepted.
 
 Each milestone ends with passing conformance tests, an updated compatibility
 matrix, and an advisor review at architectural or security-sensitive boundaries.
@@ -69,13 +69,15 @@ with the fixed standard PBKDF2 profile.
 ## Phase 4: Script and transaction models
 
 In progress: bounded signed-magnitude Script numbers, raw opcode identity,
-PUSHDATA parsing/building, and standard structural classifiers are implemented
-with BTCD fixtures and pinned-Go Script-number differentials.
+PUSHDATA parsing/building, standard structural classifiers, and the legacy
+transaction wire model are implemented with permissive fixtures, pinned-Go
+differentials, and Fable review.
 
-- Begin with the transaction graph value/reference-semantics prototype and ADR.
+- Transaction value/graph semantics and ADR. (Accepted)
 - Script representation, parsing, ASM, opcodes, and templates that do not sign.
 - Resource-bounded script numbers and era configuration.
-- Transaction model, parsing, serialization, IDs, outpoints, and fee models.
+- Transaction model, parsing, serialization, IDs, and outpoints. (Accepted)
+- Fee models.
 - Sighash variants and transaction-aware unlocking templates.
 
 ## Phase 5: Script execution

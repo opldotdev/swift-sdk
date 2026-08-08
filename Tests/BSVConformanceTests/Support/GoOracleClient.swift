@@ -218,8 +218,8 @@ struct GoOracleExpectedPin: Sendable {
             "base64.decode", "base64.encode", "big.umod", "bytes.reverse", "digest32.display",
             "digest32.parse", "drbg.generate", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
             "hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "metadata",
-            "scriptnum.decode", "scriptnum.encode", "u16.decode", "u16.encode", "u32.decode",
-            "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
+            "scriptnum.decode", "scriptnum.encode", "transaction.decode", "u16.decode", "u16.encode",
+            "u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
             "varint.decode", "varint.encode",
         ]
     )

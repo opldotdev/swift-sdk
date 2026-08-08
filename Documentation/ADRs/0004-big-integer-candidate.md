@@ -87,7 +87,7 @@ The dependency may be added only after a Phase 1 packet demonstrates:
 - The shipped revision passed the Swift 6.1 Linux release scale suite in a
   768 MiB memory-capped container, including the 750,000-byte and 32 MiB
   boundaries and the pre-construction rejection gate. See GitHub Actions run
-  [31229942005](https://github.com/opldotdev/swift-sdk/actions/runs/31229942005).
+  [31230184931](https://github.com/opldotdev/swift-sdk/actions/runs/31230184931).
 
 ## Timing side-channel position
 

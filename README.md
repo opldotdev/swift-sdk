@@ -23,7 +23,8 @@ while embracing Swift value semantics, explicit resource bounds, and
 structured errors.
 
 The package can be imported through the `BSV` umbrella library or through its
-focused `BSVCore`, `BSVCrypto`, `BSVKeys`, and `BSVScript` libraries.
+focused `BSVCore`, `BSVCrypto`, `BSVKeys`, `BSVScript`, and `BSVTransaction`
+libraries.
 
 ## Installation
 
@@ -127,6 +128,8 @@ print(account.neutered.serialized)
   and xprv/xpub/tprv/tpub serialization
 - Bounded Bitcoin Script bytes, raw opcode identity, PUSHDATA parsing and
   construction, signed-magnitude Script numbers, and standard script classifiers
+- Bounded legacy transaction parsing and canonical serialization, outpoints,
+  transaction IDs, coinbase recognition, and checked satoshi totals
 - Redacted default descriptions for mnemonics and extended private keys, with
   explicitly named properties for intentional secret export
 - Swift 6 value semantics, structured errors, and `Sendable` public values

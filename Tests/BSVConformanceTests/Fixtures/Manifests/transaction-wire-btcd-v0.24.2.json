@@ -1,0 +1,23 @@
+{
+  "schema": "bsv-fixture-manifest/1",
+  "id": "transaction-wire-btcd-v0.24.2",
+  "source": {
+    "url": "https://github.com/btcsuite/btcd",
+    "revision": "v0.24.2"
+  },
+  "license": {
+    "identifier": "ISC",
+    "file": "Licenses/btcd-isc.txt",
+    "sha256": "73b368e7df1c52ce72711298096da6dd1509a9e261b53f864d721992b3da3eb7"
+  },
+  "notes": "Permissive legacy transaction wire cases selected from BTCD; no Open BSV fixture or oracle output is committed.",
+  "files": [
+    {
+      "originalPath": "wire/msgtx_test.go",
+      "localPath": "Permissive/BTCD/Transaction/transaction-wire.json",
+      "sha256": "27ed949b7d7e74cf96cb56910a0ec697ffb8a534701614fc3a68847a712c8ff1",
+      "transformation": "Selected the empty transaction, block 113875 coinbase known answer, and multi-output wire image; converted Go byte arrays and neutral expected fields into lowercase hexadecimal JSON without copying Go test logic.",
+      "notes": "The pinned upstream source file SHA-256 is dc7de651e961217b745872fc7706465ccd27a8d52e10d86da00bc61a5915f352."
+    }
+  ]
+}

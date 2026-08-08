@@ -31,5 +31,5 @@ appearing in public signatures.
 - Added a symbol-graph check across every public SDK module.
 - Added macOS/Linux Swift 6.1 CI and a 768-MiB memory-capped Linux release
   scale job. The Linux scale gate passed on the shipped revision in GitHub
-  Actions run [31229942005](https://github.com/opldotdev/swift-sdk/actions/runs/31229942005),
+  Actions run [31230184931](https://github.com/opldotdev/swift-sdk/actions/runs/31230184931),
   closing the review's final acceptance condition.

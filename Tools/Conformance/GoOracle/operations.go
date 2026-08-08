@@ -21,6 +21,7 @@ import (
 	drbgprimitive "github.com/bsv-blockchain/go-sdk/primitives/drbg"
 	primitives "github.com/bsv-blockchain/go-sdk/primitives/hash"
 	"github.com/bsv-blockchain/go-sdk/script/interpreter"
+	"github.com/bsv-blockchain/go-sdk/transaction"
 	"github.com/bsv-blockchain/go-sdk/util"
 )
 
@@ -281,6 +282,29 @@ func execute(req request, meta metadata) (result any, err error) {
 		return encodeScriptNumber(req.Args)
 	case "scriptnum.decode":
 		return decodeScriptNumber(req.Args)
+	case "transaction.decode":
+		var args struct {
+			Bytes string `json:"bytes"`
+		}
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return nil, err
+		}
+		data, err := protocolHex(args.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		tx, err := transaction.NewTransactionFromBytes(data)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{
+			"bytes":    hex.EncodeToString(tx.Bytes()),
+			"inputs":   strconv.Itoa(len(tx.Inputs)),
+			"lockTime": strconv.FormatUint(uint64(tx.LockTime), 10),
+			"outputs":  strconv.Itoa(len(tx.Outputs)),
+			"txid":     tx.TxID().String(),
+			"version":  strconv.FormatUint(uint64(tx.Version), 10),
+		}, nil
 	default:
 		return nil, categorizedError{"unsupportedOperation", "operation is not in the pinned registry"}
 	}

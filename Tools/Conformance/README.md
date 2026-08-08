@@ -102,6 +102,7 @@ supports exactly one version byte.
 | `big.umod` | `{dividend,divisor}` | `{value}` |
 | `scriptnum.encode` | `{value,era}` | `{bytes}` |
 | `scriptnum.decode` | `{bytes,era,minimal,maxBytes}` | `{value}` |
+| `transaction.decode` | `{bytes}` | `{bytes,version,inputs,outputs,lockTime,txid}` |
 
 Stable error categories are `invalidEncoding`, `invalidCharacter`,
 `invalidLength`, `truncated`, `trailingData`, `noncanonical`, `overflow`,

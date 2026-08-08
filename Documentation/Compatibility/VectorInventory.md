@@ -132,9 +132,11 @@ base58.encode|decode
 base58check.encode|decode
 big.umod
 scriptnum.encode|decode
+drbg.generate
+transaction.decode
 ```
 
-Later operations extend the same versioned envelope for AES, DRBG, secp keys,
+Later operations extend the same versioned envelope for AES, secp keys,
 ECDH output formats, DER/ECDSA/recovery, WIF/address, and BIP-39 seed behavior.
 
 Stable error categories include invalid encoding/character/length,

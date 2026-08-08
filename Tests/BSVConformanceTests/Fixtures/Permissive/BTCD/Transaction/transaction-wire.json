@@ -1,0 +1,30 @@
+{
+  "schema": "bsv-transaction-wire-fixtures/1",
+  "cases": [
+    {
+      "name": "empty",
+      "hex": "01000000000000000000",
+      "version": 1,
+      "inputCount": 0,
+      "outputCount": 0,
+      "lockTime": 0
+    },
+    {
+      "name": "block-113875-coinbase",
+      "hex": "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff070431dc001b0162ffffffff0100f2052a01000000434104d64bdfd09eb1c5fe295abdeb1dca4281be988e2da0b6c1c6a59dc226c28624e18175e851c96b973d81b01cc31f047834bc06d6d6edf620d184241a6aed8b63a6ac00000000",
+      "version": 1,
+      "inputCount": 1,
+      "outputCount": 1,
+      "lockTime": 0,
+      "txid": "f051e59b5e2503ac626d03aaeac8ab7be2d72ba4b7e97119c5852d70d52dcb86"
+    },
+    {
+      "name": "multiple-outputs",
+      "hex": "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff070431dc001b0162ffffffff0200f2052a01000000434104d64bdfd09eb1c5fe295abdeb1dca4281be988e2da0b6c1c6a59dc226c28624e18175e851c96b973d81b01cc31f047834bc06d6d6edf620d184241a6aed8b63a6ac00e1f50500000000434104d64bdfd09eb1c5fe295abdeb1dca4281be988e2da0b6c1c6a59dc226c28624e18175e851c96b973d81b01cc31f047834bc06d6d6edf620d184241a6aed8b63a6ac00000000",
+      "version": 1,
+      "inputCount": 1,
+      "outputCount": 2,
+      "lockTime": 0
+    }
+  ]
+}

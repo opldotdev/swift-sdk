@@ -8,6 +8,12 @@ package struct ByteWriter {
         self.bytes = []
     }
 
+    /// Creates an empty writer with bounded capacity already reserved.
+    package init(capacity: Int) {
+        self.bytes = []
+        self.bytes.reserveCapacity(capacity)
+    }
+
     /// Appends bytes without transformation.
     package mutating func write(_ bytes: [UInt8]) {
         self.bytes.append(contentsOf: bytes)

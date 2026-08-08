@@ -56,6 +56,10 @@ func TestKnownStandardValues(t *testing.T) {
 		{"big.umod", `{"dividend":"-5","divisor":"3"}`, map[string]string{"value": "1"}},
 		{"scriptnum.encode", `{"value":"-128","era":"postGenesis"}`, map[string]string{"bytes": "8080"}},
 		{"scriptnum.decode", `{"bytes":"8080","era":"postGenesis","minimal":true,"maxBytes":"4"}`, map[string]string{"value": "-128"}},
+		{"transaction.decode", `{"bytes":"01000000000000000000"}`, map[string]string{
+			"bytes": "01000000000000000000", "inputs": "0", "lockTime": "0",
+			"outputs": "0", "txid": "d21633ba23f70118185227be58a63527675641ad37967e2aa461559f577aec43", "version": "1",
+		}},
 	}
 	for _, tc := range vectors {
 		t.Run(tc.op+"/"+tc.args, func(t *testing.T) {
@@ -117,8 +121,8 @@ func TestCompleteOperationRegistry(t *testing.T) {
 		"base64.decode", "base64.encode", "big.umod", "bytes.reverse", "digest32.display",
 		"digest32.parse", "drbg.generate", "hash.hash160", "hash.ripemd160", "hash.sha256", "hash.sha256d",
 		"hash.sha512", "hex.decode", "hex.encode", "hmac.sha256", "hmac.sha512", "metadata",
-		"scriptnum.decode", "scriptnum.encode", "u16.decode", "u16.encode", "u32.decode",
-		"u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
+		"scriptnum.decode", "scriptnum.encode", "transaction.decode", "u16.decode", "u16.encode",
+		"u32.decode", "u32.encode", "u64.decode", "u64.encode", "varbytes.decode", "varbytes.encode",
 		"varint.decode", "varint.encode",
 	}
 	if !reflect.DeepEqual(operations, expected) {
@@ -152,6 +156,7 @@ func TestEveryOperationHasDeterministicSuccess(t *testing.T) {
 		testRequest("big.umod", `{"dividend":"-5","divisor":"3"}`),
 		testRequest("scriptnum.encode", `{"value":"-128","era":"postGenesis"}`),
 		testRequest("scriptnum.decode", `{"bytes":"8080","era":"postGenesis","minimal":true,"maxBytes":"4"}`),
+		testRequest("transaction.decode", `{"bytes":"01000000000000000000"}`),
 	}
 	for _, tc := range cases {
 		t.Run(tc.Op, func(t *testing.T) {

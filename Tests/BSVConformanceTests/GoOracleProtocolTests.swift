@@ -240,6 +240,18 @@ struct GoOracleProtocolTests {
             try check("base58check.encode", ["payload": .string(String(repeating: "00", count: 20)), "version": .string("0")], .object(["text": .string("1111111111111111111114oLvT2")]))
             try check("big.umod", ["dividend": .string("-5"), "divisor": .string("3")], .object(["value": .string("1")]))
             try check("scriptnum.encode", ["value": .string("-128"), "era": .string("postGenesis")], .object(["bytes": .string("8080")]))
+            try check(
+                "transaction.decode",
+                ["bytes": .string("01000000000000000000")],
+                .object([
+                    "bytes": .string("01000000000000000000"),
+                    "inputs": .string("0"),
+                    "lockTime": .string("0"),
+                    "outputs": .string("0"),
+                    "txid": .string("d21633ba23f70118185227be58a63527675641ad37967e2aa461559f577aec43"),
+                    "version": .string("1"),
+                ])
+            )
         }
     }
 }
