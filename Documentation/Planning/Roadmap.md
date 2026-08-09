@@ -216,30 +216,37 @@ issue, acquire, project, and verify workflows.
 
 ## Phase 10: Overlay and application services
 
-Accepted checkpoint: `BSVOverlay` provides bounded SHIP and SLAP values and
-transport-neutral topic and lookup facilitator protocols, plus strict signed
-administration-token verification. It does not include HTTP, resolver policy,
-persistence, or wallet-backed token construction or spending. The package does
-not expose an empty general services module. Each implemented family uses a
-clear module name. `BSVIdentity` provides bounded parsing, wallet-backed
-resolution, and public disclosure through an injected broadcaster.
+Accepted checkpoint: `BSVOverlay` provides bounded SHIP and SLAP values,
+strict signed administration-token verification, deterministic bounded lookup
+resolution, and one-shot topic broadcast policy. `BSVNetwork` provides the
+bounded HTTPS lookup and topic facilitators. The implementation has no default
+tracker, retry, persistence, or wallet-backed token construction or spending.
+The package does not expose an empty general services module. Each implemented
+family uses a clear module name. `BSVIdentity` provides bounded parsing,
+wallet-backed resolution, and public disclosure through an injected
+broadcaster.
 
 - Bounded overlay topic and lookup values and facilitator protocols. (Accepted)
 - Strict signed overlay administration-token verification. (Accepted)
-- Overlay HTTP transport, resolver and broadcaster policy, and wallet-backed
-  administration-token construction or spending. (Future)
+- Bounded overlay HTTPS facilitators and deterministic resolver and broadcaster
+  policy. (Accepted)
+- Wallet-backed administration-token construction or spending. (Future)
 - Transport-neutral identity core. (Accepted)
 - Transport-neutral registry core. (Accepted)
 - Transport-neutral one-field key-value token core. (Accepted)
 - Transport-neutral UHRP identifier and content core. (Accepted)
+- Bounded UHRP overlay discovery and verified HTTPS download. (Accepted)
 - Registry lookup transport, discovery, wallet publication, and revocation.
   (Future)
-- Wallet-backed key-value orchestration and storage discovery, download, and
-  upload features. (Future)
+- Wallet-backed key-value orchestration and authenticated storage upload
+  features. (Future)
 - Remaining Go SDK utility and compatibility APIs.
 
 ## Phase 11: Parity hardening and release
 
+- The pinned 51-family product inventory has 50 represented Swift families.
+  Conservative weighted behavior coverage is approximately 93 percent.
+  (Accepted)
 - Close every compatibility-matrix gap.
 - Differential tests against the pinned Go SDK.
 - API documentation and migration examples for Go and SwiftBSV users.

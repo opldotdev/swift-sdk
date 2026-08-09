@@ -8,8 +8,8 @@ This ruling covers the transport-neutral BRC-103 message codec and peer
 authentication state. It also covers the BRC-104 request and response payload
 codec.
 
-HTTP clients, HTTP servers, WebSocket transports, and certificate exchange are
-outside this scope.
+HTTP clients, HTTP servers, and WebSocket transports are outside this scope.
+COMP-060 covers signed certificate exchange.
 
 ## Decision
 
@@ -45,4 +45,3 @@ The separate Go SDK defect report records the related pinned defects:
 
 Swift does not reproduce these defects. Canonical shared messages remain
 interoperable through the pinned Go oracle.
-

@@ -96,7 +96,9 @@ struct PackageStructureTests {
         try expectTarget(
             "BSVNetwork",
             in: manifest,
-            dependencies: ["BSVCore", "BSVTransaction", "BSVSPV"]
+            dependencies: [
+                "BSVCore", "BSVScript", "BSVStorage", "BSVTransaction", "BSVSPV", "BSVOverlay",
+            ]
         )
         try expectTarget(
             "BSVOverlay",

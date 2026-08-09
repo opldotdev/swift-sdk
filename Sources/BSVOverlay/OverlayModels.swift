@@ -19,6 +19,8 @@ public struct OverlayLimits: Hashable, Sendable {
     public let maximumInstructionIndexCount: Int
     public let maximumAncillaryTransactionCount: Int
     public let maximumSteakTopicCount: Int
+    public let maximumResolutionHostCount: Int
+    public let maximumConcurrentRequestCount: Int
 
     public init(
         maximumTaggedBEEFByteCount: Int,
@@ -36,7 +38,9 @@ public struct OverlayLimits: Hashable, Sendable {
         maximumDependencyCount: Int = 10_000,
         maximumInstructionIndexCount: Int = 10_000,
         maximumAncillaryTransactionCount: Int = 10_000,
-        maximumSteakTopicCount: Int = 256
+        maximumSteakTopicCount: Int = 256,
+        maximumResolutionHostCount: Int = 64,
+        maximumConcurrentRequestCount: Int = 8
     ) throws {
         let values = [
             ("maximumTaggedBEEFByteCount", maximumTaggedBEEFByteCount),
@@ -55,6 +59,8 @@ public struct OverlayLimits: Hashable, Sendable {
             ("maximumInstructionIndexCount", maximumInstructionIndexCount),
             ("maximumAncillaryTransactionCount", maximumAncillaryTransactionCount),
             ("maximumSteakTopicCount", maximumSteakTopicCount),
+            ("maximumResolutionHostCount", maximumResolutionHostCount),
+            ("maximumConcurrentRequestCount", maximumConcurrentRequestCount),
         ]
         if let invalid = values.first(where: { $0.1 <= 0 }) {
             throw OverlayError.nonPositiveLimit(name: invalid.0, value: invalid.1)
@@ -75,6 +81,8 @@ public struct OverlayLimits: Hashable, Sendable {
         self.maximumInstructionIndexCount = maximumInstructionIndexCount
         self.maximumAncillaryTransactionCount = maximumAncillaryTransactionCount
         self.maximumSteakTopicCount = maximumSteakTopicCount
+        self.maximumResolutionHostCount = maximumResolutionHostCount
+        self.maximumConcurrentRequestCount = maximumConcurrentRequestCount
     }
 
     private init(standard: Void) {
@@ -94,6 +102,8 @@ public struct OverlayLimits: Hashable, Sendable {
         maximumInstructionIndexCount = 10_000
         maximumAncillaryTransactionCount = 10_000
         maximumSteakTopicCount = 256
+        maximumResolutionHostCount = 64
+        maximumConcurrentRequestCount = 8
     }
 
     public static let standard = Self(standard: ())

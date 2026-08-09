@@ -126,7 +126,9 @@ let package = Package(
         ),
         .target(
             name: "BSVNetwork",
-            dependencies: ["BSVCore", "BSVTransaction", "BSVSPV"]
+            dependencies: [
+                "BSVCore", "BSVScript", "BSVStorage", "BSVTransaction", "BSVSPV", "BSVOverlay",
+            ]
         ),
         .target(
             name: "BSVOverlay",
@@ -221,7 +223,10 @@ let package = Package(
         ),
         .testTarget(
             name: "BSVNetworkTests",
-            dependencies: ["BSVNetwork", "BSVTransaction", "BSVSPV", "BSVCore"],
+            dependencies: [
+                "BSVNetwork", "BSVTransaction", "BSVSPV", "BSVCore", "BSVOverlay", "BSVScript",
+                "BSVStorage", "BSVKeys",
+            ],
             exclude: ["README.md"]
         ),
         .testTarget(

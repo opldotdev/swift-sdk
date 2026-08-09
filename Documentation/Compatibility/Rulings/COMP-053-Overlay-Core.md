@@ -26,6 +26,6 @@ ancillary transaction IDs. It applies count and byte limits before it stores
 each caller-owned collection. One lookup answer also has an aggregate BEEF byte
 limit.
 
-This packet adds no wire codec. It does not claim byte-level parity for Go JSON
-or binary HTTP responses. A later transport packet must define and test those
-formats before it sends or accepts network data.
+This core packet added no wire codec. COMP-061 adds the bounded HTTP formats,
+deterministic resolver, and one-shot broadcaster without changing these core
+value rules.

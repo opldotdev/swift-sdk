@@ -26,7 +26,7 @@ BSVStorage     -> BSVCore, BSVCrypto, BSVKeys
 BSVTransaction -> BSVCore, BSVCrypto, BSVKeys, BSVScript
 BSVInterpreter -> BSVCore, BSVBigNum, BSVCrypto, BSVKeys, BSVScript, BSVTransaction
 BSVSPV         -> BSVCore, BSVCrypto, BSVTransaction, BSVInterpreter
-BSVNetwork     -> BSVCore, BSVTransaction, BSVSPV
+BSVNetwork     -> BSVCore, BSVScript, BSVStorage, BSVTransaction, BSVSPV, BSVOverlay
 BSVOverlay     -> BSVCore, BSVCrypto, BSVKeys, BSVScript, BSVTransaction
 BSVRegistry    -> BSVCore, BSVKeys, BSVOverlay, BSVScript, BSVTransaction, BSVWallet
 BSVWallet      -> BSVCore, BSVCrypto, BSVKeys, BSVScript, BSVTransaction
@@ -148,9 +148,12 @@ cyclic relationship.
 
 - `BSVSPV` owns block headers and full SPV validation that requires script execution.
 - `BSVNetwork` owns concrete chain-tracker and broadcaster implementations,
-  HTTP clients, request/response models, retry behavior, and transport
-  abstractions. It imports `BSVSPV` for the block-header values exposed by the
-  block-headers-service client; the dependency remains one-way.
+  HTTP clients, request/response models, retry behavior, overlay HTTP
+  facilitators, and transport abstractions. It imports `BSVSPV` for the
+  block-header values exposed by the block-headers-service client and
+  `BSVOverlay` for transport-neutral SHIP and SLAP values. It imports
+  `BSVStorage` and `BSVScript` for bounded UHRP download and advertisement
+  validation. Each dependency remains one-way.
 - `FoundationNetworking` is isolated here for Linux support.
 
 ### BSVWallet
@@ -166,19 +169,20 @@ cyclic relationship.
 
 ### BSVAuth
 
-- Offline certificate workflows.
-- Future BRC-103/BRC-104 authentication, peer/client state, and HTTP or
-  WebSocket transports.
-- No portable-message declarations or aliases.
+- Offline certificate workflows and signed BRC-103 certificate exchange.
+- BRC-103 peer authentication state and bounded BRC-104 payload and HTTP
+  framing.
+- No concrete HTTP or WebSocket transport and no portable-message declarations
+  or aliases.
 
 ### BSVOverlay
 
 - Bounded SHIP and SLAP values, acknowledgments, and transport-neutral
   facilitator protocols.
-- Strict signed administration-token verification for later caller-selected
-  discovery policy.
-- No HTTP, resolver defaults, wallet construction or spending, persistence, or
-  type-erased response values.
+- Strict signed administration-token verification, deterministic bounded
+  lookup resolution, and one-shot topic broadcast policy.
+- No HTTP implementation, default trackers, wallet construction or spending,
+  persistence, or type-erased response values.
 
 ### BSVIdentity
 

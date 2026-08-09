@@ -623,8 +623,9 @@ checked.
 Suggested correction: require a caller-selected maximum response size and stop
 reading once the limit is exceeded before hashing or retaining content.
 
-Swift handling: `StorageContent` and `UHRPURL(fileBytes:)` require explicit
-content limits. No downloader HTTP implementation is included.
+Swift handling: `UHRPDownloader` passes the caller's content limit to the HTTP
+transport before reading the body. `StorageContent` applies the same limit
+before it retains the result.
 
 ### GO-037: Storage upload errors read and disclose unbounded server bodies
 
@@ -657,8 +658,9 @@ download starts.
 Suggested correction: bound lookup outputs and BEEF bytes before parsing, cap
 accepted hosts and aggregate text, and return a typed resource error.
 
-Swift handling: `BSVStorage` has no resolver. Any future resolver must use
-bounded overlay values and explicit UHRP host limits.
+Swift handling: the injected overlay resolver uses bounded output values and
+BEEF parsing. `UHRPDownloader` adds explicit advertisement and host-count
+limits before it accumulates download locations.
 
 ### GO-039: Storage ListUploads exposes an unbounded type-erased public result
 
@@ -708,9 +710,8 @@ Suggested correction: validate an absolute allowed-scheme URL with a nonempty
 host before returning it from resolution, then enforce the same policy at the
 transport boundary.
 
-Swift handling: host discovery and HTTP policy are deliberately deferred. A
-future transport packet must construct validated endpoints rather than accept
-opaque resolver text.
+Swift handling: `UHRPDownloader` accepts only absolute HTTPS locations with a
+nonempty host and without credentials, fragments, or control characters.
 
 ### GO-042: Overlay lookup reads an unbounded response body
 
@@ -725,8 +726,8 @@ aggregated BEEF response. A hostile service can exhaust process memory.
 Suggested correction: enforce a response byte limit while streaming, before
 JSON or BEEF parsing begins.
 
-Swift handling: no overlay HTTP facilitator is present. A future adapter must
-use the bounded injected network transport.
+Swift handling: `HTTPSOverlayLookupFacilitator` passes an explicit response
+ceiling to the injected network transport before it parses JSON or BEEF.
 
 ### GO-043: Binary overlay lookup trusts attacker-controlled counts and indexes
 
@@ -742,8 +743,9 @@ or silently change the selected output.
 Suggested correction: cap every count and byte length before allocation or
 conversion, reject nonrepresentable output indexes, and bound aggregate BEEF.
 
-Swift handling: binary lookup transport is deferred. Existing overlay output
-values have explicit count, per-BEEF, and aggregate limits.
+Swift handling: the binary lookup codec requires canonical CompactSize values,
+bounds counts and context before allocation, checks UInt32 conversion, parses
+bounded BEEF, and validates each transaction and output index.
 
 ### GO-044: Topic discovery can panic on an unvalidated output index
 
@@ -758,8 +760,8 @@ answer can terminate the process.
 Suggested correction: validate every returned output index before indexing and
 return a typed malformed-response error.
 
-Swift handling: host discovery is not implemented. A future resolver must
-validate output indexes before inspecting a transaction output.
+Swift handling: `OverlayTopicBroadcaster` parses bounded BEEF and validates the
+output index before it decodes and verifies a SHIP administration token.
 
 ### GO-045: Broadcaster construction can panic and accepts zero topics
 
@@ -774,8 +776,8 @@ the documented requirement for at least one topic.
 Suggested correction: reject nil configuration or define an explicit safe
 default, and require `len(topics) > 0`.
 
-Swift handling: no mutable broadcaster factory is exposed. `TaggedBEEF`
-requires a nonempty bounded topic list.
+Swift handling: `OverlayTopicBroadcaster` has an explicit throwing initializer.
+It requires a nonempty bounded unique topic list and injected policy values.
 
 ### GO-046: Broadcaster dereferences a successful nil acknowledgement
 
@@ -804,8 +806,9 @@ directly from an unbounded body.
 Suggested correction: accept the caller context, propagate cancellation, and
 enforce byte and collection limits before decoding a STEAK response.
 
-Swift handling: no topic HTTP facilitator is present. Any future submission
-must be an explicitly no-retry cancellable POST using bounded transport.
+Swift handling: `HTTPSOverlayTopicFacilitator` performs one bounded POST. It
+does not retry. Cancellation or transport failure after submission starts has
+uncertain delivery.
 
 ### GO-048: Named HTTPS overlay facilitators accept arbitrary concatenated URLs
 
@@ -821,8 +824,9 @@ Suggested correction: require an absolute HTTPS URL without credentials,
 query, fragment, or ambiguous trailing slash, then build paths with a URL
 component API.
 
-Swift handling: `OverlayHost` remains transport-neutral. A future HTTP adapter
-must introduce a separately validated HTTPS endpoint type.
+Swift handling: `OverlayHost` remains transport-neutral. Each HTTPS facilitator
+requires an absolute HTTPS origin without credentials, path, query, fragment,
+or trailing slash before it constructs the fixed endpoint path.
 
 ### GO-049: Administration-token decoding accepts ambiguous and invalid fields
 
@@ -870,7 +874,9 @@ without a resource policy.
 Suggested correction: validate and deduplicate bounded host lists, use bounded
 concurrency, and cap accepted results before BEEF processing.
 
-Swift handling: resolver policy and tracker defaults are not implemented.
+Swift handling: `LookupResolver` requires explicit tracker and host lists,
+deduplicates and sorts them, caps their count, and queries them with bounded
+concurrency. It has no default tracker list.
 
 ### GO-052: Overlay resolver results are nondeterministically ordered
 
@@ -885,8 +891,9 @@ results based on scheduling and randomized map iteration.
 Suggested correction: specify deterministic answer arbitration and sort output
 keys before returning them.
 
-Swift handling: resolver aggregation is deferred. Future aggregation must have
-an explicit deterministic selection and sorting rule.
+Swift handling: `LookupResolver` selects freeform data by sorted host order,
+deduplicates output keys, and sorts them by transaction ID and output index. It
+rejects mixed answer representations.
 
 ### GO-053: Auth HTTP paths read unbounded bodies and messages
 
@@ -1087,6 +1094,41 @@ message.
 
 Swift handling: the HTTP frame codec rejects this header. Callers use the
 signed BRC-103 certificate-request message.
+
+### GO-064: Storage resolution does not bind advertisements to the requested UHRP identifier
+
+- Package: `storage`
+- File: [`downloader.go`](https://github.com/bsv-blockchain/go-sdk/blob/de26fdec57a945ddc06de5d5617f6c32374f3929/storage/downloader.go)
+- Severity: medium
+
+Each advertisement has a content-hash field and a UHRP-identifier field, but
+`Resolve` ignores both fields. It accepts the host from any current four-field
+PushDrop result, even when the lookup service returns an advertisement for a
+different file. The later download hash check prevents incorrect content from
+being returned, but the client still contacts an unrelated server and spends
+network and hashing work on an invalid result.
+
+Suggested correction: require the 32-byte hash and parsed UHRP field to equal
+the requested identifier before the host enters the result set.
+
+Swift handling: `UHRPDownloader` checks both fields before it accepts the
+advertisement or starts a request.
+
+### GO-065: Storage expiry fields accept trailing bytes
+
+- Package: `storage`
+- File: [`downloader.go`](https://github.com/bsv-blockchain/go-sdk/blob/de26fdec57a945ddc06de5d5617f6c32374f3929/storage/downloader.go)
+- Severity: low
+
+`Resolve` reads one variable integer from the expiry field but does not require
+the field reader to reach its end. Multiple byte strings can therefore
+represent the same expiry value.
+
+Suggested correction: decode one canonical CompactSize value and require
+complete field consumption.
+
+Swift handling: the advertisement parser uses exact canonical CompactSize
+decoding and rejects nonminimal or trailing forms.
 
 ## Reporting format
 

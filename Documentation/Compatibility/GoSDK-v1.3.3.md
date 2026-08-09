@@ -30,6 +30,25 @@ The current Swift target graph resolves these package-boundary differences:
    and Address in `BSVKeys`; place BIP-32 with the other common compatibility
    families in `BSVCompat`.
 
+## Parity checkpoint
+
+The pinned inventory has 51 reusable product package families after the
+document examples and test-support packages are removed. Swift now has a
+named implementation boundary for 50 of those 51 families. This is 98 percent
+package-family presence.
+
+A conservative behavior score gives one point to 45 accepted families, one
+half point to five partial families, and zero points to the missing
+`auth/clients/authhttp` family. The partial families are `auth/transports`,
+`identity`, `kvstore`, `registry`, and `storage`. This gives 47.5 of 51 points,
+or approximately 93 percent meaningful behavior coverage.
+
+This score measures package-family behavior. It does not claim identical Go
+declaration counts or copy unsafe Go defaults. The main remaining work is a
+safe authenticated HTTP client, registry wallet orchestration, wallet-backed
+key-value operations, authenticated storage upload, and selected certificate
+and permission policy.
+
 The lowest primitive seam is:
 
 ```text
@@ -477,9 +496,10 @@ Public:
 - `HTTPWalletWire`.
 - `HTTPWalletJSON`, implementing every wallet operation over JSON.
 
-Swift status: future. The accepted wallet-wire codec is stateless serialization
-only and adds no processor, transceiver, HTTP transport, wallet execution,
-persistence, or permission behavior.
+Swift status: accepted for the bounded transport-neutral `WalletWireProcessor`
+and originator-bound `WalletWireTransceiver` across all 28 calls. The substrate
+uses an injected transport and originator authorizer. Concrete HTTP transport,
+persistent wallet state, and interactive permission policy remain future work.
 
 Edges: wallet/serializer and stdlib HTTP.
 
@@ -584,14 +604,15 @@ Edges: all auth subpackages, EC, script, P2PKH, wallet; stdlib HTTP.
 
 ### Overlay and high-level services
 
-The transport-neutral overlay core is implemented in `BSVOverlay`. HTTP
-facilitators, resolver policy, wallet-backed administration-token construction
-and spending, and persistence remain separate named packets; the module does
-not map to an empty general services module.
+The transport-neutral overlay core, deterministic resolver, and one-shot topic
+broadcaster are implemented in `BSVOverlay`. Bounded HTTPS facilitators are in
+`BSVNetwork`. Wallet-backed administration-token construction and spending and
+persistence remain separate named packets; the module does not map to an empty
+general services module.
 
 #### `overlay` → `BSVOverlay`
 
-Public protocol models: networks, protocol names/IDs for SHIP/SLAP, `TaggedBEEF`, `Steak`, admittance instructions, applied transaction, typed topic data, metadata, bounded topic/service/host values, and strict signed administration-token decoding. Edges: Core, Crypto, Keys, Script, Transaction.
+Public protocol models: networks, protocol names/IDs for SHIP/SLAP, `TaggedBEEF`, `Steak`, admittance instructions, applied transaction, typed topic data, metadata, bounded topic/service/host values, strict signed administration-token decoding, deterministic lookup resolution, and one-shot topic broadcast policy. Edges: Core, Crypto, Keys, Script, Transaction.
 
 #### `overlay/admin-token` → `BSVOverlay` verification core
 
@@ -607,7 +628,11 @@ Public:
 - `Facilitator.Lookup`.
 - Transport-neutral `LookupFacilitator`.
 - Bounded `LookupQuestion`, `LookupAnswer`, and `OutputListItem` values.
-- HTTP facilitation, resolver discovery, formulas, and tracker defaults remain separate.
+- `LookupResolver` with explicit trackers, overrides, additional hosts, bounded
+  concurrency, verified SLAP discovery, and deterministic aggregation.
+- `HTTPSOverlayLookupFacilitator` in `BSVNetwork` with strict JSON or aggregated
+  BEEF response decoding.
+- Formula callbacks and tracker defaults remain excluded.
 
 Edges: overlay, admin token, transaction, util; HTTP.
 
@@ -617,7 +642,10 @@ Public:
 
 - Transport-neutral `TopicFacilitator`.
 - `AckFrom` and `RequireAck` values.
-- Broadcaster execution, host discovery, and HTTP implementation remain separate.
+- `OverlayTopicBroadcaster` with verified SHIP discovery, explicit
+  acknowledgment rules, and one submission per interested host.
+- `HTTPSOverlayTopicFacilitator` in `BSVNetwork` with bounded STEAK decoding and
+  uncertain-delivery reporting after a POST begins.
 
 Edges: overlay, admin token, lookup, transaction, util; HTTP.
 
@@ -674,20 +702,22 @@ encryption operations, BEEF lookup, newest-value selection, persistence,
 retention, overlay discovery, and network transport. Confirmed defects are
 GO-027 through GO-035.
 
-#### `storage` → `BSVStorage` UHRP core
+#### `storage` → `BSVStorage` and `BSVNetwork`
 
 Public:
 
 - Bounded `UHRPLimits`, canonical `UHRPURL`, and redacted `StorageContent`
   values using the Go and TypeScript Base58Check UHRP representation.
 - A narrow `UHRPContentProvider` async protocol for transport-selected content.
+- `UHRPDownloader` in `BSVNetwork` with canonical `ls_uhrp` queries, bounded
+  BEEF and PushDrop advertisements, deterministic HTTPS hosts, bounded GET
+  responses, cancellation, and SHA-256 content verification.
 
-Edges: core, crypto, keys.
+Edges: core, crypto, keys; overlay, script, transaction, and network HTTP.
 
-Not ported: `StorageDownloader`, `Uploader`, all HTTP and auth-fetch paths,
-overlay lookup/discovery, default network selection, wallet actions, service
-metadata JSON, persistence, and production mocks. Confirmed defects are
-GO-036 through GO-041.
+Not ported: `Uploader`, auth-fetch upload paths, default network selection,
+wallet actions, service metadata JSON, persistence, and production mocks.
+Confirmed defects are in the separate maintainer report.
 
 ### Internal/test-support packages
 
@@ -897,9 +927,9 @@ License warning: these live under the Open BSV-licensed upstream. Use the Go ora
 12. `BSVMessage`: BRC-77 and BRC-78 portable messages.
 13. `BSVAuth`: certificates, strict BRC-103 peer/session state and signed certificate exchange, bounded BRC-104 payloads, and bounded transport-neutral authenticated HTTP framing. Concrete HTTP, WebSocket, auth-fetch, automatic payment, and certificate-gated initial-handshake policy remain future work.
 14. `BSVOverlay`, `BSVIdentity`, `BSVRegistry`, `BSVKVStore`, and `BSVStorage`
-    cores are accepted. Future named work includes overlay/admin/lookup/topic
-    transports, registry orchestration, wallet-backed KV store, and UHRP
-    storage.
+    cores are accepted. Bounded overlay HTTP, resolver policy, topic broadcast,
+    and UHRP download are accepted. Future named work includes registry
+    orchestration, wallet-backed KV store, and authenticated storage upload.
 15. Hardening: differential oracle for every codec, explicit Go-error-to-Swift-error tables, malformed/truncation fuzzing, resource ceilings, concurrency/Sendable review, Linux live transport tests.
 
 ## Exact seam contracts to stabilize early
