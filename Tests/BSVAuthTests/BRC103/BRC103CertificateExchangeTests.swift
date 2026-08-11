@@ -33,8 +33,10 @@ struct BRC103CertificateExchangeTests {
         )
         let requestJSON = try AuthMessageCodec.encode(requestMessage)
         #expect(try AuthMessageCodec.decode(requestJSON) == requestMessage)
+        // The wire spelling is lowercase, matching the TypeScript and Go SDKs and the servers
+        // that run them. A capitalised key is not this protocol and is refused.
         let noncanonicalRequest = String(decoding: requestJSON, as: UTF8.self)
-            .replacingOccurrences(of: #""Certifiers""#, with: #""certifiers""#)
+            .replacingOccurrences(of: #""certifiers""#, with: #""Certifiers""#)
         #expect(throws: AuthError.invalidCertificateRequest) {
             try AuthMessageCodec.decode(Array(noncanonicalRequest.utf8))
         }

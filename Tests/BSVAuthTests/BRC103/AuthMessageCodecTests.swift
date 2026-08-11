@@ -58,7 +58,7 @@ struct AuthMessageCodecTests {
         let key = Hex.encode(identity.compressedBytes)
         let nonce = Base64Encoding.encode([UInt8](repeating: 2, count: 32))
         let duplicateNested =
-            #"{"version":"0.1","messageType":"initialRequest","identityKey":"\#(key)","initialNonce":"\#(nonce)","requestedCertificates":{"Certifiers":[],"Certifiers":[],"CertificateTypes":{}}}"#
+            #"{"version":"0.1","messageType":"initialRequest","identityKey":"\#(key)","initialNonce":"\#(nonce)","requestedCertificates":{"certifiers":[],"certifiers":[],"types":{}}}"#
         #expect(throws: AuthError.invalidMessage) {
             try AuthMessageCodec.decode(Array(duplicateNested.utf8))
         }

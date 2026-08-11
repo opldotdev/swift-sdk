@@ -12,12 +12,12 @@ enum AuthCertificateJSON {
             limits: limits
         )
         var writer = AuthCertificateJSONWriter(maximumByteCount: maximumJSONBytes(limits))
-        try writer.append(#"{"Certifiers":["#)
+        try writer.append(#"{"certifiers":["#)
         for index in request.certifiers.indices {
             if index > 0 { try writer.append(",") }
             try writer.appendJSONString(Hex.encode(request.certifiers[index].compressedBytes))
         }
-        try writer.append(#"],"CertificateTypes":{"#)
+        try writer.append(#"],"types":{"#)
         let types = request.certificateTypes.keys.sorted {
             $0.base64.utf8.lexicographicallyPrecedes($1.base64.utf8)
         }

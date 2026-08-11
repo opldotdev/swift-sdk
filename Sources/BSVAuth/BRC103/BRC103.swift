@@ -135,12 +135,15 @@ public enum AuthMessageCodec {
                 message.certificates == nil, message.requestedCertificates == nil
             else { throw AuthError.invalidMessage }
         case .initialResponse:
-            guard message.nonce.map(validSessionNonce) == true,
-                message.initialNonce.map(validSessionNonce) == true,
-                message.initialNonce == message.nonce,
+            // The responder's own nonce travels as `initialNonce`; `nonce` is not sent. The
+            // TypeScript reference builds this message with `initialNonce`, `yourNonce`,
+            // `certificates` and `requestedCertificates`, and no `nonce` at all — so requiring
+            // one rejects every conforming peer. When a sender does include it, it names the same
+            // nonce and must agree.
+            guard message.initialNonce.map(validSessionNonce) == true,
+                message.nonce == nil || message.nonce == message.initialNonce,
                 message.yourNonce.map(validSessionNonce) == true, message.signature != nil,
-                message.payload == nil, message.certificates == nil,
-                message.requestedCertificates == nil
+                message.payload == nil
             else { throw AuthError.invalidMessage }
         case .general:
             guard message.nonce.map(validMessageNonce) == true,
@@ -191,8 +194,8 @@ public enum AuthMessageCodec {
             types[type.base64] = fields.map(\.value)
         }
         return [
-            "Certifiers": request.certifiers.map { Hex.encode($0.compressedBytes) },
-            "CertificateTypes": types,
+            "certifiers": request.certifiers.map { Hex.encode($0.compressedBytes) },
+            "types": types,
         ]
     }
 
@@ -202,10 +205,10 @@ public enum AuthMessageCodec {
     ) throws -> AuthRequestedCertificateSet? {
         guard let value else { return nil }
         guard let object = value as? [String: Any],
-            Set(object.keys) == ["Certifiers", "CertificateTypes"]
+            Set(object.keys) == ["certifiers", "types"]
         else { throw AuthError.invalidCertificateRequest }
-        let rawCertifiers = object["Certifiers"]
-        let rawTypes = object["CertificateTypes"]
+        let rawCertifiers = object["certifiers"]
+        let rawTypes = object["types"]
 
         if rawCertifiers is NSNull || (rawCertifiers as? [Any])?.isEmpty == true,
             rawTypes is NSNull || (rawTypes as? [String: Any])?.isEmpty == true
