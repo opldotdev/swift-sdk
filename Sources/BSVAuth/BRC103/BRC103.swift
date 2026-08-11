@@ -450,7 +450,7 @@ public actor PeerAuthenticator {
         try Task.checkCancellation()
         purgeExpired()
         try requireSessionCapacity(for: expectedPeer)
-        let nonce = try makeUniqueNonce()
+        let nonce = try makeUniqueSessionNonce()
         let id = AuthSessionID()
         sessions[id] = .init(
             id: id, state: .challengeSent, peer: expectedPeer, ownNonce: nonce, peerNonce: nil,
@@ -624,7 +624,7 @@ public actor PeerAuthenticator {
         do {
             signature = try await sign(
                 (try nonceBytes(incoming)) + (try nonceBytes(ownNonce)),
-                keyID: ownNonce + " " + incoming,
+                keyID: incoming + " " + ownNonce,
                 peer: message.identityKey)
             try Task.checkCancellation()
         } catch {
@@ -641,8 +641,8 @@ public actor PeerAuthenticator {
     }
     private func receiveResponse(_ message: AuthMessage) async throws -> [AuthPeerAction] {
         try Task.checkCancellation()
-        guard let ownNonce = message.yourNonce, let peerNonce = message.nonce,
-            message.initialNonce == peerNonce, let signature = message.signature,
+        guard let ownNonce = message.yourNonce, let peerNonce = message.initialNonce,
+            message.nonce == nil || message.nonce == peerNonce, let signature = message.signature,
             let candidate = sessions.first(where: {
                 $0.value.state == .challengeSent && $0.value.ownNonce == ownNonce
             })
@@ -654,7 +654,7 @@ public actor PeerAuthenticator {
         guard
             try await verify(
                 signature, data: (try nonceBytes(ownNonce)) + (try nonceBytes(peerNonce)),
-                keyID: peerNonce + " " + ownNonce, peer: message.identityKey)
+                keyID: ownNonce + " " + peerNonce, peer: message.identityKey)
         else { throw AuthError.invalidSignature }
         try Task.checkCancellation()
         guard var session = sessions[index], session.state == .challengeSent,
@@ -873,6 +873,29 @@ public actor PeerAuthenticator {
             || sessions.values.contains {
                 $0.ownNonce == nonce || $0.peerNonce == nonce || $0.seen.contains(nonce)
             }
+    }
+    /// A session nonce is 48 bytes, not 32.
+    ///
+    /// The signed data is the two nonces' base64 **text** joined and then decoded, which is what
+    /// the TypeScript peer does. A 32-byte nonce encodes with `=` padding, and a decoder handed
+    /// `<padded><second>` stops at the padding and silently drops the second nonce — the two sides
+    /// then sign different bytes and neither can say why. At 48 bytes there is no padding, joining
+    /// is unambiguous, and both derivations agree.
+    private func makeSessionNonce() throws -> String {
+        do {
+            let bytes = try randomSource.randomBytes(count: 48)
+            guard bytes.count == 48 else { throw AuthError.randomGenerationFailed }
+            return Base64Encoding.encode(bytes)
+        } catch {
+            throw AuthError.randomGenerationFailed
+        }
+    }
+    private func makeUniqueSessionNonce() throws -> String {
+        for _ in 0..<4 {
+            let nonce = try makeSessionNonce()
+            if !nonceIsInUse(nonce) { return nonce }
+        }
+        throw AuthError.randomGenerationFailed
     }
     private func makeNonce() throws -> String {
         do {
