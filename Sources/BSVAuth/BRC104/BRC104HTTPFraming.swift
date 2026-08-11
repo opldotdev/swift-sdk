@@ -280,7 +280,9 @@ public enum BRC104HTTPFrameCodec {
         }
         try validateFrame(headers: frame.headers, body: frame.body, limits: limits)
         let split = try split(frame.headers, kind: .response, limits: limits)
-        let authentication = try parseAuthentication(split.authentication)
+        let authentication = try parseAuthentication(
+            split.authentication, messageTypeRequired: false
+        )
         guard authentication.requestID == expectedRequestID else {
             throw BRC104HTTPFramingError.requestIDMismatch
         }
@@ -440,13 +442,23 @@ public enum BRC104HTTPFrameCodec {
         return value
     }
 
+    /// Reads the `x-bsv-auth-*` headers.
+    ///
+    /// `messageType` is optional on a response because the reference middleware omits it there:
+    /// it writes that header only when the message is *not* general, and every ordinary answer is
+    /// general. Requiring it rejects every real response. When a sender does include it, it must
+    /// still say `general`.
     private static func parseAuthentication(
-        _ headers: [String: String]
+        _ headers: [String: String],
+        messageTypeRequired: Bool = true
     ) throws
         -> ParsedAuthentication
     {
         let version = try required(BRC104HTTPHeaderName.version, in: headers)
-        let messageType = try required(BRC104HTTPHeaderName.messageType, in: headers)
+        let messageType =
+            messageTypeRequired
+            ? try required(BRC104HTTPHeaderName.messageType, in: headers)
+            : headers[BRC104HTTPHeaderName.messageType] ?? AuthMessageType.general.rawValue
         let keyText = try required(BRC104HTTPHeaderName.identityKey, in: headers)
         let nonce = try required(BRC104HTTPHeaderName.nonce, in: headers)
         let yourNonce = try required(BRC104HTTPHeaderName.yourNonce, in: headers)
