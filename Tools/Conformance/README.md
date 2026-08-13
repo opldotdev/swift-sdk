@@ -4,7 +4,7 @@ The Go oracle is a tooling-only, ephemeral differential adapter. It imports an
 external `github.com/bsv-blockchain/go-sdk` v1.3.3 source tree; no Go SDK source,
 tests, fixtures, or generated answers are stored here.
 
-Set `BSV_GO_SDK_PATH` to the external source, then run:
+Set `BSV_GO_SDK_PATH` to the Go SDK checkout (`$HOME/code/go-sdk`), then run:
 
 ```sh
 Tools/Conformance/GoOracle/test-external.sh

@@ -3,7 +3,7 @@
 ## Scope and baselines
 
 - BRC corpus: `/Users/satchmo/code/BRCs`, Git commit `a0b5e42c01f13a1506b063a83070e81d4090debb` (working tree clean when audited).
-- Go reference: clean extracted source `/private/tmp/bsv-go-sdk-research`, pinned by the project to `bsv-blockchain/go-sdk` v1.3.3 / commit `de26fdec57a945ddc06de5d5617f6c32374f3929`. The extraction has no `.git` directory, so the commit identity is a supplied provenance lock rather than independently re-derived from Git metadata in that directory.
+- Go reference: `~/code/go-sdk`, tracking `bsv-blockchain/go-sdk` `master`. The matrix below was first written against v1.3.3.
 - Swift target: `/Users/satchmo/code/swift-sdk`, whose declared modules are `BSVCore`, `BSVCrypto`, `BSVKeys`, `BSVMessage`, `BSVScript`, `BSVTransaction`, `BSVInterpreter`, `BSVSPV`, `BSVNetwork`, `BSVWallet`, `BSVAuth`, and umbrella `BSV`.
 - “Full/partial/none” below means implemented in the pinned Go source, not necessarily production-complete or conformant to every newly edited sentence in the local BRC corpus.
 - This is a functional/provenance audit, not a legal opinion.

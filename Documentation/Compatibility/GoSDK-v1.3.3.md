@@ -2,10 +2,10 @@
 
 ## Baseline and scope
 
-- Audited source: `/private/tmp/bsv-go-sdk-research`
+- Audited source: `~/code/go-sdk`
 - Pinned release: `bsv-blockchain/go-sdk` v1.3.3
 - Lock commit: `de26fdec57a945ddc06de5d5617f6c32374f3929`
-- Explicitly excluded: dirty/conflicted `/Users/satchmo/code/go-sdk` at `90f6988`.
+- Live checkout: `~/code/go-sdk` on `master`, tracking `bsv-blockchain/go-sdk`. This matrix was written against v1.3.3.
 - Inventory: 91 Go packages total; 55 non-example packages, including three test-support packages. The other 36 are executable documentation examples, not reusable API.
 - The Go module directly requires `github.com/pkg/errors`, `golang.org/x/crypto`, `golang.org/x/net`, `golang.org/x/sync`, and `github.com/stretchr/testify`. Some production files unfortunately import `testing`/`testify` because mocks live outside `_test.go`.
 - Confirmed upstream defects are kept in the separate

@@ -31,7 +31,7 @@ Return:
 
 ## Evidence available
 
-- Upstream Go SDK research checkout: `/tmp/bsv-go-sdk-research`
+- Upstream Go SDK research checkout: `~/code/go-sdk`
 - SwiftBSV research checkout: `/tmp/swiftbsv-research`
 - Apple Swift Crypto research checkout: `/tmp/swift-crypto-research`
 - swift-secp256k1 research checkout: `/tmp/swift-secp256k1-research`

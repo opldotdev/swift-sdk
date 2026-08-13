@@ -62,9 +62,8 @@ Important findings already incorporated:
 - Wallet-backed PushDrop factories live in Wallet; transaction-neutral
   PushDrop codecs/signers live in Transaction.
 - WIF/address/BIP-32 ownership is Keys even where Go namespaces differ.
-- The developer's `~/code/go-sdk` checkout is dirty and excluded. The baseline
-  is locked to v1.3.3 commit
-  `de26fdec57a945ddc06de5d5617f6c32374f3929`.
+- Live Go reference: `~/code/go-sdk` on `master`. The oracle lock still names
+  v1.3.3 commit `de26fdec57a945ddc06de5d5617f6c32374f3929` for those tests.
 - `attaswift/BigInt` 5.7.0 is only a candidate. It is MIT, dependency-free,
   `Sendable`, strict-concurrency checked, and passed its 211 tests under Swift
   6.3.3 on macOS. Linux and 750 KB/32 MiB resource experiments remain gates.
