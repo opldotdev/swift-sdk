@@ -240,6 +240,73 @@ struct WalletWireSubstrateTests {
             )
         }
     }
+
+    @Test("handler receives originator and full protocol and basket scopes")
+    func handlerReceivesScopedRequests() async throws {
+        let limits = WalletWireLimits.standard
+        let handler = ScopedRequestRecorder()
+        let processor = WalletWireProcessor(
+            handler: handler,
+            failureMapper: try WalletWireRedactingFailureMapper(limits: limits),
+            beefLimits: try substrateBEEFLimits(),
+            certificateLimits: .standard,
+            wireLimits: limits
+        )
+        let firstClient = try WalletWireTransceiver(
+            transport: processor,
+            originator: "first.example",
+            beefLimits: try substrateBEEFLimits(),
+            certificateLimits: .standard,
+            wireLimits: limits
+        )
+        let secondClient = try WalletWireTransceiver(
+            transport: processor,
+            originator: "second.example",
+            beefLimits: try substrateBEEFLimits(),
+            certificateLimits: .standard,
+            wireLimits: limits
+        )
+
+        _ = try await firstClient.listOutputs(try WalletListOutputsRequest(basket: "alpha basket"))
+        _ = try await secondClient.listOutputs(try WalletListOutputsRequest(basket: "beta basket"))
+        _ = try await firstClient.encrypt(WalletEncryptRequest(
+            protocolID: try walletTestProtocol("alpha scope"),
+            keyID: try walletTestKeyID("key"),
+            plaintext: []
+        ))
+        _ = try await secondClient.encrypt(WalletEncryptRequest(
+            protocolID: try walletTestProtocol("beta scope"),
+            keyID: try walletTestKeyID("key"),
+            plaintext: []
+        ))
+
+        #expect(await handler.snapshot() == [
+            ScopedCall(originator: "first.example", call: .listOutputs, scope: "alpha basket"),
+            ScopedCall(originator: "second.example", call: .listOutputs, scope: "beta basket"),
+            ScopedCall(originator: "first.example", call: .encrypt, scope: "alpha scope"),
+            ScopedCall(originator: "second.example", call: .encrypt, scope: "beta scope"),
+        ])
+    }
+
+    @Test("request context preserves bounded raw originator")
+    func requestContextValidation() throws {
+        let raw = " HTTPS://Example.COM:443 "
+        let context = try WalletRequestContext(rawOriginator: raw)
+        #expect(context.rawOriginator == raw)
+        #expect(!context.description.contains(raw))
+        #expect(Array(Mirror(reflecting: context).children).isEmpty)
+
+        let tooLong = String(
+            repeating: "a",
+            count: WalletRequestContext.maximumRawOriginatorUTF8ByteCount + 1
+        )
+        #expect(throws: WalletRequestContextError.originatorTooLong(
+            actualUTF8ByteCount: 256,
+            maximumUTF8ByteCount: 255
+        )) {
+            try WalletRequestContext(rawOriginator: tooLong)
+        }
+    }
 }
 
 private struct OriginatorCall: Equatable, Sendable {
@@ -286,6 +353,45 @@ private actor OriginatorRecorder: WalletWireOriginatorAuthorizing {
     }
 
     func snapshot() -> [OriginatorCall] { calls }
+}
+
+private struct ScopedCall: Equatable, Sendable {
+    let originator: String
+    let call: WalletCall
+    let scope: String
+}
+
+private actor ScopedRequestRecorder: WalletRequestHandling {
+    private var calls: [ScopedCall] = []
+
+    func handle(
+        _ request: WalletRequest,
+        context: WalletRequestContext
+    ) async throws -> WalletResult {
+        switch request {
+        case .action(.listOutputs(let value)):
+            calls.append(ScopedCall(
+                originator: context.rawOriginator,
+                call: request.call,
+                scope: value.basket
+            ))
+            return .action(.listOutputs(try WalletListOutputsResult(
+                totalOutputs: 0,
+                outputs: []
+            )))
+        case .keyQuery(.encrypt(let value)):
+            calls.append(ScopedCall(
+                originator: context.rawOriginator,
+                call: request.call,
+                scope: value.protocolID.name
+            ))
+            return .keyQuery(.encrypt(WalletEncryptResult(ciphertext: [1, 2, 3])))
+        default:
+            throw TestFailure.unexpectedCall
+        }
+    }
+
+    func snapshot() -> [ScopedCall] { calls }
 }
 
 private struct FixedTransport: WalletWireTransport {
