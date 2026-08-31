@@ -178,7 +178,7 @@ public enum KeySharing {
 
     private static let coordinateByteCount = 32
     private static let seedByteCount = 64
-    private static let maximumCoordinateAttempts = 16
+    private static let maximumCoordinateAttempts = 5
     private static let fieldPrimeBytes: [UInt8] = [
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -292,7 +292,11 @@ public enum KeySharing {
         return shares
     }
 
-    /// Recovers a private key from a coherent set of canonical BRC-140 shares.
+    /// Recovers a private key from the first threshold canonical BRC-140 shares.
+    ///
+    /// Every supplied share must declare the same threshold and integrity tag. Later shares are
+    /// ignored after those set-wide checks, and duplicate coordinates are rejected among the
+    /// threshold-sized prefix actually used for interpolation.
     public static func recover(_ shares: [KeyShare]) throws -> PrivateKey {
         guard shares.count <= maximumShareCount else {
             throw KeyShareError.shareCountExceedsMaximum(shares.count)
@@ -313,9 +317,10 @@ public enum KeySharing {
             )
         }
 
+        let usedShares = shares.prefix(first.threshold)
         var xCoordinates: Set<BigMagnitude> = []
-        xCoordinates.reserveCapacity(shares.count)
-        for share in shares {
+        xCoordinates.reserveCapacity(first.threshold)
+        for share in usedShares {
             guard xCoordinates.insert(share.coordinateX).inserted else {
                 throw KeyShareError.duplicateXCoordinate
             }
@@ -323,22 +328,8 @@ public enum KeySharing {
 
         let prime = try fieldPrime()
         let budget = try arithmeticBudget()
-        let basis = shares.prefix(first.threshold).map {
+        let basis = usedShares.map {
             (x: $0.coordinateX, y: $0.coordinateY)
-        }
-
-        // Do not silently ignore coherent-looking extras. Every extra point must
-        // lie on the polynomial defined by the threshold-sized basis.
-        for share in shares.dropFirst(first.threshold) {
-            let expected = try evaluate(
-                basis,
-                at: share.coordinateX,
-                prime: prime,
-                budget: budget
-            )
-            guard expected == share.coordinateY else {
-                throw KeyShareError.inconsistentShare
-            }
         }
 
         let recovered = try evaluate(
