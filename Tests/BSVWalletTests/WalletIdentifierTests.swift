@@ -60,12 +60,14 @@ final class WalletIdentifierTests: XCTestCase {
     }
 
     func testWalletInternalAdminProtocolsStayOffExternalBoundaries() throws {
-        let value = try WalletProtocolID.walletInternalAdmin(
+        let factoryValue = try WalletProtocolID.walletInternalAdmin(
             securityLevel: .everyAppAndCounterparty,
             name: " \tAdMiN Metadata Encryption\n"
         )
+        let value = WalletProtocolID.walletMetadataEncryption
         XCTAssertEqual(value.securityLevel, .everyAppAndCounterparty)
         XCTAssertEqual(value.name, "admin metadata encryption")
+        XCTAssertEqual(value, factoryValue)
 
         XCTAssertThrowsError(try WalletProtocolID(
             securityLevel: .everyAppAndCounterparty,
@@ -104,6 +106,20 @@ final class WalletIdentifierTests: XCTestCase {
             XCTAssertEqual(
                 error as? WalletWireError,
                 .nonRoundTrippableValue(kind: "BRC-44 wallet-internal protocol identifier")
+            )
+        }
+
+        var rawAdminProtocol = WalletWireWriter()
+        rawAdminProtocol.writeByte(WalletSecurityLevel.everyAppAndCounterparty.rawValue)
+        try rawAdminProtocol.writeString("admin metadata encryption")
+        var rawReader = WalletWireReader(rawAdminProtocol.bytes)
+        XCTAssertThrowsError(try walletWireDecodeProtocol(
+            from: &rawReader,
+            limits: .standard
+        )) { error in
+            XCTAssertEqual(
+                error as? WalletWireError,
+                .nonRoundTrippableValue(kind: "protocol identifier")
             )
         }
     }
