@@ -19,10 +19,17 @@ requested certificate type.
 
 ## Compatibility
 
-Canonical request and response JSON reencodes through Go SDK v1.3.3. Swift
-requires canonical padded Base64, lowercase compressed-key and DER hex, unique
-certifiers and fields, complete JSON consumption, exact request matching, low-S
-signatures, and explicit resource limits.
+Canonical certificate responses reencode through Go SDK v1.3.3. Requested
+certificate sets do not: pinned Go emits uppercase `Certifiers` and
+`CertificateTypes`, loses the `types` field lists from canonical lowercase
+input, and signs different JSON bytes. GO-066 records the defect. The
+differential oracle preserves those raw bytes and uses a test-only schema
+adapter for semantic comparison. Production Swift does not accept the
+uppercase aliases.
+
+Swift requires canonical padded Base64, lowercase compressed-key and DER hex,
+unique certifiers and fields, complete JSON consumption, exact request
+matching, low-S signatures, and explicit resource limits.
 
 Swift does not accept certificate data in the initial handshake. It uses the
 signed post-authentication messages because the current `PeerAuthenticator`

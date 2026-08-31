@@ -37,7 +37,7 @@ func TestAuthPayloadRequestEncode(t *testing.T) {
 	}
 }
 
-func TestAuthMessageReencodeReportsCanonicalCertificateSigningBytes(t *testing.T) {
+func TestAuthMessageReencodeReportsPinnedGoCertificateSigningBytes(t *testing.T) {
 	identity := "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
 	certifier := identity
 	typeID := "ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISE="
@@ -60,6 +60,31 @@ func TestAuthMessageReencodeReportsCanonicalCertificateSigningBytes(t *testing.T
 	expected := `{"Certifiers":["` + certifier + `"],"CertificateTypes":{"` + typeID + `":["email"]}}`
 	if string(signing) != expected {
 		t.Fatalf("unexpected signing bytes %s", signing)
+	}
+}
+
+func TestAuthMessageReencodeExposesCanonicalCertificateSchemaDivergence(t *testing.T) {
+	identity := "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+	typeID := "ISEhISEhISEhISEhISEhISEhISEhISEhISEhISEhISE="
+	message := `{"version":"0.1","messageType":"certificateRequest","identityKey":"` + identity + `","requestedCertificates":{"certifiers":["` + identity + `"],"types":{"` + typeID + `":["email"]}}}`
+	result, err := executeAuthOperation(
+		"auth.message.reencode",
+		json.RawMessage(`{"json":"`+hex.EncodeToString([]byte(message))+`"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, ok := result.(map[string]string)
+	if !ok {
+		t.Fatalf("unexpected result type %T", result)
+	}
+	signing, err := hex.DecodeString(fields["signing"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := `{"Certifiers":["` + identity + `"],"CertificateTypes":{}}`
+	if string(signing) != expected {
+		t.Fatalf("canonical lowercase fields were unexpectedly preserved: %s", signing)
 	}
 }
 

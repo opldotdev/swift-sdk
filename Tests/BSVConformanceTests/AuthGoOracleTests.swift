@@ -3,6 +3,7 @@ import BSVCore
 import BSVKeys
 import BSVTransaction
 import BSVWallet
+import Foundation
 import Testing
 
 @Suite("BRC-103 Go oracle", .serialized)
@@ -22,21 +23,12 @@ struct AuthGoOracleTests {
             let message = AuthMessage(
                 messageType: .initialRequest, identityKey: try PrivateKey(scalar).publicKey,
                 initialNonce: nonce)
-            let input = try AuthMessageCodec.encode(message)
-            let response = try client.request(
-                id: "auth-message-reencode", operation: "auth.message.reencode",
-                arguments: ["json": .string(Hex.encode(input))])
-            guard case .object(let fields) = response.result,
-                case .string(let hex)? = fields["json"]
-            else {
-                Issue.record("bad oracle result")
-                return
-            }
-            let output = try Hex.decode(hex, maximumDecodedByteCount: 1 << 20)
-            let decoded = try AuthMessageCodec.decode(output)
-            #expect(decoded.messageType == AuthMessageType.initialRequest)
-            #expect(decoded.identityKey == message.identityKey)
-            #expect(decoded.initialNonce == nonce)
+            let output = try reencode(
+                message,
+                id: "auth-message-reencode",
+                client: client
+            )
+            #expect(output == message)
         }
     }
 
@@ -198,7 +190,7 @@ struct AuthGoOracleTests {
         client: GoOracleClient,
         expectedSigningBytes: [UInt8]? = nil
     ) throws -> AuthMessage {
-        let input = try AuthMessageCodec.encode(message)
+        let input = try pinnedGoInput(for: message)
         let response = try client.request(
             id: id,
             operation: "auth.message.reencode",
@@ -211,16 +203,92 @@ struct AuthGoOracleTests {
             guard case .string(let signingHex)? = fields["signing"] else {
                 throw AuthError.invalidMessage
             }
-            #expect(
-                try Hex.decode(
-                    signingHex,
-                    maximumDecodedByteCount: AuthLimits.maximumAllowedCertificateAggregateBytes
-                ) == expectedSigningBytes
+            let signingBytes = try Hex.decode(
+                signingHex,
+                maximumDecodedByteCount: AuthLimits.maximumAllowedCertificateAggregateBytes
             )
+            if message.messageType == .certificateRequest {
+                #expect(signingBytes != expectedSigningBytes)
+                try expectPinnedGoCertificateRequest(signingBytes)
+            } else {
+                #expect(signingBytes == expectedSigningBytes)
+            }
         }
-        return try AuthMessageCodec.decode(
-            Hex.decode(hex, maximumDecodedByteCount: AuthLimits.maximumAllowedJSONBytes)
+        let output = try Hex.decode(
+            hex,
+            maximumDecodedByteCount: AuthLimits.maximumAllowedJSONBytes
         )
+        return try AuthMessageCodec.decode(
+            canonicalizedPinnedGoOutput(output, messageType: message.messageType)
+        )
+    }
+
+    // Pinned Go v1.3.3 has no JSON tags on RequestedCertificateSet. This adapter
+    // is deliberately test-only: production Swift continues to emit and accept
+    // the lowercase BRC-103 schema.
+    private func pinnedGoInput(for message: AuthMessage) throws -> [UInt8] {
+        let canonical = try AuthMessageCodec.encode(message)
+        guard message.messageType == .certificateRequest else { return canonical }
+        var object = try jsonObject(canonical)
+        guard var request = object["requestedCertificates"] as? [String: Any],
+            let certifiers = request.removeValue(forKey: "certifiers"),
+            let types = request.removeValue(forKey: "types"),
+            request.isEmpty
+        else { throw AuthError.invalidMessage }
+        object["requestedCertificates"] = [
+            "Certifiers": certifiers,
+            "CertificateTypes": types,
+        ]
+        return try [UInt8](JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
+    }
+
+    private func canonicalizedPinnedGoOutput(
+        _ data: [UInt8],
+        messageType: AuthMessageType
+    ) throws -> [UInt8] {
+        var object = try jsonObject(data)
+        guard let request = object["requestedCertificates"] as? [String: Any],
+            let types = request["CertificateTypes"] as? [String: Any],
+            request.count == 2
+        else { throw AuthError.invalidMessage }
+
+        if messageType == .certificateRequest {
+            guard let certifiers = request["Certifiers"] as? [Any] else {
+                throw AuthError.invalidMessage
+            }
+            #expect(!certifiers.isEmpty)
+            #expect(!types.isEmpty)
+            object["requestedCertificates"] = [
+                "certifiers": certifiers,
+                "types": types,
+            ]
+        } else {
+            // RequestedCertificates is a non-pointer Go struct, so omitempty is
+            // ineffective and Go injects this artifact into every other message.
+            let hasNoCertifiers = request["Certifiers"] is NSNull
+                || (request["Certifiers"] as? [Any])?.isEmpty == true
+            #expect(hasNoCertifiers)
+            #expect(types.isEmpty)
+            object.removeValue(forKey: "requestedCertificates")
+        }
+        return try [UInt8](JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
+    }
+
+    private func expectPinnedGoCertificateRequest(_ data: [UInt8]) throws {
+        let request = try jsonObject(data)
+        #expect(request["certifiers"] == nil)
+        #expect(request["types"] == nil)
+        guard let certifiers = request["Certifiers"] as? [Any],
+            let types = request["CertificateTypes"] as? [String: Any]
+        else { throw AuthError.invalidMessage }
+        #expect(!certifiers.isEmpty)
+        #expect(!types.isEmpty)
+    }
+
+    private func jsonObject(_ data: [UInt8]) throws -> [String: Any] {
+        guard let object = try JSONSerialization.jsonObject(with: Data(data)) as? [String: Any]
+        else { throw AuthError.invalidMessage }
+        return object
     }
 
     private func privateKey(_ scalar: UInt8) throws -> PrivateKey {
