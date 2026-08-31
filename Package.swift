@@ -37,6 +37,7 @@ let package = Package(
     products: [
         .library(name: "BSV", targets: ["BSV"]),
         .library(name: "BSVCompat", targets: ["BSVCompat"]),
+        .library(name: "BSVAirGap", targets: ["BSVAirGap"]),
     ] + modernPublicModules.map { module in
         .library(name: module, targets: [module])
     },
@@ -75,6 +76,10 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "CryptoExtras", package: "swift-crypto"),
             ]
+        ),
+        .target(
+            name: "BSVAirGap",
+            dependencies: ["BSVCore", "BSVCrypto"]
         ),
         .target(
             name: "BSVKeys",
@@ -171,6 +176,11 @@ let package = Package(
             name: "BSVCryptoTests",
             dependencies: ["BSVCrypto", "BSVCore"],
             exclude: ["README.md"]
+        ),
+        .testTarget(
+            name: "BSVAirGapTests",
+            dependencies: ["BSVAirGap", "BSVCore", "BSVCrypto"],
+            resources: [.copy("Fixtures")]
         ),
         .testTarget(
             name: "BSVBigNumTests",
