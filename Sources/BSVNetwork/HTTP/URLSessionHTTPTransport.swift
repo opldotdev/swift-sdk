@@ -89,6 +89,7 @@ private final class URLSessionRequestOperation: NSObject, @unchecked Sendable {
             return task
         }
         taskToCancel?.cancel()
+        finish(.failure(NetworkServiceError.cancelled))
     }
 
     private func start(
