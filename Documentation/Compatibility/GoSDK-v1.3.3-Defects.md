@@ -1130,6 +1130,32 @@ complete field consumption.
 Swift handling: the advertisement parser uses exact canonical CompactSize
 decoding and rejects nonminimal or trailing forms.
 
+### GO-066: Requested-certificate JSON does not match BRC-103
+
+- Package: `auth`, `auth/utils`
+- Files: [`types.go`](https://github.com/bsv-blockchain/go-sdk/blob/de26fdec57a945ddc06de5d5617f6c32374f3929/auth/types.go),
+  [`validate_certificates.go`](https://github.com/bsv-blockchain/go-sdk/blob/de26fdec57a945ddc06de5d5617f6c32374f3929/auth/utils/validate_certificates.go)
+- Severity: high
+
+`RequestedCertificateSet` has no JSON field tags, so Go emits `Certifiers` and
+`CertificateTypes` instead of the BRC-103 `certifiers` and `types` names. It
+also stores the set as a non-pointer struct under `omitempty`, which causes an
+empty uppercase `requestedCertificates` object to appear in messages that do
+not contain a request. Go's case-insensitive field matching happens to retain
+canonical `certifiers`, but canonical `types` does not match
+`CertificateTypes` and its field lists are lost. Certificate-request
+signatures therefore bind different JSON bytes in Go and conforming
+implementations.
+
+Suggested correction: add the canonical lowercase JSON tags and represent an
+absent request with a pointer or an explicit omission-aware marshaler. Sign the
+canonical lowercase object.
+
+Swift handling: Swift follows BRC-103 and the TypeScript reference. The Go
+oracle preserves the raw incompatible output and uses a test-only adapter only
+when comparing semantic values; the production decoder does not accept the
+uppercase aliases.
+
 ## Reporting format
 
 When a new defect is confirmed, add one entry with:

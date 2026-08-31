@@ -42,6 +42,8 @@ The separate Go SDK defect report records the related pinned defects:
 - GO-007: nonce verification accepts noncanonical HMAC lengths.
 - GO-008: a responder authenticates an unsigned initial request.
 - GO-009: the handshake does not enforce the expected peer identity.
+- GO-066: requested-certificate JSON does not match BRC-103.
 
-Swift does not reproduce these defects. Canonical shared messages remain
-interoperable through the pinned Go oracle.
+Swift does not reproduce these defects. Shared messages other than requested
+certificate sets remain interoperable through the pinned Go oracle. COMP-060
+records the requested-certificate wire incompatibility.

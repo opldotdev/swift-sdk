@@ -25,7 +25,10 @@ that cache path.
 The `auth.message.reencode` result contains the reencoded message JSON. For a
 BRC-103 certificate request or response, it also contains `signing`, which is
 the exact JSON fragment that Go signs for that message type. Both values use
-lowercase hexadecimal bytes.
+lowercase hexadecimal bytes. The result intentionally exposes pinned Go
+v1.3.3's noncanonical requested-certificate field names; conformance tests use
+a test-only schema adapter for semantic comparisons and keep the raw signing
+bytes available to assert the incompatibility recorded as GO-066.
 
 ## Pin validation
 
