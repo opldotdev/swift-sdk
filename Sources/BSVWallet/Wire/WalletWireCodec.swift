@@ -376,7 +376,7 @@ public enum WalletWireCodec {
             switch try reader.readByte() {
             case 1:
                 let access = try walletWireDecodeAccess(from: &reader, limits: limits)
-                let seek = try reader.readOptionalBoolean(kind: "seek permission") ?? false
+                let seek = try reader.readOptionalBoolean(kind: "seek permission")
                 decoded = .getPublicKey(WalletGetPublicKeyRequest(
                     selection: .identity,
                     access: try walletWireAccessWithSeek(access, seek: seek)
@@ -384,7 +384,7 @@ public enum WalletWireCodec {
             case 0:
                 let key = try walletWireDecodeKeyParameters(from: &reader, limits: limits)
                 let forSelf = try reader.readOptionalBoolean(kind: "for self") ?? false
-                let seek = try reader.readOptionalBoolean(kind: "seek permission") ?? false
+                let seek = try reader.readOptionalBoolean(kind: "seek permission")
                 decoded = .getPublicKey(WalletGetPublicKeyRequest(
                     selection: .derived(
                         protocolID: key.protocolID,
@@ -403,7 +403,7 @@ public enum WalletWireCodec {
                 maximum: limits.cryptoLimits.maximumPayloadByteCount,
                 kind: "plaintext"
             )
-            let seek = try reader.readOptionalBoolean(kind: "seek permission") ?? false
+            let seek = try reader.readOptionalBoolean(kind: "seek permission")
             decoded = .encrypt(WalletEncryptRequest(
                 protocolID: key.protocolID, keyID: key.keyID,
                 counterparty: key.counterparty, plaintext: plaintext,
@@ -415,7 +415,7 @@ public enum WalletWireCodec {
                 maximum: limits.cryptoLimits.maximumCiphertextByteCount,
                 kind: "ciphertext"
             )
-            let seek = try reader.readOptionalBoolean(kind: "seek permission") ?? false
+            let seek = try reader.readOptionalBoolean(kind: "seek permission")
             decoded = .decrypt(WalletDecryptRequest(
                 protocolID: key.protocolID, keyID: key.keyID,
                 counterparty: key.counterparty, ciphertext: ciphertext,
@@ -427,7 +427,7 @@ public enum WalletWireCodec {
                 maximum: limits.cryptoLimits.maximumPayloadByteCount,
                 kind: "HMAC data"
             )
-            let seek = try reader.readOptionalBoolean(kind: "seek permission") ?? false
+            let seek = try reader.readOptionalBoolean(kind: "seek permission")
             decoded = .createHMAC(WalletCreateHMACRequest(
                 protocolID: key.protocolID, keyID: key.keyID,
                 counterparty: key.counterparty, data: data,
@@ -440,7 +440,7 @@ public enum WalletWireCodec {
                 maximum: limits.cryptoLimits.maximumPayloadByteCount,
                 kind: "HMAC data"
             )
-            let seek = try reader.readOptionalBoolean(kind: "seek permission") ?? false
+            let seek = try reader.readOptionalBoolean(kind: "seek permission")
             decoded = .verifyHMAC(WalletVerifyHMACRequest(
                 protocolID: key.protocolID, keyID: key.keyID,
                 counterparty: key.counterparty, data: data,
@@ -454,7 +454,7 @@ public enum WalletWireCodec {
                 rejectEmptyData: false,
                 limits: limits
             )
-            let seek = try reader.readOptionalBoolean(kind: "seek permission") ?? false
+            let seek = try reader.readOptionalBoolean(kind: "seek permission")
             decoded = .createSignature(WalletCreateSignatureRequest(
                 protocolID: key.protocolID, keyID: key.keyID,
                 counterparty: key.counterparty, payload: payload,
@@ -473,7 +473,7 @@ public enum WalletWireCodec {
                 rejectEmptyData: true,
                 limits: limits
             )
-            let seek = try reader.readOptionalBoolean(kind: "seek permission") ?? false
+            let seek = try reader.readOptionalBoolean(kind: "seek permission")
             decoded = .verifySignature(WalletVerifySignatureRequest(
                 protocolID: key.protocolID, keyID: key.keyID,
                 counterparty: key.counterparty, payload: payload,

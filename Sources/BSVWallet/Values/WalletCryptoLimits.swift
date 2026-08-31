@@ -48,6 +48,7 @@ public struct WalletCryptoLimits: Hashable, Sendable {
 
 public enum WalletCryptoError: Error, Equatable, Sendable {
     case permissionPolicyUnavailable
+    case counterpartySelfLinkageForbidden
     case payloadTooLarge(actual: Int, maximum: Int)
     case ciphertextTooShort(actual: Int, minimum: Int)
     case ciphertextTooLarge(actual: Int, maximum: Int)
@@ -56,6 +57,7 @@ public enum WalletCryptoError: Error, Equatable, Sendable {
     case encryptionFailed
     case authenticationFailed
     case signingFailed
+    case proofGenerationFailed
     case invalidJSON
     case jsonTooLarge(actual: Int, maximum: Int)
     case encodedJSONTooLarge(actual: Int, maximum: Int)

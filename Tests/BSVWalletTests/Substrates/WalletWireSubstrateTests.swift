@@ -1,3 +1,5 @@
+import BSVCore
+import BSVCrypto
 import BSVTransaction
 import BSVWallet
 import Testing
@@ -240,6 +242,174 @@ struct WalletWireSubstrateTests {
             )
         }
     }
+
+    @Test("handler receives originator and full protocol and basket scopes")
+    func handlerReceivesScopedRequests() async throws {
+        let limits = WalletWireLimits.standard
+        let handler = ScopedRequestRecorder()
+        let processor = WalletWireProcessor(
+            handler: handler,
+            failureMapper: try WalletWireRedactingFailureMapper(limits: limits),
+            beefLimits: try substrateBEEFLimits(),
+            certificateLimits: .standard,
+            wireLimits: limits
+        )
+        let firstClient = try WalletWireTransceiver(
+            transport: processor,
+            originator: "first.example",
+            beefLimits: try substrateBEEFLimits(),
+            certificateLimits: .standard,
+            wireLimits: limits
+        )
+        let secondClient = try WalletWireTransceiver(
+            transport: processor,
+            originator: "second.example",
+            beefLimits: try substrateBEEFLimits(),
+            certificateLimits: .standard,
+            wireLimits: limits
+        )
+
+        _ = try await firstClient.listOutputs(try WalletListOutputsRequest(basket: "alpha basket"))
+        _ = try await secondClient.listOutputs(try WalletListOutputsRequest(basket: "beta basket"))
+        _ = try await firstClient.encrypt(WalletEncryptRequest(
+            protocolID: try walletTestProtocol("alpha scope"),
+            keyID: try walletTestKeyID("key"),
+            plaintext: []
+        ))
+        _ = try await secondClient.encrypt(WalletEncryptRequest(
+            protocolID: try walletTestProtocol("beta scope"),
+            keyID: try walletTestKeyID("key"),
+            plaintext: []
+        ))
+
+        #expect(await handler.snapshot() == [
+            ScopedCall(
+                originator: "first.example", call: .listOutputs, scope: "alpha basket",
+                rawSeekPermission: nil, effectiveSeekPermission: true
+            ),
+            ScopedCall(
+                originator: "second.example", call: .listOutputs, scope: "beta basket",
+                rawSeekPermission: nil, effectiveSeekPermission: true
+            ),
+            ScopedCall(
+                originator: "first.example", call: .encrypt, scope: "alpha scope",
+                rawSeekPermission: nil, effectiveSeekPermission: true
+            ),
+            ScopedCall(
+                originator: "second.example", call: .encrypt, scope: "beta scope",
+                rawSeekPermission: nil, effectiveSeekPermission: true
+            ),
+        ])
+    }
+
+    @Test("request context preserves bounded raw originator")
+    func requestContextValidation() throws {
+        let raw = " HTTPS://Example.COM:443 "
+        let context = try WalletRequestContext(rawOriginator: raw)
+        #expect(context.rawOriginator == raw)
+        #expect(!context.description.contains(raw))
+        #expect(Array(Mirror(reflecting: context).children).isEmpty)
+
+        let tooLong = String(
+            repeating: "a",
+            count: WalletRequestContext.maximumRawOriginatorUTF8ByteCount + 1
+        )
+        #expect(throws: WalletRequestContextError.originatorTooLong(
+            actualUTF8ByteCount: 256,
+            maximumUTF8ByteCount: 255
+        )) {
+            try WalletRequestContext(rawOriginator: tooLong)
+        }
+    }
+
+    @Test("request metadata applies BRC-100 permission defaults without losing raw input")
+    func seekPermissionMetadata() throws {
+        let protocolID = try walletTestProtocol("permission metadata")
+        let keyID = try walletTestKeyID("key")
+        let hmac = try WalletHMAC(bytes: [UInt8](repeating: 0, count: 32))
+        let signature = try walletTestPrivateKey(3).sign(digest: BSVHashing.sha256([1]))
+        let defaultAccess = WalletKeyAccess.standard
+
+        let defaultTrueRequests: [WalletRequest] = [
+            .action(.listActions(try WalletListActionsRequest(labels: []))),
+            .action(.internalizeAction(try WalletInternalizeActionRequest(
+                transaction: actionAtomicBEEF(),
+                description: "internalize",
+                outputs: []
+            ))),
+            .action(.listOutputs(try WalletListOutputsRequest(basket: "default"))),
+            .keyQuery(.getPublicKey(WalletGetPublicKeyRequest(
+                selection: .identity,
+                access: defaultAccess
+            ))),
+            .keyQuery(.encrypt(WalletEncryptRequest(
+                protocolID: protocolID, keyID: keyID, plaintext: [], access: defaultAccess
+            ))),
+            .keyQuery(.decrypt(WalletDecryptRequest(
+                protocolID: protocolID, keyID: keyID, ciphertext: [], access: defaultAccess
+            ))),
+            .keyQuery(.createHMAC(WalletCreateHMACRequest(
+                protocolID: protocolID, keyID: keyID, data: [], access: defaultAccess
+            ))),
+            .keyQuery(.verifyHMAC(WalletVerifyHMACRequest(
+                protocolID: protocolID, keyID: keyID, data: [], hmac: hmac, access: defaultAccess
+            ))),
+            .keyQuery(.createSignature(WalletCreateSignatureRequest(
+                protocolID: protocolID, keyID: keyID, payload: .data([]), access: defaultAccess
+            ))),
+            .keyQuery(.verifySignature(WalletVerifySignatureRequest(
+                protocolID: protocolID, keyID: keyID, payload: .data([1]),
+                signature: signature, access: defaultAccess
+            ))),
+        ]
+
+        for request in defaultTrueRequests {
+            #expect(request.seekPermissionMetadata == WalletSeekPermissionMetadata(
+                rawValue: nil,
+                effectiveValue: true
+            ), "call \(request.call.rawValue)")
+        }
+
+        let explicitFalse = WalletRequest.keyQuery(.encrypt(WalletEncryptRequest(
+            protocolID: protocolID,
+            keyID: keyID,
+            plaintext: [],
+            access: try WalletKeyAccess(seekPermission: false)
+        )))
+        #expect(explicitFalse.rawSeekPermission == false)
+        #expect(explicitFalse.effectiveSeekPermission == false)
+
+        let identityKey = try walletTestPrivateKey(4).publicKey
+        let defaultDiscovery = WalletRequest.certificate(.discoverByIdentityKey(.init(
+            identityKey: identityKey
+        )))
+        #expect(defaultDiscovery.rawSeekPermission == nil)
+        #expect(defaultDiscovery.effectiveSeekPermission == false)
+
+        let explicitDiscovery = WalletRequest.certificate(.discoverByAttributes(try .init(
+            attributes: [:],
+            seekPermission: true
+        )))
+        #expect(explicitDiscovery.rawSeekPermission == true)
+        #expect(explicitDiscovery.effectiveSeekPermission == true)
+
+        let notApplicable: [WalletRequest] = [
+            .action(.abortAction(WalletAbortActionRequest(
+                reference: try WalletBase64Data([1])
+            ))),
+            .certificate(.revealCounterpartyKeyLinkage(.init(
+                counterparty: identityKey,
+                verifier: identityKey
+            ))),
+            .keyQuery(.getHeight(WalletGetHeightRequest())),
+        ]
+        for request in notApplicable {
+            #expect(request.seekPermissionMetadata == WalletSeekPermissionMetadata(
+                rawValue: nil,
+                effectiveValue: nil
+            ), "call \(request.call.rawValue)")
+        }
+    }
 }
 
 private struct OriginatorCall: Equatable, Sendable {
@@ -286,6 +456,51 @@ private actor OriginatorRecorder: WalletWireOriginatorAuthorizing {
     }
 
     func snapshot() -> [OriginatorCall] { calls }
+}
+
+private struct ScopedCall: Equatable, Sendable {
+    let originator: String
+    let call: WalletCall
+    let scope: String
+    let rawSeekPermission: Bool?
+    let effectiveSeekPermission: Bool?
+}
+
+private actor ScopedRequestRecorder: WalletRequestHandling {
+    private var calls: [ScopedCall] = []
+
+    func handle(
+        _ request: WalletRequest,
+        context: WalletRequestContext
+    ) async throws -> WalletResult {
+        switch request {
+        case .action(.listOutputs(let value)):
+            calls.append(ScopedCall(
+                originator: context.rawOriginator,
+                call: request.call,
+                scope: value.basket,
+                rawSeekPermission: request.rawSeekPermission,
+                effectiveSeekPermission: request.effectiveSeekPermission
+            ))
+            return .action(.listOutputs(try WalletListOutputsResult(
+                totalOutputs: 0,
+                outputs: []
+            )))
+        case .keyQuery(.encrypt(let value)):
+            calls.append(ScopedCall(
+                originator: context.rawOriginator,
+                call: request.call,
+                scope: value.protocolID.name,
+                rawSeekPermission: request.rawSeekPermission,
+                effectiveSeekPermission: request.effectiveSeekPermission
+            ))
+            return .keyQuery(.encrypt(WalletEncryptResult(ciphertext: [1, 2, 3])))
+        default:
+            throw TestFailure.unexpectedCall
+        }
+    }
+
+    func snapshot() -> [ScopedCall] { calls }
 }
 
 private struct FixedTransport: WalletWireTransport {

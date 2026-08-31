@@ -28,6 +28,7 @@ public enum WalletValidationError: Error, Equatable, Sendable {
     case consecutiveProtocolSpaces
     case redundantProtocolSuffix
     case reservedAdminProtocol
+    case walletInternalProtocolRequiresAdminPrefix
     case keyIDTooShort
     case keyIDTooLong(actualUTF8ByteCount: Int, maximum: Int)
     case privilegedReasonTooLong(actualUTF8ByteCount: Int, maximum: Int)
@@ -43,11 +44,44 @@ public enum WalletValidationError: Error, Equatable, Sendable {
 public struct WalletProtocolID: Hashable, Codable, Sendable {
     public static let minimumNameUTF8ByteCount = 5
     public static let maximumNameUTF8ByteCount = 400
+    public static let maximumSpecificLinkageRevelationNameUTF8ByteCount = 430
 
     public let securityLevel: WalletSecurityLevel
     public let name: String
 
     public init(securityLevel: WalletSecurityLevel, name: String) throws {
+        let normalized = try Self.canonicalName(name)
+        guard !normalized.hasPrefix("admin") else {
+            throw WalletValidationError.reservedAdminProtocol
+        }
+
+        self.securityLevel = securityLevel
+        self.name = normalized
+    }
+
+    /// Constructs a BRC-44 reserved protocol for trusted wallet software.
+    ///
+    /// This is intentionally separate from the normal initializer. Values
+    /// created here can be used for in-process wallet cryptography, but their
+    /// Codable and wallet-wire encoders reject them so they cannot cross an
+    /// external BRC-100 boundary accidentally.
+    public static func walletInternalAdmin(
+        securityLevel: WalletSecurityLevel,
+        name: String
+    ) throws -> Self {
+        let normalized = try canonicalName(name)
+        guard normalized.hasPrefix("admin") else {
+            throw WalletValidationError.walletInternalProtocolRequiresAdminPrefix
+        }
+        return Self(securityLevel: securityLevel, canonicalName: normalized)
+    }
+
+    private init(securityLevel: WalletSecurityLevel, canonicalName: String) {
+        self.securityLevel = securityLevel
+        self.name = canonicalName
+    }
+
+    private static func canonicalName(_ name: String) throws -> String {
         let source = Array(name.utf8)
         let start = source.firstIndex(where: { !Self.isASCIIWhitespace($0) }) ?? source.endIndex
         let end: Int
@@ -67,10 +101,13 @@ public struct WalletProtocolID: Hashable, Codable, Sendable {
                 minimum: Self.minimumNameUTF8ByteCount
             )
         }
-        guard bytes.count <= Self.maximumNameUTF8ByteCount else {
+        let maximumNameByteCount = Self.hasSpecificLinkageRevelationEnvelope(bytes)
+            ? Self.maximumSpecificLinkageRevelationNameUTF8ByteCount
+            : Self.maximumNameUTF8ByteCount
+        guard bytes.count <= maximumNameByteCount else {
             throw WalletValidationError.protocolNameTooLong(
                 actualUTF8ByteCount: bytes.count,
-                maximum: Self.maximumNameUTF8ByteCount
+                maximum: maximumNameByteCount
             )
         }
 
@@ -90,12 +127,7 @@ public struct WalletProtocolID: Hashable, Codable, Sendable {
         guard !normalized.hasSuffix(" protocol") else {
             throw WalletValidationError.redundantProtocolSuffix
         }
-        guard !normalized.hasPrefix("admin") else {
-            throw WalletValidationError.reservedAdminProtocol
-        }
-
-        self.securityLevel = securityLevel
-        self.name = normalized
+        return normalized
     }
 
     public init(from decoder: Decoder) throws {
@@ -118,6 +150,15 @@ public struct WalletProtocolID: Hashable, Codable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
+        guard !name.hasPrefix("admin") else {
+            throw EncodingError.invalidValue(
+                self,
+                EncodingError.Context(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "BRC-44 admin protocols are wallet-internal and cannot be encoded"
+                )
+            )
+        }
         var container = encoder.unkeyedContainer()
         try container.encode(securityLevel)
         try container.encode(name)
@@ -125,6 +166,18 @@ public struct WalletProtocolID: Hashable, Codable, Sendable {
 
     private static func isASCIIWhitespace(_ byte: UInt8) -> Bool {
         byte == 32 || (9...13).contains(byte)
+    }
+
+    /// BRC-100's only protocol-name length exception. The 430-byte ceiling is
+    /// 28 bytes of prefix, one security-level digit, one separator, and a
+    /// normal 400-byte target protocol name.
+    private static func hasSpecificLinkageRevelationEnvelope(_ bytes: [UInt8]) -> Bool {
+        let prefix = Array("specific linkage revelation ".utf8)
+        guard bytes.starts(with: prefix), bytes.count > prefix.count + 1 else {
+            return false
+        }
+        let level = bytes[prefix.count]
+        return (48...50).contains(level) && bytes[prefix.count + 1] == 32
     }
 }
 

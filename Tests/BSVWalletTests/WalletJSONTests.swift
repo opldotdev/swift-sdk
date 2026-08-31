@@ -24,6 +24,33 @@ final class WalletJSONTests: XCTestCase {
         XCTAssertTrue(object["plaintext"] is [Any])
         XCTAssertEqual(try WalletJSON.decode(WalletEncryptRequest.self, from: bytes).counterparty, .self)
 
+        let omittedAccess = try WalletJSON.decode(
+            WalletEncryptRequest.self,
+            from: Array("{\"protocolID\":[0,\"testprotocol\"],\"keyID\":\"1\",\"plaintext\":[]}".utf8)
+        ).access
+        XCTAssertNil(omittedAccess.seekPermission)
+        let omittedAccessObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(WalletJSON.encode(omittedAccess))
+            ) as? [String: Any]
+        )
+        XCTAssertNil(omittedAccessObject["seekPermission"])
+
+        let explicitFalse = try WalletKeyAccess(seekPermission: false)
+        let explicitFalseObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(WalletJSON.encode(explicitFalse))
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(explicitFalseObject["seekPermission"] as? Bool, false)
+        XCTAssertEqual(
+            try WalletJSON.decode(
+                WalletKeyAccess.self,
+                from: WalletJSON.encode(explicitFalse)
+            ).seekPermission,
+            false
+        )
+
         let base = "{\"protocolID\":[0,\"testprotocol\"],\"keyID\":\"1\",\"plaintext\":"
         for invalid in ["[-1]", "[256]", "[1.5]", "[1e999]", "[\"1\"]", "[true]", "[null]"] {
             XCTAssertThrowsError(try WalletJSON.decode(WalletEncryptRequest.self, from: Array((base + invalid + "}").utf8)))

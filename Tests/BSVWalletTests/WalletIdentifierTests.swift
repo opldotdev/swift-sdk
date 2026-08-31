@@ -59,6 +59,88 @@ final class WalletIdentifierTests: XCTestCase {
         XCTAssertNoThrow(try walletTestProtocol("admi1"))
     }
 
+    func testWalletInternalAdminProtocolsStayOffExternalBoundaries() throws {
+        let value = try WalletProtocolID.walletInternalAdmin(
+            securityLevel: .everyAppAndCounterparty,
+            name: " \tAdMiN Metadata Encryption\n"
+        )
+        XCTAssertEqual(value.securityLevel, .everyAppAndCounterparty)
+        XCTAssertEqual(value.name, "admin metadata encryption")
+
+        XCTAssertThrowsError(try WalletProtocolID(
+            securityLevel: .everyAppAndCounterparty,
+            name: value.name
+        )) { error in
+            XCTAssertEqual(error as? WalletValidationError, .reservedAdminProtocol)
+        }
+        XCTAssertThrowsError(try WalletJSON.decode(
+            WalletProtocolID.self,
+            from: Array("[2,\"admin metadata encryption\"]".utf8)
+        ))
+        XCTAssertThrowsError(try WalletJSON.encode(value))
+
+        for invalid in [
+            "metadata encryption",
+            "admi1 metadata encryption",
+            "admin_metadata encryption",
+            "admin  metadata encryption",
+            "admin metadata encryption protocol",
+        ] {
+            XCTAssertThrowsError(try WalletProtocolID.walletInternalAdmin(
+                securityLevel: .everyAppAndCounterparty,
+                name: invalid
+            ), "expected internal factory to reject \(invalid)")
+        }
+
+        let wireRequest = WalletWireKeyQueryRequest.encrypt(WalletEncryptRequest(
+            protocolID: value,
+            keyID: try WalletKeyID("1"),
+            plaintext: [1]
+        ))
+        XCTAssertThrowsError(try WalletWireCodec.encodeKeyQueryRequest(
+            wireRequest,
+            originator: "wallet.example"
+        )) { error in
+            XCTAssertEqual(
+                error as? WalletWireError,
+                .nonRoundTrippableValue(kind: "BRC-44 wallet-internal protocol identifier")
+            )
+        }
+    }
+
+    func testSpecificLinkageRevelationHasTheOnlyExtendedProtocolLimit() throws {
+        let prefix = "specific linkage revelation "
+        let exact = prefix + "2 " + String(repeating: "a", count: 400)
+        XCTAssertEqual(exact.utf8.count, 430)
+        XCTAssertEqual(
+            try WalletProtocolID(securityLevel: .everyAppAndCounterparty, name: exact).name,
+            exact
+        )
+
+        let tooLong = prefix + "2 " + String(repeating: "a", count: 401)
+        XCTAssertEqual(tooLong.utf8.count, 431)
+        XCTAssertThrowsError(try walletTestProtocol(tooLong)) { error in
+            XCTAssertEqual(
+                error as? WalletValidationError,
+                .protocolNameTooLong(actualUTF8ByteCount: 431, maximum: 430)
+            )
+        }
+
+        for malformed in [
+            prefix + "3 " + String(repeating: "a", count: 371),
+            prefix + "x " + String(repeating: "a", count: 371),
+            "specific linkage revelation2 " + String(repeating: "a", count: 372),
+        ] {
+            XCTAssertEqual(malformed.utf8.count, 401)
+            XCTAssertThrowsError(try walletTestProtocol(malformed)) { error in
+                XCTAssertEqual(
+                    error as? WalletValidationError,
+                    .protocolNameTooLong(actualUTF8ByteCount: 401, maximum: 400)
+                )
+            }
+        }
+    }
+
     func testEveryASCIIProtocolCharacterAndSuffixCaseVariant() throws {
         let allowed = Set(Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ".utf8))
         for byte in UInt8.min...127 {

@@ -63,7 +63,7 @@ private func decodeAccess(
         : nil
     let seek = container.contains(.seekPermission)
         ? try container.decode(Bool.self, forKey: .seekPermission)
-        : false
+        : nil
     return try WalletKeyAccess(
         privileged: privileged,
         privilegedReason: reason,
@@ -84,7 +84,7 @@ private func encodeAccess(
 ) throws {
     if access.privileged { try container.encode(true, forKey: .privileged) }
     try container.encodeIfPresent(access.privilegedReason, forKey: .privilegedReason)
-    if access.seekPermission { try container.encode(true, forKey: .seekPermission) }
+    try container.encodeIfPresent(access.seekPermission, forKey: .seekPermission)
 }
 
 private func decodeCounterparty(

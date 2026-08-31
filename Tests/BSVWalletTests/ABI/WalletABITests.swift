@@ -37,6 +37,7 @@ struct WalletABITests {
         #expect(try WalletTrustSelf("known") == .known)
         #expect(try WalletActionResultStatus("failed") == .failed)
         #expect(try WalletActionStatus("nonfinal") == .nonfinal)
+        #expect(try WalletActionStatus("failed") == .failed)
         #expect(try WalletQueryMode("any") == .any)
         #expect(try WalletOutputInclude("locking scripts") == .lockingScripts)
         #expect(try WalletNetwork("mainnet") == .mainnet)
@@ -181,6 +182,14 @@ struct WalletABITests {
             )
             #expect(action.satoshis == satoshis)
         }
+    }
+
+    @Test("key access preserves tri-state permission metadata")
+    func keyAccessPermissionMetadata() throws {
+        #expect(WalletKeyAccess.standard.seekPermission == nil)
+        #expect(try WalletKeyAccess(seekPermission: nil).seekPermission == nil)
+        #expect(try WalletKeyAccess(seekPermission: false).seekPermission == false)
+        #expect(try WalletKeyAccess(seekPermission: true).seekPermission == true)
     }
 
     @Test("tagged unions reject every contradictory representation")

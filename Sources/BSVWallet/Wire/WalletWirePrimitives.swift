@@ -268,6 +268,9 @@ func walletWireEncodeProtocol(
     to writer: inout WalletWireWriter,
     limits: WalletWireLimits
 ) throws {
+    guard !protocolID.name.hasPrefix("admin") else {
+        throw WalletWireError.nonRoundTrippableValue(kind: "BRC-44 wallet-internal protocol identifier")
+    }
     try walletWireRequireText(
         protocolID.name,
         kind: "protocol name",
@@ -286,7 +289,10 @@ func walletWireDecodeProtocol(
         throw WalletWireError.invalidDiscriminator(kind: "protocol security level", value: levelByte)
     }
     let name = try reader.readString(
-        maximum: min(walletWireMaximumText(limits), WalletProtocolID.maximumNameUTF8ByteCount),
+        maximum: min(
+            walletWireMaximumText(limits),
+            WalletProtocolID.maximumSpecificLinkageRevelationNameUTF8ByteCount
+        ),
         kind: "protocol name"
     )
     do {
@@ -409,7 +415,7 @@ func walletWireDecodeKeyParameters(
     )
 }
 
-func walletWireAccessWithSeek(_ access: WalletKeyAccess, seek: Bool) throws -> WalletKeyAccess {
+func walletWireAccessWithSeek(_ access: WalletKeyAccess, seek: Bool?) throws -> WalletKeyAccess {
     do {
         return try WalletKeyAccess(
             privileged: access.privileged,
