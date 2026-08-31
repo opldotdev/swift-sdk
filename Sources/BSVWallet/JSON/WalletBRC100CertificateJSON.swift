@@ -152,14 +152,7 @@ private struct CertificateDTO: Codable {
         type = value.type; subject = Hex.encode(value.subject.compressedBytes); serialNumber = value.serialNumber
         certifier = Hex.encode(value.certifier.compressedBytes); revocationOutpoint = value.revocationOutpoint.description
         signature = value.signature.map { Hex.encode($0.derBytes) }
-        var textFields: [String: String] = [:]
-        for (name, field) in value.fields {
-            guard let text = String(bytes: field.bytes, encoding: .utf8) else {
-                throw WalletJSONCodecError.invalidJSON
-            }
-            textFields[name.value] = text
-        }
-        fields = textFields
+        fields = Dictionary(uniqueKeysWithValues: value.fields.map { ($0.key.value, $0.value.base64) })
     }
     init(type: CertificateTypeID, subject: String, serialNumber: CertificateSerialNumber, certifier: String, revocationOutpoint: String, signature: String?, fields: [String: String]) {
         self.type = type; self.subject = subject; self.serialNumber = serialNumber
@@ -169,7 +162,7 @@ private struct CertificateDTO: Codable {
     func model(_ codec: WalletBRC100JSONCodec) throws -> Certificate {
         let signatureValue: ECDSASignature?
         if let signature { let bytes = try decodeCanonicalHex(signature, maximum: 72); let parsed = try ECDSASignature(derBytes: bytes); guard parsed.derBytes == bytes else { throw WalletJSONCodecError.invalidJSON }; signatureValue = parsed } else { signatureValue = nil }
-        let fieldValues = try dictionaryTextCiphertexts(fields, limits: codec.certificateLimits)
+        let fieldValues = try dictionaryBase64Ciphertexts(fields, limits: codec.certificateLimits)
         return try .init(type: type, serialNumber: serialNumber, subject: decodeWalletJSONPublicKey(subject), certifier: decodeWalletJSONPublicKey(certifier), revocationOutpoint: .init(revocationOutpoint), fields: fieldValues, signature: signatureValue, limits: codec.certificateLimits)
     }
 }
@@ -246,8 +239,13 @@ private func dictionaryFieldNames<T>(_ values: [String: T], limits: CertificateL
     return result
 }
 private func dictionaryCiphertexts(_ values: [String: CertificateCiphertext], limits: CertificateLimits) throws -> [CertificateFieldName: CertificateCiphertext] { try dictionaryFieldNames(values, limits: limits) }
-private func dictionaryTextCiphertexts(_ values: [String: String], limits: CertificateLimits) throws -> [CertificateFieldName: CertificateCiphertext] {
+private func dictionaryBase64Ciphertexts(_ values: [String: String], limits: CertificateLimits) throws -> [CertificateFieldName: CertificateCiphertext] {
     var result: [CertificateFieldName: CertificateCiphertext] = [:]
-    for (key, value) in values { result[try CertificateFieldName(key, limits: limits)] = try CertificateCiphertext(Array(value.utf8), maximumByteCount: limits.maximumFieldCiphertextByteCount) }
+    for (key, value) in values {
+        result[try CertificateFieldName(key, limits: limits)] = try CertificateCiphertext(
+            base64: value,
+            maximumByteCount: limits.maximumFieldCiphertextByteCount
+        )
+    }
     return result
 }
