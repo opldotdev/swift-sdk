@@ -300,10 +300,12 @@ let recoveredRootKey = try recovered.rootKey()
 precondition(recoveredRootKey == rootKey)
 ```
 
-Persist `entropyByteCount` with shares imported from a 12-, 15-, 18-, or
-21-word mnemonic so recovery can reproduce the exact original words. A
-nonempty BIP-39 passphrase is a separate secret and is not recoverable from the
-mnemonic or shares.
+Persist trusted, authenticated `entropyByteCount` metadata with shares imported
+from a 12-, 15-, 18-, or 21-word mnemonic so recovery can reproduce the exact
+original words. A too-large supported length is intrinsically ambiguous and can
+derive a different valid wallet, so wallet restore should also verify the
+expected identity key. A nonempty BIP-39 passphrase is a separate secret and is
+not recoverable from the mnemonic or shares.
 
 ### BIP-276
 

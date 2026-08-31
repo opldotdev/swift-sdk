@@ -81,7 +81,7 @@ struct KeySharingTests {
         )
     }
 
-    @Test("random source failures, wrong lengths, and retry exhaustion are typed")
+    @Test("random source failures and wrong lengths are typed")
     func randomFailures() throws {
         let key = try PrivateKey(scalar(1))
         #expect(throws: KeyShareError.randomSourceFailure) {
@@ -100,14 +100,22 @@ struct KeySharingTests {
                 using: WrongCountRandomSource()
             )
         }
+    }
+
+    @Test("coordinate generation aborts after exactly five failed attempts")
+    func coordinateAttemptBound() throws {
+        let key = try PrivateKey(scalar(1))
+        let source = RecordingZeroRandomSource()
+
         #expect(throws: KeyShareError.coordinateGenerationExhausted) {
             try KeySharing.split(
                 key,
                 threshold: 2,
                 shareCount: 2,
-                using: ZeroRandomSource()
+                using: source
             )
         }
+        #expect(source.requestedCounts == [32, 32, 32, 32, 32])
     }
 
     @Test("threshold and count bounds are exact in split and recover")
@@ -255,8 +263,8 @@ struct KeySharingTests {
         }
     }
 
-    @Test("recovery rejects invalid scalars and conflicting extra shares")
-    func invalidScalarAndConflictingExtra() throws {
+    @Test("recovery rejects invalid scalars and ignores shares after the first quorum")
+    func invalidScalarAndIgnoredExtras() throws {
         // The line through (1,1) and (2,2) evaluates to zero at x=0.
         let zeroSecretShares = [
             try KeyShare("2.2.2.00000000"),
@@ -294,8 +302,10 @@ struct KeySharingTests {
         let conflicting = try KeyShare(
             "\(fields[0]).\(replacementY).\(fields[2]).\(fields[3])"
         )
-        #expect(throws: KeyShareError.inconsistentShare) {
-            try KeySharing.recover([shares[0], shares[1], conflicting])
+        #expect(try KeySharing.recover([shares[0], shares[1], conflicting]) == key)
+        #expect(try KeySharing.recover([shares[0], shares[1], shares[0]]) == key)
+        #expect(throws: KeyShareError.duplicateXCoordinate) {
+            try KeySharing.recover([shares[0], shares[0], shares[1]])
         }
 
         let wrongIntegrity = try shares.prefix(2).map { share in
@@ -395,8 +405,20 @@ private struct WrongCountRandomSource: SecureRandomSource {
     }
 }
 
-private struct ZeroRandomSource: SecureRandomSource {
+private final class RecordingZeroRandomSource: SecureRandomSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [Int] = []
+
     func randomBytes(count: Int) throws -> [UInt8] {
-        [UInt8](repeating: 0, count: count)
+        lock.lock()
+        counts.append(count)
+        lock.unlock()
+        return [UInt8](repeating: 0, count: count)
+    }
+
+    var requestedCounts: [Int] {
+        lock.lock()
+        defer { lock.unlock() }
+        return counts
     }
 }

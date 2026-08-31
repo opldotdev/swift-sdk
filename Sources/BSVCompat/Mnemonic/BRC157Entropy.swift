@@ -86,8 +86,10 @@ public struct BRC157Entropy:
 
     /// Restores the original entropy length from a recovered 32-byte BRC-140 entropy key.
     ///
-    /// The caller should pass the length recorded with the wallet or share-vault metadata. A
-    /// mismatched length is rejected rather than silently discarding nonzero high-order bytes.
+    /// The caller must pass trusted, authenticated wallet or share-vault metadata. A length that
+    /// would discard nonzero high-order bytes is rejected. A larger supported length can absorb
+    /// genuine zero padding and is intrinsically ambiguous: it succeeds but produces a different
+    /// mnemonic and root. Wallet restore should therefore verify the expected identity key too.
     public init(recoveredEntropyKey: PrivateKey, entropyByteCount: Int) throws {
         guard Self.supportedByteCounts.contains(entropyByteCount) else {
             throw BRC157Error.invalidEntropyByteCount(entropyByteCount)
@@ -108,7 +110,10 @@ public struct BRC157Entropy:
         )
     }
 
-    /// Recovers entropy from BRC-140 shares using the recorded original entropy length.
+    /// Recovers entropy from BRC-140 shares using the trusted original entropy length.
+    ///
+    /// Higher-level restore code should authenticate that metadata and verify the derived identity
+    /// key against the expected wallet identity because an oversized supported length is ambiguous.
     public static func recover(
         from shares: [KeyShare],
         entropyByteCount: Int

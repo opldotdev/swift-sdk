@@ -196,6 +196,20 @@ struct BRC157EntropyTests {
         }
     }
 
+    @Test("oversized recovery length is intrinsically ambiguous")
+    func oversizedRecoveryLength() throws {
+        let original = try BRC157Entropy(mnemonicPhrase: workedPhrase)
+        let recovered = try BRC157Entropy(
+            recoveredEntropyKey: PrivateKey(original.paddedEntropy),
+            entropyByteCount: 20
+        )
+
+        #expect(recovered.entropy.prefix(4).allSatisfy({ $0 == 0 }))
+        #expect(Array(recovered.entropy.suffix(16)) == original.entropy)
+        #expect(recovered.mnemonic.phrase != original.mnemonic.phrase)
+        #expect(try recovered.rootKey() != original.rootKey())
+    }
+
     @Test("new wallet generation is always a valid 24-word scalar")
     func generation() throws {
         for _ in 0..<8 {
