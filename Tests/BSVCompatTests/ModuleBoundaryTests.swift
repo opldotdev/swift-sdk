@@ -17,6 +17,8 @@ struct BSVCompatModuleBoundaryTests {
         requireType(ExtendedPublicKey.self)
         requireType(HDKeyPath.self)
         requireType(Mnemonic.self)
+        requireType(BRC157Entropy.self)
+        requireType(BRC157Error.self)
     }
 
     @Test("non-compatibility key formats remain available through BSVKeys")
@@ -88,6 +90,7 @@ struct BSVCompatModuleBoundaryTests {
             "public struct ExtendedPrivateKey",
             "public struct ExtendedPublicKey",
             "public struct Mnemonic",
+            "public struct BRC157Entropy",
         ] {
             #expect(compatSource.contains(declaration))
             #expect(!keysSource.contains(declaration))

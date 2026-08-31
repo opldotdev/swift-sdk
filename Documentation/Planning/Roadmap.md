@@ -71,10 +71,12 @@ canonical parsing and bounded offline interpolation.
 Accepted checkpoint: `BSVKeys` contains bounded WIF and P2PKH addresses for
 mainnet and testnet. The opt-in `BSVCompat` product contains BIP-32 hierarchical
 deterministic keys, English BIP-39 mnemonics with the fixed standard PBKDF2
-profile, Bitcoin Signed Message, and Electrum- and Bitcore-compatible ECIES.
+profile, BRC-157 entropy-rooted mnemonic and share backups, Bitcoin Signed
+Message, and Electrum- and Bitcore-compatible ECIES.
 
 - WIF and P2PKH addresses. (Accepted)
 - BIP-32 and BIP-39. (Accepted)
+- BRC-157 entropy-rooted backup and profile derivation. (Accepted)
 - Bitcoin Signed Message. (Accepted)
 - Electrum- and Bitcore-compatible ECIES. (Accepted)
 

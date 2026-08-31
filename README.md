@@ -194,6 +194,7 @@ print(script.isPayToPublicKeyHash)
 - Supports BRC-42 child keys and BRC-94 shared-secret proofs.
 - Supports WIF and P2PKH addresses.
 - Supports BRC-140 key shares for offline backups.
+- Supports BRC-157 entropy-rooted mnemonic and share backups through opt-in `BSVCompat`.
 
 ### Wallets, messages, and network services
 
@@ -223,7 +224,7 @@ print(script.isPayToPublicKeyHash)
 | `BSVCrypto` | Supplies hashes, symmetric cryptography, key derivation functions, and random data. |
 | `BSVKeys` | Supplies secp256k1 keys and signatures, ECDH, key tweaks, WIF, addresses, BRC-42, BRC-94, and BRC-140. |
 | `BSVMessage` | Supplies bounded BRC-77 signed messages and BRC-78 encrypted messages. |
-| `BSVCompat` | Supplies opt-in BSM, ECIES, BIP-32, and BIP-39 compatibility APIs. |
+| `BSVCompat` | Supplies opt-in BSM, ECIES, BIP-32, BIP-39, and BRC-157 backup APIs. |
 | `BSVScript` | Supplies Script data, BIP-276, opcodes, ASM, numbers, and templates. |
 | `BSVKVStore` | Supplies bounded, transport-neutral, Go-compatible one-field key-value tokens. |
 | `BSVStorage` | Supplies bounded UHRP identifiers, content values, and a transport-neutral content-provider boundary. |
@@ -257,7 +258,7 @@ Use the modern protocol API for new applications when a replacement exists:
 | Bitcoin Signed Message | BRC-77 `SignedMessage` from `BSVMessage` |
 | Electrum and Bitcore ECIES | BRC-78 `EncryptedMessage` from `BSVMessage` |
 | BIP-32 protocol keys | BRC-42 derivation from `BSVKeys` |
-| BIP-39 mnemonic backup or import | No replacement; use `BSVCompat` when required |
+| BIP-39 mnemonic or BRC-157 backup | No replacement; use `BSVCompat` when required |
 
 ## Examples
 
@@ -277,6 +278,32 @@ let account = try master.derived(path: "m/44'/236'/0'")
 
 print(account.neutered.serialized)
 ```
+
+### Entropy-rooted backups
+
+Create interchangeable BRC-157 mnemonic and BRC-140 share backups, then derive
+the BRC-100 root at `m/0'/0'`:
+
+```swift
+import BSVCompat
+
+let backup = try BRC157Entropy.generate()
+let words = backup.mnemonic.phrase
+let shares = try backup.backupShares(threshold: 2, shareCount: 3)
+let rootKey = try backup.rootKey()
+
+let recovered = try BRC157Entropy.recover(
+    from: [shares[0], shares[2]],
+    entropyByteCount: backup.entropyByteCount
+)
+let recoveredRootKey = try recovered.rootKey()
+precondition(recoveredRootKey == rootKey)
+```
+
+Persist `entropyByteCount` with shares imported from a 12-, 15-, 18-, or
+21-word mnemonic so recovery can reproduce the exact original words. A
+nonempty BIP-39 passphrase is a separate secret and is not recoverable from the
+mnemonic or shares.
 
 ### BIP-276
 
