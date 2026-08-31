@@ -159,6 +159,188 @@ struct AirGapConformanceTests {
         #expect(afterReset.total == 0)
         #expect(afterReset.have == 0)
     }
+
+    @Test("later body-length mismatch is rejected without corrupting the session")
+    func bodyLengthMismatchDoesNotCorruptSession() throws {
+        let message = Array("123456789".utf8)
+        let sessionID = Array(UInt8(1)...UInt8(8))
+        let fourByteBlocks = try AirGapEncoder(
+            message,
+            blockBytes: 4,
+            sessionID: sessionID
+        )
+        let threeByteBlocks = try AirGapEncoder(
+            message,
+            blockBytes: 3,
+            sessionID: sessionID
+        )
+        #expect(fourByteBlocks.blockCount == threeByteBlocks.blockCount)
+
+        var decoder = AirGapDecoder()
+        let initial = decoder.accept(fourByteBlocks.part(at: 0))
+        #expect(initial.ok)
+        #expect(initial.have == 1)
+
+        let mismatch = decoder.accept(threeByteBlocks.part(at: 1))
+        #expect(!mismatch.ok)
+        #expect(mismatch.have == 1)
+        #expect(mismatch.total == fourByteBlocks.blockCount)
+
+        for sequence in 1..<fourByteBlocks.blockCount {
+            _ = decoder.accept(fourByteBlocks.part(at: UInt32(sequence)))
+        }
+        #expect(decoder.message() == message)
+    }
+
+    @Test("pending-part limit rejects overflow without starving systematic recovery")
+    func pendingPartLimitDoesNotStarveRecovery() throws {
+        let message = Array(0..<UInt8(8))
+        let encoder = try AirGapEncoder(
+            message,
+            blockBytes: 1,
+            sessionID: Array(1...8)
+        )
+        let sequences = sequencesWithDegree(
+            2,
+            blockCount: encoder.blockCount,
+            count: AirGap.maximumPendingParts + 1
+        )
+
+        var decoder = AirGapDecoder()
+        for sequence in sequences.dropLast() {
+            let progress = decoder.accept(encoder.part(at: sequence))
+            #expect(progress.ok)
+            #expect(progress.have == 0)
+        }
+        let overflowSequence = try #require(sequences.last)
+        let overflow = decoder.accept(encoder.part(at: overflowSequence))
+        #expect(!overflow.ok)
+        #expect(overflow.have == 0)
+
+        for sequence in 0..<encoder.blockCount {
+            _ = decoder.accept(encoder.part(at: UInt32(sequence)))
+        }
+        #expect(decoder.message() == message)
+    }
+
+    @Test("pending-reference limit rejects overflow without starving systematic recovery")
+    func pendingReferenceLimitDoesNotStarveRecovery() throws {
+        let message = Array(0..<UInt8(16))
+        let encoder = try AirGapEncoder(
+            message,
+            blockBytes: 1,
+            sessionID: Array(1...8)
+        )
+        let degree = 5
+        let acceptedPartCount = AirGap.maximumPendingIndices / degree
+        let acceptedSequences = sequencesWithDegree(
+            degree,
+            blockCount: encoder.blockCount,
+            count: acceptedPartCount
+        )
+        let lastAcceptedSequence = try #require(acceptedSequences.last)
+        let overflowSequence = try #require(
+            sequencesWithDegree(
+                2,
+                blockCount: encoder.blockCount,
+                count: 1,
+                startingAt: lastAcceptedSequence + 1
+            ).first
+        )
+
+        var decoder = AirGapDecoder()
+        for sequence in acceptedSequences {
+            let progress = decoder.accept(encoder.part(at: sequence))
+            #expect(progress.ok)
+            #expect(progress.have == 0)
+        }
+        let overflow = decoder.accept(encoder.part(at: overflowSequence))
+        #expect(!overflow.ok)
+        #expect(overflow.have == 0)
+
+        for sequence in 0..<encoder.blockCount {
+            _ = decoder.accept(encoder.part(at: UInt32(sequence)))
+        }
+        #expect(decoder.message() == message)
+    }
+
+    @Test("sequence tracking stops at its cap without starving systematic recovery")
+    func sequenceTrackingCapDoesNotStarveRecovery() throws {
+        let message = [UInt8](repeating: 0x5a, count: AirGap.maximumBlockCount)
+        let encoder = try AirGapEncoder(
+            message,
+            blockBytes: 1,
+            sessionID: Array(1...8)
+        )
+        var decoder = AirGapDecoder()
+
+        for sequence in 0..<(encoder.blockCount - 1) {
+            let progress = decoder.accept(encoder.part(at: UInt32(sequence)))
+            #expect(progress.ok)
+        }
+        #expect(mirroredCollectionCount(decoder, label: "seen") == encoder.blockCount - 1)
+
+        let missingIndex = encoder.blockCount - 1
+        let redundantSequences = sequencesExcludingIndex(
+            missingIndex,
+            blockCount: encoder.blockCount,
+            count: 3
+        )
+        for sequence in redundantSequences {
+            let progress = decoder.accept(encoder.part(at: sequence))
+            #expect(progress.ok)
+            #expect(progress.have == missingIndex)
+        }
+        #expect(mirroredCollectionCount(decoder, label: "seen") == AirGap.maximumTrackedSequences)
+
+        let complete = decoder.accept(encoder.part(at: UInt32(missingIndex)))
+        #expect(complete.ok)
+        #expect(complete.done)
+        #expect(decoder.message() == message)
+    }
+}
+
+private func sequencesWithDegree(
+    _ degree: Int,
+    blockCount: Int,
+    count: Int,
+    startingAt: UInt32? = nil
+) -> [UInt32] {
+    var sequence = startingAt ?? UInt32(blockCount)
+    var result: [UInt32] = []
+    result.reserveCapacity(count)
+    while result.count < count {
+        if airGapBlocksForPart(sequence, blockCount: blockCount).count == degree {
+            result.append(sequence)
+        }
+        sequence += 1
+    }
+    return result
+}
+
+private func sequencesExcludingIndex(
+    _ excludedIndex: Int,
+    blockCount: Int,
+    count: Int
+) -> [UInt32] {
+    var sequence = UInt32(blockCount)
+    var result: [UInt32] = []
+    result.reserveCapacity(count)
+    while result.count < count {
+        let indices = airGapBlocksForPart(sequence, blockCount: blockCount)
+        if !indices.contains(excludedIndex) {
+            result.append(sequence)
+        }
+        sequence += 1
+    }
+    return result
+}
+
+private func mirroredCollectionCount<Value>(_ value: Value, label: String) -> Int? {
+    guard let child = Mirror(reflecting: value).children.first(where: { $0.label == label }) else {
+        return nil
+    }
+    return Mirror(reflecting: child.value).children.count
 }
 
 private struct FixedRandomSource: SecureRandomSource {
