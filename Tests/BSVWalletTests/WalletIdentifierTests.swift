@@ -59,6 +59,39 @@ final class WalletIdentifierTests: XCTestCase {
         XCTAssertNoThrow(try walletTestProtocol("admi1"))
     }
 
+    func testSpecificLinkageRevelationHasTheOnlyExtendedProtocolLimit() throws {
+        let prefix = "specific linkage revelation "
+        let exact = prefix + "2 " + String(repeating: "a", count: 400)
+        XCTAssertEqual(exact.utf8.count, 430)
+        XCTAssertEqual(
+            try WalletProtocolID(securityLevel: .everyAppAndCounterparty, name: exact).name,
+            exact
+        )
+
+        let tooLong = prefix + "2 " + String(repeating: "a", count: 401)
+        XCTAssertEqual(tooLong.utf8.count, 431)
+        XCTAssertThrowsError(try walletTestProtocol(tooLong)) { error in
+            XCTAssertEqual(
+                error as? WalletValidationError,
+                .protocolNameTooLong(actualUTF8ByteCount: 431, maximum: 430)
+            )
+        }
+
+        for malformed in [
+            prefix + "3 " + String(repeating: "a", count: 371),
+            prefix + "x " + String(repeating: "a", count: 371),
+            "specific linkage revelation2 " + String(repeating: "a", count: 372),
+        ] {
+            XCTAssertEqual(malformed.utf8.count, 401)
+            XCTAssertThrowsError(try walletTestProtocol(malformed)) { error in
+                XCTAssertEqual(
+                    error as? WalletValidationError,
+                    .protocolNameTooLong(actualUTF8ByteCount: 401, maximum: 400)
+                )
+            }
+        }
+    }
+
     func testEveryASCIIProtocolCharacterAndSuffixCaseVariant() throws {
         let allowed = Set(Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ".utf8))
         for byte in UInt8.min...127 {

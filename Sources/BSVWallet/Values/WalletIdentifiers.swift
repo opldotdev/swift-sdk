@@ -43,6 +43,7 @@ public enum WalletValidationError: Error, Equatable, Sendable {
 public struct WalletProtocolID: Hashable, Codable, Sendable {
     public static let minimumNameUTF8ByteCount = 5
     public static let maximumNameUTF8ByteCount = 400
+    public static let maximumSpecificLinkageRevelationNameUTF8ByteCount = 430
 
     public let securityLevel: WalletSecurityLevel
     public let name: String
@@ -67,10 +68,13 @@ public struct WalletProtocolID: Hashable, Codable, Sendable {
                 minimum: Self.minimumNameUTF8ByteCount
             )
         }
-        guard bytes.count <= Self.maximumNameUTF8ByteCount else {
+        let maximumNameByteCount = Self.hasSpecificLinkageRevelationEnvelope(bytes)
+            ? Self.maximumSpecificLinkageRevelationNameUTF8ByteCount
+            : Self.maximumNameUTF8ByteCount
+        guard bytes.count <= maximumNameByteCount else {
             throw WalletValidationError.protocolNameTooLong(
                 actualUTF8ByteCount: bytes.count,
-                maximum: Self.maximumNameUTF8ByteCount
+                maximum: maximumNameByteCount
             )
         }
 
@@ -125,6 +129,18 @@ public struct WalletProtocolID: Hashable, Codable, Sendable {
 
     private static func isASCIIWhitespace(_ byte: UInt8) -> Bool {
         byte == 32 || (9...13).contains(byte)
+    }
+
+    /// BRC-100's only protocol-name length exception. The 430-byte ceiling is
+    /// 28 bytes of prefix, one security-level digit, one separator, and a
+    /// normal 400-byte target protocol name.
+    private static func hasSpecificLinkageRevelationEnvelope(_ bytes: [UInt8]) -> Bool {
+        let prefix = Array("specific linkage revelation ".utf8)
+        guard bytes.starts(with: prefix), bytes.count > prefix.count + 1 else {
+            return false
+        }
+        let level = bytes[prefix.count]
+        return (48...50).contains(level) && bytes[prefix.count + 1] == 32
     }
 }
 

@@ -1,11 +1,13 @@
 import BSVCore
 import BSVCrypto
 import BSVKeys
+import Foundation
 
 /// A policy-free, offline BRC-100 cryptographic kernel. It stores immutable
 /// values only. Swift cannot guarantee zeroization of copied key material.
 public struct ProtoWallet:
     WalletKeyOperations,
+    WalletLinkageOperations,
     Sendable,
     CustomStringConvertible,
     CustomDebugStringConvertible,
@@ -72,6 +74,103 @@ public struct ProtoWallet:
             )
             return WalletGetPublicKeyResult(publicKey: key)
         }
+    }
+
+    public func revealCounterpartyKeyLinkage(
+        _ request: WalletRevealCounterpartyKeyLinkageRequest
+    ) async throws -> WalletRevealCounterpartyKeyLinkageResult {
+        try await revealCounterpartyKeyLinkage(
+            request,
+            revelationTime: walletCurrentISO8601Timestamp(),
+            proofNonce: nil
+        )
+    }
+
+    package func revealCounterpartyKeyLinkage(
+        _ request: WalletRevealCounterpartyKeyLinkageRequest,
+        revelationTime: String,
+        proofNonce: PrivateKey?
+    ) async throws -> WalletRevealCounterpartyKeyLinkageResult {
+        try requireStandardPrivilege(request.privilege)
+        let linkage = try keyDeriver.revealCounterpartySecret(request.counterparty)
+        let proof = try keyDeriver.counterpartySecretProof(
+            for: request.counterparty,
+            nonce: proofNonce
+        )
+        // BRC-97 defines z as a variable-width big-endian integer. The live
+        // TypeScript SDK emits its minimal representation; Go's fixed 32-byte
+        // padding differs only when z has leading zero bytes.
+        let encodedResponse = Array(proof.response.drop(while: { $0 == 0 }))
+        let proofBytes = proof.noncePublicKey.compressedBytes
+            + proof.nonceSharedSecret.compressedBytes
+            + encodedResponse
+        let protocolID = try WalletProtocolID(
+            securityLevel: .everyAppAndCounterparty,
+            name: "counterparty linkage revelation"
+        )
+        let keyID = try WalletKeyID(revelationTime)
+        let encryptedLinkage = try await encrypt(WalletEncryptRequest(
+            protocolID: protocolID,
+            keyID: keyID,
+            counterparty: .publicKey(request.verifier),
+            plaintext: linkage.compressedBytes
+        ))
+        let encryptedProof = try await encrypt(WalletEncryptRequest(
+            protocolID: protocolID,
+            keyID: keyID,
+            counterparty: .publicKey(request.verifier),
+            plaintext: proofBytes
+        ))
+        return try WalletRevealCounterpartyKeyLinkageResult(
+            prover: keyDeriver.identityKey,
+            counterparty: request.counterparty,
+            verifier: request.verifier,
+            revelationTime: revelationTime,
+            encryptedLinkage: WalletLinkageCiphertext(encryptedLinkage.ciphertext),
+            encryptedLinkageProof: WalletLinkageCiphertext(encryptedProof.ciphertext)
+        )
+    }
+
+    public func revealSpecificKeyLinkage(
+        _ request: WalletRevealSpecificKeyLinkageRequest
+    ) async throws -> WalletRevealSpecificKeyLinkageResult {
+        try requireStandardPrivilege(request.privilege)
+        guard case .publicKey(let counterparty) = request.counterparty else {
+            throw WalletCryptoError.keyDerivationFailed
+        }
+        let linkage = try keyDeriver.revealSpecificSecret(
+            counterparty: request.counterparty,
+            protocolID: request.protocolID,
+            keyID: request.keyID
+        )
+        let revelationProtocol = try WalletProtocolID(
+            securityLevel: .everyAppAndCounterparty,
+            name: "specific linkage revelation "
+                + "\(request.protocolID.securityLevel.rawValue) \(request.protocolID.name)"
+        )
+        let encryptedLinkage = try await encrypt(WalletEncryptRequest(
+            protocolID: revelationProtocol,
+            keyID: request.keyID,
+            counterparty: .publicKey(request.verifier),
+            plaintext: linkage
+        ))
+        let proofType: UInt8 = 0
+        let encryptedProof = try await encrypt(WalletEncryptRequest(
+            protocolID: revelationProtocol,
+            keyID: request.keyID,
+            counterparty: .publicKey(request.verifier),
+            plaintext: [proofType]
+        ))
+        return try WalletRevealSpecificKeyLinkageResult(
+            encryptedLinkage: WalletLinkageCiphertext(encryptedLinkage.ciphertext),
+            encryptedLinkageProof: WalletLinkageCiphertext(encryptedProof.ciphertext),
+            prover: keyDeriver.identityKey,
+            verifier: request.verifier,
+            counterparty: counterparty,
+            protocolID: request.protocolID,
+            keyID: request.keyID,
+            proofType: proofType
+        )
     }
 
     public func encrypt(_ request: WalletEncryptRequest) async throws -> WalletEncryptResult {
@@ -180,6 +279,12 @@ public struct ProtoWallet:
         }
     }
 
+    private func requireStandardPrivilege(_ privilege: WalletPrivilege) throws {
+        guard privilege.privileged != true, privilege.privilegedReason == nil else {
+            throw WalletCryptoError.permissionPolicyUnavailable
+        }
+    }
+
     private func signatureDigest(_ payload: WalletSignaturePayload) throws -> Hash256 {
         switch payload {
         case .data(let data):
@@ -193,4 +298,10 @@ public struct ProtoWallet:
     public var description: String { "<redacted proto wallet>" }
     public var debugDescription: String { description }
     public var customMirror: Mirror { walletEmptyMirror(self) }
+}
+
+private func walletCurrentISO8601Timestamp() -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.string(from: Date())
 }

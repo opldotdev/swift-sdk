@@ -15,6 +15,10 @@ private struct FixedRandomSource: SecureRandomSource, Sendable {
 }
 
 final class ProtoWalletTests: XCTestCase {
+    private func scalar(_ value: UInt8) -> [UInt8] {
+        [UInt8](repeating: 0, count: 31) + [value]
+    }
+
     private func brcValues() throws -> (PrivateKey, PublicKey, WalletProtocolID, WalletKeyID) {
         (
             try PrivateKey(walletTestHex("6a2991c9de20e38b31d7ea147bf55f5039e4bbc073160f5e0d541d1f17e321b8")),
@@ -98,6 +102,267 @@ final class ProtoWalletTests: XCTestCase {
                 forSelf: true
             )).valid
             XCTAssertTrue(digestValid)
+        }
+    }
+
+    func testCounterpartyKeyLinkageMatchesBRC69BRC72AndBRC94() async throws {
+        let proverKey = try PrivateKey(scalar(7))
+        let counterpartyKey = try PrivateKey(scalar(13))
+        let verifierKey = try PrivateKey(scalar(17))
+        let revelationTime = "2026-08-30T23:45:12.345Z"
+        let prover = ProtoWallet(
+            rootKey: proverKey,
+            randomSource: FixedRandomSource(
+                bytes: [UInt8](repeating: 0x2a, count: 32),
+                throwsError: false
+            )
+        )
+        let verifier = ProtoWallet(rootKey: verifierKey)
+
+        let result = try await prover.revealCounterpartyKeyLinkage(
+            WalletRevealCounterpartyKeyLinkageRequest(
+                counterparty: counterpartyKey.publicKey,
+                verifier: verifierKey.publicKey
+            ),
+            revelationTime: revelationTime,
+            proofNonce: try PrivateKey(scalar(23))
+        )
+
+        XCTAssertEqual(result.prover, proverKey.publicKey)
+        XCTAssertEqual(result.counterparty, counterpartyKey.publicKey)
+        XCTAssertEqual(result.verifier, verifierKey.publicKey)
+        XCTAssertEqual(result.revelationTime, revelationTime)
+
+        let revelationProtocol = try WalletProtocolID(
+            securityLevel: .everyAppAndCounterparty,
+            name: "counterparty linkage revelation"
+        )
+        let keyID = try WalletKeyID(revelationTime)
+        let linkage = try await verifier.decrypt(WalletDecryptRequest(
+            protocolID: revelationProtocol,
+            keyID: keyID,
+            counterparty: .publicKey(proverKey.publicKey),
+            ciphertext: result.encryptedLinkage.bytes
+        )).plaintext
+        XCTAssertEqual(
+            linkage,
+            try proverKey.sharedSecret(with: counterpartyKey.publicKey).compressedBytes
+        )
+
+        let proofBytes = try await verifier.decrypt(WalletDecryptRequest(
+            protocolID: revelationProtocol,
+            keyID: keyID,
+            counterparty: .publicKey(proverKey.publicKey),
+            ciphertext: result.encryptedLinkageProof.bytes
+        )).plaintext
+        XCTAssertEqual(proofBytes.count, 98)
+        let encodedResponse = Array(proofBytes.dropFirst(66))
+        let response = [UInt8](repeating: 0, count: 32 - encodedResponse.count)
+            + encodedResponse
+        let proof = try SharedSecretProof(
+            noncePublicKey: PublicKey(Array(proofBytes[0..<33])),
+            nonceSharedSecret: PublicKey(Array(proofBytes[33..<66])),
+            response: response
+        )
+        XCTAssertTrue(proof.verify(
+            proverPublicKey: proverKey.publicKey,
+            counterpartyPublicKey: counterpartyKey.publicKey,
+            sharedSecret: try PublicKey(linkage)
+        ))
+    }
+
+    func testCounterpartyProofSerializesResponseAsBRC97MinimalInteger() async throws {
+        let proverKey = try PrivateKey(scalar(7))
+        let counterpartyKey = try PrivateKey(scalar(13))
+        let verifierKey = try PrivateKey(scalar(17))
+        let deriver = WalletKeyDeriver(rootKey: proverKey)
+        var selectedNonce: PrivateKey?
+        var selectedResponse: [UInt8] = []
+        for value in UInt16(1)...UInt16(1_024) {
+            var bytes = [UInt8](repeating: 0, count: 32)
+            bytes[30] = UInt8(value >> 8)
+            bytes[31] = UInt8(truncatingIfNeeded: value)
+            let nonce = try PrivateKey(bytes)
+            let response = try deriver.counterpartySecretProof(
+                for: counterpartyKey.publicKey,
+                nonce: nonce
+            ).response
+            if response.first == 0 {
+                selectedNonce = nonce
+                selectedResponse = response
+                break
+            }
+        }
+        let nonce = try XCTUnwrap(selectedNonce)
+        let wallet = ProtoWallet(
+            rootKey: proverKey,
+            randomSource: FixedRandomSource(
+                bytes: [UInt8](repeating: 0x55, count: 32),
+                throwsError: false
+            )
+        )
+        let verifier = ProtoWallet(rootKey: verifierKey)
+        let revelationTime = "2026-08-30T23:45:12.345Z"
+        let result = try await wallet.revealCounterpartyKeyLinkage(
+            WalletRevealCounterpartyKeyLinkageRequest(
+                counterparty: counterpartyKey.publicKey,
+                verifier: verifierKey.publicKey
+            ),
+            revelationTime: revelationTime,
+            proofNonce: nonce
+        )
+        let proofBytes = try await verifier.decrypt(WalletDecryptRequest(
+            protocolID: WalletProtocolID(
+                securityLevel: .everyAppAndCounterparty,
+                name: "counterparty linkage revelation"
+            ),
+            keyID: WalletKeyID(revelationTime),
+            counterparty: .publicKey(proverKey.publicKey),
+            ciphertext: result.encryptedLinkageProof.bytes
+        )).plaintext
+        let expectedResponse = Array(selectedResponse.drop(while: { $0 == 0 }))
+        XCTAssertEqual(Array(proofBytes.dropFirst(66)), expectedResponse)
+        XCTAssertLessThan(proofBytes.count, 98)
+    }
+
+    func testSpecificKeyLinkageMatchesBRC69BRC72AndProofTypeZero() async throws {
+        let proverKey = try PrivateKey(scalar(7))
+        let counterpartyKey = try PrivateKey(scalar(13))
+        let verifierKey = try PrivateKey(scalar(17))
+        let protocolID = try WalletProtocolID(securityLevel: .silent, name: "tests")
+        let keyID = try WalletKeyID("test key id")
+        let prover = ProtoWallet(
+            rootKey: proverKey,
+            randomSource: FixedRandomSource(
+                bytes: [UInt8](repeating: 0x4d, count: 32),
+                throwsError: false
+            )
+        )
+        let verifier = ProtoWallet(rootKey: verifierKey)
+
+        let result = try await prover.revealSpecificKeyLinkage(
+            WalletRevealSpecificKeyLinkageRequest(
+                counterparty: .publicKey(counterpartyKey.publicKey),
+                verifier: verifierKey.publicKey,
+                protocolID: protocolID,
+                keyID: keyID
+            )
+        )
+
+        XCTAssertEqual(result.prover, proverKey.publicKey)
+        XCTAssertEqual(result.counterparty, counterpartyKey.publicKey)
+        XCTAssertEqual(result.verifier, verifierKey.publicKey)
+        XCTAssertEqual(result.protocolID, protocolID)
+        XCTAssertEqual(result.keyID, keyID)
+        XCTAssertEqual(result.proofType, 0)
+
+        let revelationProtocol = try WalletProtocolID(
+            securityLevel: .everyAppAndCounterparty,
+            name: "specific linkage revelation 0 tests"
+        )
+        let linkage = try await verifier.decrypt(WalletDecryptRequest(
+            protocolID: revelationProtocol,
+            keyID: keyID,
+            counterparty: .publicKey(proverKey.publicKey),
+            ciphertext: result.encryptedLinkage.bytes
+        )).plaintext
+        let sharedSecret = try proverKey.sharedSecret(with: counterpartyKey.publicKey)
+        XCTAssertEqual(
+            linkage,
+            BSVHashing.hmacSHA256(
+                Array("0-tests-test key id".utf8),
+                key: sharedSecret.compressedBytes
+            ).bytes
+        )
+        let proof = try await verifier.decrypt(WalletDecryptRequest(
+            protocolID: revelationProtocol,
+            keyID: keyID,
+            counterparty: .publicKey(proverKey.publicKey),
+            ciphertext: result.encryptedLinkageProof.bytes
+        )).plaintext
+        XCTAssertEqual(proof, [0])
+    }
+
+    func testSpecificKeyLinkageWrapsMaximumLengthTargetProtocol() async throws {
+        let proverKey = try PrivateKey(scalar(7))
+        let counterpartyKey = try PrivateKey(scalar(13))
+        let verifierKey = try PrivateKey(scalar(17))
+        let targetProtocol = try WalletProtocolID(
+            securityLevel: .everyAppAndCounterparty,
+            name: String(repeating: "a", count: 400)
+        )
+        let keyID = try WalletKeyID("boundary")
+        let wallet = ProtoWallet(
+            rootKey: proverKey,
+            randomSource: FixedRandomSource(
+                bytes: [UInt8](repeating: 0x61, count: 32),
+                throwsError: false
+            )
+        )
+        let result = try await wallet.revealSpecificKeyLinkage(
+            WalletRevealSpecificKeyLinkageRequest(
+                counterparty: .publicKey(counterpartyKey.publicKey),
+                verifier: verifierKey.publicKey,
+                protocolID: targetProtocol,
+                keyID: keyID
+            )
+        )
+        let wrappedName = "specific linkage revelation 2 " + targetProtocol.name
+        XCTAssertEqual(wrappedName.utf8.count, 430)
+        let verifier = ProtoWallet(rootKey: verifierKey)
+        let plaintext = try await verifier.decrypt(WalletDecryptRequest(
+            protocolID: WalletProtocolID(
+                securityLevel: .everyAppAndCounterparty,
+                name: wrappedName
+            ),
+            keyID: keyID,
+            counterparty: .publicKey(proverKey.publicKey),
+            ciphertext: result.encryptedLinkage.bytes
+        )).plaintext
+        XCTAssertEqual(plaintext.count, 32)
+    }
+
+    func testKeyLinkageRejectsSelfAndUnavailablePrivilegePolicy() async throws {
+        let root = try PrivateKey(scalar(7))
+        let counterparty = try PrivateKey(scalar(13)).publicKey
+        let verifier = try PrivateKey(scalar(17)).publicKey
+        let protocolID = try WalletProtocolID(securityLevel: .silent, name: "tests")
+        let keyID = try WalletKeyID("test")
+        let wallet = ProtoWallet(rootKey: root)
+
+        await XCTAssertThrowsErrorAsync(try await wallet.revealCounterpartyKeyLinkage(
+            WalletRevealCounterpartyKeyLinkageRequest(
+                counterparty: root.publicKey,
+                verifier: verifier
+            )
+        )) { error in
+            XCTAssertEqual(error as? WalletCryptoError, .counterpartySelfLinkageForbidden)
+        }
+
+        for privilege in [
+            try WalletPrivilege(privileged: true),
+            try WalletPrivilege(privilegedReason: "audit reason"),
+        ] {
+            await XCTAssertThrowsErrorAsync(try await wallet.revealCounterpartyKeyLinkage(
+                WalletRevealCounterpartyKeyLinkageRequest(
+                    counterparty: counterparty,
+                    verifier: verifier,
+                    privilege: privilege
+                )
+            )) { error in
+                XCTAssertEqual(error as? WalletCryptoError, .permissionPolicyUnavailable)
+            }
+            await XCTAssertThrowsErrorAsync(try await wallet.revealSpecificKeyLinkage(
+                try WalletRevealSpecificKeyLinkageRequest(
+                    counterparty: .publicKey(counterparty),
+                    verifier: verifier,
+                    protocolID: protocolID,
+                    keyID: keyID,
+                    privilege: privilege
+                )
+            )) { error in
+                XCTAssertEqual(error as? WalletCryptoError, .permissionPolicyUnavailable)
+            }
         }
     }
 

@@ -286,7 +286,10 @@ func walletWireDecodeProtocol(
         throw WalletWireError.invalidDiscriminator(kind: "protocol security level", value: levelByte)
     }
     let name = try reader.readString(
-        maximum: min(walletWireMaximumText(limits), WalletProtocolID.maximumNameUTF8ByteCount),
+        maximum: min(
+            walletWireMaximumText(limits),
+            WalletProtocolID.maximumSpecificLinkageRevelationNameUTF8ByteCount
+        ),
         kind: "protocol name"
     )
     do {

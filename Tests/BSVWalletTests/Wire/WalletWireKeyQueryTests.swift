@@ -111,6 +111,30 @@ final class WalletWireKeyQueryTests: XCTestCase {
         }
     }
 
+    func testMaximumSpecificLinkageProtocolRoundTripsWalletWire() throws {
+        let protocolName = "specific linkage revelation 2 "
+            + String(repeating: "a", count: 400)
+        XCTAssertEqual(protocolName.utf8.count, 430)
+        let request = WalletWireKeyQueryRequest.encrypt(WalletEncryptRequest(
+            protocolID: try WalletProtocolID(
+                securityLevel: .everyAppAndCounterparty,
+                name: protocolName
+            ),
+            keyID: try WalletKeyID("boundary"),
+            plaintext: []
+        ))
+        let encoded = try WalletWireCodec.encodeKeyQueryRequest(request, originator: "test")
+        let decoded = try WalletWireCodec.decodeKeyQueryRequest(encoded)
+        XCTAssertEqual(decoded.request.call, .encrypt)
+        XCTAssertEqual(
+            try WalletWireCodec.encodeKeyQueryRequest(
+                decoded.request,
+                originator: decoded.originator
+            ),
+            encoded
+        )
+    }
+
     func testTypedDecoderThrowsBoundedRemoteError() throws {
         let remote = try WalletWireRemoteError(
             code: 42,

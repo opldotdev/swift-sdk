@@ -96,6 +96,58 @@ public struct WalletKeyDeriver:
         }
     }
 
+    /// Reveals the compressed BRC-42 root ECDH point for a concrete counterparty.
+    /// Revealing the wallet's self-secret is forbidden by BRC-69.
+    public func revealCounterpartySecret(_ counterparty: PublicKey) throws -> PublicKey {
+        guard counterparty != identityKey else {
+            throw WalletCryptoError.counterpartySelfLinkageForbidden
+        }
+        do {
+            return try rootKey.sharedSecret(with: counterparty)
+        } catch let error as WalletCryptoError {
+            throw error
+        } catch {
+            throw WalletCryptoError.keyDerivationFailed
+        }
+    }
+
+    /// Reveals the BRC-69 method-2 offset for one protocol, key ID, and counterparty.
+    public func revealSpecificSecret(
+        counterparty: WalletCounterparty,
+        protocolID: WalletProtocolID,
+        keyID: WalletKeyID
+    ) throws -> [UInt8] {
+        do {
+            let sharedSecret = try rootKey.sharedSecret(
+                with: normalizedCounterparty(counterparty)
+            )
+            return BSVHashing.hmacSHA256(
+                Array(invoice(protocolID: protocolID, keyID: keyID).utf8),
+                key: sharedSecret.compressedBytes
+            ).bytes
+        } catch let error as WalletCryptoError {
+            throw error
+        } catch {
+            throw WalletCryptoError.keyDerivationFailed
+        }
+    }
+
+    /// Generates the BRC-94 proof without exposing the root private key.
+    package func counterpartySecretProof(
+        for counterparty: PublicKey,
+        nonce: PrivateKey? = nil
+    ) throws -> SharedSecretProof {
+        _ = try revealCounterpartySecret(counterparty)
+        do {
+            if let nonce {
+                return try rootKey.sharedSecretProof(with: counterparty, nonce: nonce)
+            }
+            return try rootKey.sharedSecretProof(with: counterparty)
+        } catch {
+            throw WalletCryptoError.proofGenerationFailed
+        }
+    }
+
     internal func invoice(protocolID: WalletProtocolID, keyID: WalletKeyID) -> String {
         "\(protocolID.securityLevel.rawValue)-\(protocolID.name)-\(keyID.value)"
     }
