@@ -37,7 +37,7 @@ final class WalletWireGoOracleTests: XCTestCase {
                 keyID: keyID,
                 counterparty: .self,
                 forSelf: false
-            ))),
+            ), access: access)),
             .encrypt(WalletEncryptRequest(
                 protocolID: protocolID, keyID: keyID, plaintext: [1, 2], access: access
             )),
@@ -226,6 +226,44 @@ final class WalletWireGoOracleTests: XCTestCase {
                 .nonRoundTrippableValue(kind: "high-S signature")
             )
         }
+
+        // GO-067: pinned Go v1.3.3 stores key-request seekPermission as Bool,
+        // so it cannot preserve the BRC-100 absent sentinel. Swift and the
+        // TypeScript reference preserve absence and apply the default later.
+        let omittedSeekRequest = WalletWireKeyQueryRequest.getPublicKey(
+            WalletGetPublicKeyRequest(selection: .derived(
+                protocolID: try WalletProtocolID(securityLevel: .silent, name: "wire test"),
+                keyID: try WalletKeyID("oracle-key"),
+                counterparty: .self,
+                forSelf: false
+            ))
+        )
+        let omittedSeekBytes = try WalletWireCodec.encodeKeyQueryRequest(
+            omittedSeekRequest,
+            originator: "oracle"
+        )
+        XCTAssertEqual(omittedSeekBytes.last, 0xFF)
+        let decodedOmittedSeek = try WalletWireCodec.decodeKeyQueryRequest(omittedSeekBytes)
+        XCTAssertNil(WalletRequest.keyQuery(decodedOmittedSeek.request).rawSeekPermission)
+        XCTAssertEqual(
+            WalletRequest.keyQuery(decodedOmittedSeek.request).effectiveSeekPermission,
+            true
+        )
+        XCTAssertEqual(
+            try WalletWireCodec.encodeKeyQueryRequest(
+                decodedOmittedSeek.request,
+                originator: decodedOmittedSeek.originator
+            ),
+            omittedSeekBytes
+        )
+        let goOmittedSeekBytes = try oracleBytes(
+            client,
+            operation: "wallet.wire.request.reencode",
+            call: .getPublicKey,
+            bytes: omittedSeekBytes,
+            sequence: &sequence
+        )
+        XCTAssertEqual(goOmittedSeekBytes, Array(omittedSeekBytes.dropLast()) + [0])
 
         // Pinned Go preserves its optional-Boolean absence sentinel. Swift
         // accepts that inbound form as false and emits the canonical 00 form.
