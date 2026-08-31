@@ -64,10 +64,7 @@ final class ProtoWalletTests: XCTestCase {
 
     func testWalletInternalAdminMetadataEncryptionVector() async throws {
         let root = try walletTestPrivateKey(42)
-        let protocolID = try WalletProtocolID.walletInternalAdmin(
-            securityLevel: .everyAppAndCounterparty,
-            name: "admin metadata encryption"
-        )
+        let protocolID = WalletProtocolID.walletMetadataEncryption
         let keyID = try WalletKeyID("1")
         let nonce = (0..<32).map { UInt8($0) }
         let plaintext = Array("Yours Wallet metadata".utf8)

@@ -60,12 +60,14 @@ final class WalletIdentifierTests: XCTestCase {
     }
 
     func testWalletInternalAdminProtocolsStayOffExternalBoundaries() throws {
-        let value = try WalletProtocolID.walletInternalAdmin(
+        let factoryValue = try WalletProtocolID.walletInternalAdmin(
             securityLevel: .everyAppAndCounterparty,
             name: " \tAdMiN Metadata Encryption\n"
         )
+        let value = WalletProtocolID.walletMetadataEncryption
         XCTAssertEqual(value.securityLevel, .everyAppAndCounterparty)
         XCTAssertEqual(value.name, "admin metadata encryption")
+        XCTAssertEqual(value, factoryValue)
 
         XCTAssertThrowsError(try WalletProtocolID(
             securityLevel: .everyAppAndCounterparty,

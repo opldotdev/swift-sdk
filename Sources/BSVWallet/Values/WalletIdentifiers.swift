@@ -49,6 +49,13 @@ public struct WalletProtocolID: Hashable, Codable, Sendable {
     public let securityLevel: WalletSecurityLevel
     public let name: String
 
+    /// Canonical wallet-internal protocol used by WalletPermissionsManager metadata encryption.
+    /// This represents the identifier only; callers must still enforce authorization policy.
+    public static let walletMetadataEncryption = WalletProtocolID(
+        securityLevel: .everyAppAndCounterparty,
+        canonicalName: "admin metadata encryption"
+    )
+
     public init(securityLevel: WalletSecurityLevel, name: String) throws {
         let normalized = try Self.canonicalName(name)
         guard !normalized.hasPrefix("admin") else {
