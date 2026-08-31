@@ -108,6 +108,20 @@ final class WalletIdentifierTests: XCTestCase {
                 .nonRoundTrippableValue(kind: "BRC-44 wallet-internal protocol identifier")
             )
         }
+
+        var rawAdminProtocol = WalletWireWriter()
+        rawAdminProtocol.writeByte(WalletSecurityLevel.everyAppAndCounterparty.rawValue)
+        try rawAdminProtocol.writeString("admin metadata encryption")
+        var rawReader = WalletWireReader(rawAdminProtocol.bytes)
+        XCTAssertThrowsError(try walletWireDecodeProtocol(
+            from: &rawReader,
+            limits: .standard
+        )) { error in
+            XCTAssertEqual(
+                error as? WalletWireError,
+                .nonRoundTrippableValue(kind: "protocol identifier")
+            )
+        }
     }
 
     func testSpecificLinkageRevelationHasTheOnlyExtendedProtocolLimit() throws {
