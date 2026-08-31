@@ -1,5 +1,6 @@
 import XCTest
 import BSVCore
+import BSVKeys
 import BSVTransaction
 @testable import BSVWallet
 
@@ -155,6 +156,121 @@ final class WalletBRC100JSONCodecTests: XCTestCase {
         XCTAssertThrowsError(try codec.decodeRequest(route: route, from: Array("{".utf8)))
     }
 
+    func testCertificateCiphertextUsesCanonicalBase64AcrossJSONRoutes() throws {
+        let raw: [UInt8] = [0x00, 0xff, 0x80, 0x01, 0x7f, 0xa5, 0x42, 0xc3]
+        let expectedBase64 = "AP+AAX+lQsM="
+        let codec = try makeCodec()
+        let (certificate, field) = try makeCertificate(fieldBytes: raw)
+
+        let acquireRoute = try XCTUnwrap(WalletJSONRoute(methodName: "acquireCertificate"))
+        let acquireResult = WalletResult.certificate(.acquireCertificate(certificate))
+        let acquireJSON = try codec.encodeResult(acquireResult)
+        XCTAssertEqual(
+            String(decoding: acquireJSON, as: UTF8.self),
+            "{\"certifier\":\"\(Hex.encode(certificate.certifier.compressedBytes))\",\"fields\":{\"binary\":\"\(expectedBase64)\"},\"revocationOutpoint\":\"\(certificate.revocationOutpoint)\",\"serialNumber\":\"\(certificate.serialNumber.base64)\",\"subject\":\"\(Hex.encode(certificate.subject.compressedBytes))\",\"type\":\"\(certificate.type.base64)\"}"
+        )
+        guard case .certificate(.acquireCertificate(let acquired)) = try codec.decodeResult(
+            route: acquireRoute,
+            from: acquireJSON
+        ) else { return XCTFail("unexpected acquireCertificate result") }
+        XCTAssertEqual(acquired.fields[field]?.bytes, raw)
+
+        let listRoute = try XCTUnwrap(WalletJSONRoute(methodName: "listCertificates"))
+        let listResult = WalletResult.certificate(.listCertificates(try .init(
+            totalCertificates: 1,
+            certificates: [.init(certificate: certificate, keyring: nil, verifier: [])]
+        )))
+        let listJSON = try codec.encodeResult(listResult)
+        let listObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(listJSON)) as? [String: Any]
+        )
+        let listedObjects = try XCTUnwrap(listObject["certificates"] as? [[String: Any]])
+        let listedFields = try XCTUnwrap(listedObjects.first?["fields"] as? [String: String])
+        XCTAssertEqual(listedFields[field.value], expectedBase64)
+        guard case .certificate(.listCertificates(let listed)) = try codec.decodeResult(
+            route: listRoute,
+            from: listJSON
+        ) else { return XCTFail("unexpected listCertificates result") }
+        XCTAssertEqual(listed.certificates.first?.certificate.fields[field]?.bytes, raw)
+
+        let proveRoute = try XCTUnwrap(WalletJSONRoute(methodName: "proveCertificate"))
+        let proveRequest = WalletRequest.certificate(.proveCertificate(try .init(
+            certificate: certificate,
+            fieldsToReveal: [field],
+            verifier: walletTestPrivateKey(4).publicKey
+        )))
+        let proveJSON = try codec.encodeRequest(proveRequest)
+        let proveObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(proveJSON)) as? [String: Any]
+        )
+        let proveCertificate = try XCTUnwrap(proveObject["certificate"] as? [String: Any])
+        let proveFields = try XCTUnwrap(proveCertificate["fields"] as? [String: String])
+        XCTAssertEqual(proveFields[field.value], expectedBase64)
+        guard case .certificate(.proveCertificate(let proven)) = try codec.decodeRequest(
+            route: proveRoute,
+            from: proveJSON
+        ) else { return XCTFail("unexpected proveCertificate request") }
+        XCTAssertEqual(proven.certificate.fields[field]?.bytes, raw)
+    }
+
+    func testSignedCertificateStillVerifiesAfterBRC100JSONTransport() async throws {
+        let raw: [UInt8] = [0x00, 0xff, 0x80, 0x01, 0x7f, 0xa5, 0x42, 0xc3]
+        let codec = try makeCodec()
+        let (unsigned, _) = try makeCertificate(fieldBytes: raw)
+        let signed = try await unsigned.signed(
+            using: ProtoWallet(rootKey: walletTestPrivateKey(3))
+        )
+        let signedIsValid = try await signed.verifySignature()
+        XCTAssertTrue(signedIsValid)
+
+        let encoded = try codec.encodeResult(
+            WalletResult.certificate(.acquireCertificate(signed))
+        )
+        guard case .certificate(.acquireCertificate(let transported)) = try codec.decodeResult(
+            route: XCTUnwrap(WalletJSONRoute(methodName: "acquireCertificate")),
+            from: encoded
+        ) else { return XCTFail("unexpected acquireCertificate result") }
+
+        XCTAssertEqual(
+            try transported.binary(includingSignature: false),
+            try signed.binary(includingSignature: false)
+        )
+        XCTAssertEqual(transported.signature, signed.signature)
+        let transportedIsValid = try await transported.verifySignature()
+        XCTAssertTrue(transportedIsValid)
+    }
+
+    func testCertificateCiphertextLimitAppliesToDecodedBytesNotBase64Expansion() throws {
+        let raw: [UInt8] = [0x00, 0xff, 0x80, 0x01, 0x7f, 0xa5, 0x42, 0xc3]
+        let standardCodec = try makeCodec()
+        let (certificate, field) = try makeCertificate(fieldBytes: raw)
+        let encoded = try standardCodec.encodeResult(
+            WalletResult.certificate(.acquireCertificate(certificate))
+        )
+        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains("\"binary\":\"AP+AAX+lQsM=\""))
+
+        let exactCodec = try makeCodec(certificateLimits: try CertificateLimits(
+            maximumFieldCiphertextByteCount: raw.count
+        ))
+        guard case .certificate(.acquireCertificate(let exact)) = try exactCodec.decodeResult(
+            route: XCTUnwrap(WalletJSONRoute(methodName: "acquireCertificate")),
+            from: encoded
+        ) else { return XCTFail("unexpected acquireCertificate result") }
+        XCTAssertEqual(exact.fields[field]?.bytes, raw)
+
+        let exactBase64 = "AP+AAX+lQsM="
+        let oversizedBase64 = "AAAAAAAAAAAA"
+        XCTAssertEqual(exactBase64.utf8.count, oversizedBase64.utf8.count)
+        let oversized = String(decoding: encoded, as: UTF8.self)
+            .replacingOccurrences(of: exactBase64, with: oversizedBase64)
+        XCTAssertThrowsError(try exactCodec.decodeResult(
+            route: XCTUnwrap(WalletJSONRoute(methodName: "acquireCertificate")),
+            from: Array(oversized.utf8)
+        )) { error in
+            XCTAssertEqual(error as? CertificateError, .invalidCanonicalBase64)
+        }
+    }
+
     func testProcessorSeparatesRouteBodyAndWalletFailures() async throws {
         let codec = try makeCodec()
         let context = try WalletRequestContext(rawOriginator: "example.com")
@@ -215,7 +331,9 @@ final class WalletBRC100JSONCodecTests: XCTestCase {
         }
     }
 
-    private func makeCodec() throws -> WalletBRC100JSONCodec {
+    private func makeCodec(
+        certificateLimits: CertificateLimits = .standard
+    ) throws -> WalletBRC100JSONCodec {
         try WalletBRC100JSONCodec(beefLimits: BEEFLimits(
             maximumByteCount: 1_000_000,
             maximumMerklePathCount: 100,
@@ -231,7 +349,25 @@ final class WalletBRC100JSONCodecTests: XCTestCase {
                 maximumLeavesPerLevel: 100,
                 maximumTotalLeaves: 1_000
             )
-        ))
+        ), certificateLimits: certificateLimits)
+    }
+
+    private func makeCertificate(
+        fieldBytes: [UInt8]
+    ) throws -> (certificate: Certificate, field: CertificateFieldName) {
+        let fixture = try WalletWireCertificateFixture()
+        let field = try CertificateFieldName("binary")
+        return (
+            try Certificate(
+                type: fixture.type,
+                serialNumber: fixture.serial,
+                subject: fixture.subject,
+                certifier: fixture.certifier,
+                revocationOutpoint: fixture.outpoint,
+                fields: [field: try CertificateCiphertext(fieldBytes)]
+            ),
+            field
+        )
     }
 }
 
