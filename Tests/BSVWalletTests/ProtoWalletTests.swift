@@ -431,12 +431,11 @@ final class ProtoWalletTests: XCTestCase {
         let identity = try await wallet.getPublicKey(WalletGetPublicKeyRequest(selection: .identity)).publicKey
         XCTAssertEqual(identity, try walletTestPrivateKey(42).publicKey)
 
-        let accesses = [
+        let rejectedAccesses = [
             try WalletKeyAccess(privileged: true),
             try WalletKeyAccess(privilegedReason: "reason"),
-            try WalletKeyAccess(seekPermission: true),
         ]
-        for access in accesses {
+        for access in rejectedAccesses {
             await XCTAssertThrowsErrorAsync(try await wallet.getPublicKey(WalletGetPublicKeyRequest(selection: .identity, access: access))) { error in
                 XCTAssertEqual(error as? WalletCryptoError, .permissionPolicyUnavailable)
             }
@@ -459,6 +458,56 @@ final class ProtoWalletTests: XCTestCase {
             await XCTAssertThrowsErrorAsync(try await wallet.verifySignature(WalletVerifySignatureRequest(protocolID: protocolID, keyID: keyID, payload: .data([]), signature: standardSignature.signature, access: access))) { error in
                 XCTAssertEqual(error as? WalletCryptoError, .permissionPolicyUnavailable)
             }
+        }
+
+        for seekPermission in [nil, false, true] as [Bool?] {
+            let access = try WalletKeyAccess(seekPermission: seekPermission)
+            _ = try await wallet.getPublicKey(WalletGetPublicKeyRequest(
+                selection: .identity,
+                access: access
+            ))
+            let encrypted = try await wallet.encrypt(WalletEncryptRequest(
+                protocolID: protocolID,
+                keyID: keyID,
+                plaintext: [1],
+                access: access
+            ))
+            let decrypted = try await wallet.decrypt(WalletDecryptRequest(
+                protocolID: protocolID,
+                keyID: keyID,
+                ciphertext: encrypted.ciphertext,
+                access: access
+            ))
+            XCTAssertEqual(decrypted.plaintext, [1])
+            let soughtHMAC = try await wallet.createHMAC(WalletCreateHMACRequest(
+                protocolID: protocolID,
+                keyID: keyID,
+                data: [1],
+                access: access
+            ))
+            let verifiedHMAC = try await wallet.verifyHMAC(WalletVerifyHMACRequest(
+                protocolID: protocolID,
+                keyID: keyID,
+                data: [1],
+                hmac: soughtHMAC.hmac,
+                access: access
+            ))
+            XCTAssertTrue(verifiedHMAC.valid)
+            let soughtSignature = try await wallet.createSignature(WalletCreateSignatureRequest(
+                protocolID: protocolID,
+                keyID: keyID,
+                counterparty: .self,
+                payload: .data([1]),
+                access: access
+            ))
+            let verifiedSignature = try await wallet.verifySignature(WalletVerifySignatureRequest(
+                protocolID: protocolID,
+                keyID: keyID,
+                payload: .data([1]),
+                signature: soughtSignature.signature,
+                access: access
+            ))
+            XCTAssertTrue(verifiedSignature.valid)
         }
     }
 

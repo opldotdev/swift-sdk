@@ -43,8 +43,11 @@ public enum WalletCounterparty: Equatable, Codable, Sendable {
     }
 }
 
-/// Permission metadata carried by BRC-100 requests. This offline kernel has no
-/// permission policy and rejects every non-standard value before cryptography.
+/// Permission metadata carried by BRC-100 key requests.
+///
+/// `seekPermission` preserves whether the caller omitted the flag or supplied
+/// an explicit `false` or `true`. Its effective default is operation-specific
+/// and is exposed by `WalletRequest`, rather than being applied while decoding.
 public struct WalletKeyAccess:
     Equatable,
     Codable,
@@ -53,16 +56,16 @@ public struct WalletKeyAccess:
     CustomDebugStringConvertible,
     CustomReflectable {
     public static let maximumPrivilegedReasonUTF8ByteCount = 1_024
-    public static let standard = WalletKeyAccess(validatedPrivileged: false, reason: nil, seek: false)
+    public static let standard = WalletKeyAccess(validatedPrivileged: false, reason: nil, seek: nil)
 
     public let privileged: Bool
     public let privilegedReason: String?
-    public let seekPermission: Bool
+    public let seekPermission: Bool?
 
     public init(
         privileged: Bool = false,
         privilegedReason: String? = nil,
-        seekPermission: Bool = false
+        seekPermission: Bool? = nil
     ) throws {
         if let privilegedReason {
             let count = privilegedReason.utf8.count
@@ -76,7 +79,7 @@ public struct WalletKeyAccess:
         self.init(validatedPrivileged: privileged, reason: privilegedReason, seek: seekPermission)
     }
 
-    private init(validatedPrivileged: Bool, reason: String?, seek: Bool) {
+    private init(validatedPrivileged: Bool, reason: String?, seek: Bool?) {
         self.privileged = validatedPrivileged
         self.privilegedReason = reason
         self.seekPermission = seek
@@ -98,7 +101,7 @@ public struct WalletKeyAccess:
             : nil
         let seek = container.contains(.seekPermission)
             ? try container.decode(Bool.self, forKey: .seekPermission)
-            : false
+            : nil
         try self.init(
             privileged: privileged,
             privilegedReason: reason,
@@ -110,7 +113,7 @@ public struct WalletKeyAccess:
         var container = encoder.container(keyedBy: CodingKeys.self)
         if privileged { try container.encode(true, forKey: .privileged) }
         try container.encodeIfPresent(privilegedReason, forKey: .privilegedReason)
-        if seekPermission { try container.encode(true, forKey: .seekPermission) }
+        try container.encodeIfPresent(seekPermission, forKey: .seekPermission)
     }
 
     public var description: String { "<redacted wallet key access>" }

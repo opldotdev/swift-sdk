@@ -274,7 +274,7 @@ public struct ProtoWallet:
     }
 
     private func requireStandardAccess(_ access: WalletKeyAccess) throws {
-        guard access == .standard else {
+        guard access.privileged != true, access.privilegedReason == nil else {
             throw WalletCryptoError.permissionPolicyUnavailable
         }
     }

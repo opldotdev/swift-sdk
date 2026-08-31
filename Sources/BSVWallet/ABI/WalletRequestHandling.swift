@@ -35,6 +35,21 @@ public enum WalletRequestContextError: Error, Equatable, Sendable {
     case originatorTooLong(actualUTF8ByteCount: Int, maximumUTF8ByteCount: Int)
 }
 
+/// The permission-seeking semantics of a decoded BRC-100 request.
+///
+/// `rawValue` preserves the caller's tri-state input. `effectiveValue` applies
+/// the operation-specific BRC-100 default, or is `nil` when the operation does
+/// not define `seekPermission`.
+public struct WalletSeekPermissionMetadata: Equatable, Sendable {
+    public let rawValue: Bool?
+    public let effectiveValue: Bool?
+
+    public init(rawValue: Bool?, effectiveValue: Bool?) {
+        self.rawValue = rawValue
+        self.effectiveValue = effectiveValue
+    }
+}
+
 /// A decoded request from any of the 28 BRC-100 wallet operations.
 public enum WalletRequest:
     Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
@@ -50,9 +65,72 @@ public enum WalletRequest:
         }
     }
 
+    /// Permission-seeking metadata for transport or host policy.
+    public var seekPermissionMetadata: WalletSeekPermissionMetadata {
+        switch self {
+        case .action(.listActions(let value)):
+            return makeSeekPermissionMetadata(rawValue: value.seekPermission, defaultValue: true)
+        case .action(.internalizeAction(let value)):
+            return makeSeekPermissionMetadata(rawValue: value.seekPermission, defaultValue: true)
+        case .action(.listOutputs(let value)):
+            return makeSeekPermissionMetadata(rawValue: value.seekPermission, defaultValue: true)
+        case .certificate(.discoverByIdentityKey(let value)):
+            return makeSeekPermissionMetadata(rawValue: value.seekPermission, defaultValue: false)
+        case .certificate(.discoverByAttributes(let value)):
+            return makeSeekPermissionMetadata(rawValue: value.seekPermission, defaultValue: false)
+        case .keyQuery(.getPublicKey(let value)):
+            return makeSeekPermissionMetadata(rawValue: value.access.seekPermission, defaultValue: true)
+        case .keyQuery(.encrypt(let value)):
+            return makeSeekPermissionMetadata(rawValue: value.access.seekPermission, defaultValue: true)
+        case .keyQuery(.decrypt(let value)):
+            return makeSeekPermissionMetadata(rawValue: value.access.seekPermission, defaultValue: true)
+        case .keyQuery(.createHMAC(let value)):
+            return makeSeekPermissionMetadata(rawValue: value.access.seekPermission, defaultValue: true)
+        case .keyQuery(.verifyHMAC(let value)):
+            return makeSeekPermissionMetadata(rawValue: value.access.seekPermission, defaultValue: true)
+        case .keyQuery(.createSignature(let value)):
+            return makeSeekPermissionMetadata(rawValue: value.access.seekPermission, defaultValue: true)
+        case .keyQuery(.verifySignature(let value)):
+            return makeSeekPermissionMetadata(rawValue: value.access.seekPermission, defaultValue: true)
+        case .action(.createAction),
+             .action(.signAction),
+             .action(.abortAction),
+             .action(.relinquishOutput),
+             .certificate(.revealCounterpartyKeyLinkage),
+             .certificate(.revealSpecificKeyLinkage),
+             .certificate(.acquireCertificate),
+             .certificate(.listCertificates),
+             .certificate(.proveCertificate),
+             .certificate(.relinquishCertificate),
+             .keyQuery(.isAuthenticated),
+             .keyQuery(.waitForAuthentication),
+             .keyQuery(.getHeight),
+             .keyQuery(.getHeaderForHeight),
+             .keyQuery(.getNetwork),
+             .keyQuery(.getVersion):
+            return WalletSeekPermissionMetadata(rawValue: nil, effectiveValue: nil)
+        }
+    }
+
+    /// The caller-provided value without applying an operation default.
+    public var rawSeekPermission: Bool? { seekPermissionMetadata.rawValue }
+
+    /// The operation's effective value after applying its BRC-100 default.
+    public var effectiveSeekPermission: Bool? { seekPermissionMetadata.effectiveValue }
+
     public var description: String { "<redacted wallet request call \(call.rawValue)>" }
     public var debugDescription: String { description }
     public var customMirror: Mirror { Mirror(self, children: ["call": call.rawValue]) }
+}
+
+private func makeSeekPermissionMetadata(
+    rawValue: Bool?,
+    defaultValue: Bool
+) -> WalletSeekPermissionMetadata {
+    WalletSeekPermissionMetadata(
+        rawValue: rawValue,
+        effectiveValue: rawValue ?? defaultValue
+    )
 }
 
 /// A typed result from any of the 28 BRC-100 wallet operations.

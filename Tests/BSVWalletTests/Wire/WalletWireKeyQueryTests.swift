@@ -150,6 +150,41 @@ final class WalletWireKeyQueryTests: XCTestCase {
         }
     }
 
+    func testSeekPermissionPreservesAbsentFalseAndTrueOnWire() throws {
+        let protocolID = try walletTestProtocol("seek permission")
+        let keyID = try walletTestKeyID("wire-key")
+
+        for (rawValue, encodedValue): (Bool?, UInt8) in [
+            (nil, 0xFF),
+            (false, 0),
+            (true, 1),
+        ] {
+            let request = WalletWireKeyQueryRequest.encrypt(WalletEncryptRequest(
+                protocolID: protocolID,
+                keyID: keyID,
+                plaintext: [],
+                access: try WalletKeyAccess(seekPermission: rawValue)
+            ))
+            let bytes = try WalletWireCodec.encodeKeyQueryRequest(request, originator: "")
+            let frame = try WalletWireCodec.decodeRequestFrame(bytes)
+            XCTAssertEqual(frame.parameters.last, encodedValue)
+
+            let decoded = try WalletWireCodec.decodeKeyQueryRequest(bytes)
+            guard case .encrypt(let value) = decoded.request else {
+                XCTFail("wrong request type")
+                continue
+            }
+            XCTAssertEqual(value.access.seekPermission, rawValue)
+            XCTAssertEqual(
+                try WalletWireCodec.encodeKeyQueryRequest(
+                    decoded.request,
+                    originator: decoded.originator
+                ),
+                bytes
+            )
+        }
+    }
+
     func testAbsentForSelfNormalizesToExplicitFalse() throws {
         let protocolID = try walletTestProtocol("wire normalization")
         let keyID = try walletTestKeyID("wire-key")

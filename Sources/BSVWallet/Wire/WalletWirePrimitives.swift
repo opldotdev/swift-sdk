@@ -412,7 +412,7 @@ func walletWireDecodeKeyParameters(
     )
 }
 
-func walletWireAccessWithSeek(_ access: WalletKeyAccess, seek: Bool) throws -> WalletKeyAccess {
+func walletWireAccessWithSeek(_ access: WalletKeyAccess, seek: Bool?) throws -> WalletKeyAccess {
     do {
         return try WalletKeyAccess(
             privileged: access.privileged,

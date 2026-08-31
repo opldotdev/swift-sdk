@@ -184,6 +184,14 @@ struct WalletABITests {
         }
     }
 
+    @Test("key access preserves tri-state permission metadata")
+    func keyAccessPermissionMetadata() throws {
+        #expect(WalletKeyAccess.standard.seekPermission == nil)
+        #expect(try WalletKeyAccess(seekPermission: nil).seekPermission == nil)
+        #expect(try WalletKeyAccess(seekPermission: false).seekPermission == false)
+        #expect(try WalletKeyAccess(seekPermission: true).seekPermission == true)
+    }
+
     @Test("tagged unions reject every contradictory representation")
     func unionContradictions() throws {
         let outpoint = testOutpoint(index: 0)
