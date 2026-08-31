@@ -8,6 +8,116 @@ import Glibc
 let goOracleSchema = "bsv-conformance/1"
 let goOracleMaximumLineBytes = 1 << 20
 
+// Coordinate launch and every termination request through one child lifecycle.
+private final class GoOracleProcessLifecycle: @unchecked Sendable {
+    private enum State {
+        case starting
+        case gracefulPending
+        case running(pid: Int32)
+        case gracefulRequested(pid: Int32)
+        case forceRequested(pid: Int32)
+        case exited
+    }
+
+    private let lock = NSLock()
+    private weak var process: Process?
+    private var state = State.starting
+
+    init(process: Process) {
+        self.process = process
+    }
+
+    func markStarted() {
+        lock.withLock {
+            let pending: Bool
+            switch state {
+            case .starting: pending = false
+            case .gracefulPending: pending = true
+            case .running, .gracefulRequested, .forceRequested, .exited: return
+            }
+            guard let process else {
+                state = .exited
+                return
+            }
+            let pid = process.processIdentifier
+            guard pid > 0,
+                  process.isRunning else {
+                state = .exited
+                return
+            }
+            if pending {
+                state = .gracefulRequested(pid: pid)
+                process.terminate()
+            } else {
+                state = .running(pid: pid)
+            }
+        }
+    }
+
+    func requestGracefulTermination() {
+        lock.withLock {
+            switch state {
+            case .starting:
+                state = .gracefulPending
+                return
+            case .gracefulPending, .gracefulRequested, .forceRequested, .exited:
+                return
+            case .running(let pid):
+                guard let process,
+                      process.processIdentifier == pid,
+                      process.isRunning else {
+                    state = .exited
+                    return
+                }
+                state = .gracefulRequested(pid: pid)
+                process.terminate()
+            }
+        }
+    }
+
+    func requestForceTermination() {
+        lock.withLock {
+            let pid: Int32
+            switch state {
+            case .running(let value), .gracefulRequested(let value): pid = value
+            case .starting, .gracefulPending, .forceRequested, .exited: return
+            }
+            guard pid > 0,
+                  let process,
+                  process.processIdentifier == pid,
+                  process.isRunning else {
+                state = .exited
+                return
+            }
+            state = .forceRequested(pid: pid)
+            _ = kill(pid, SIGKILL)
+        }
+    }
+
+    func markExited() {
+        lock.withLock { state = .exited }
+    }
+
+    var isRunning: Bool {
+        lock.withLock {
+            let pid: Int32
+            switch state {
+            case .running(let value), .gracefulRequested(let value), .forceRequested(let value):
+                pid = value
+            case .starting, .gracefulPending, .exited:
+                return false
+            }
+            guard let process,
+                  process.processIdentifier == pid,
+                  process.isRunning else {
+                state = .exited
+                return false
+            }
+            return true
+        }
+    }
+}
+
 enum GoOracleJSON: Codable, Equatable, Sendable {
     case string(String)
     case bool(Bool)
@@ -269,12 +379,14 @@ final class GoOracleClient: @unchecked Sendable {
     private let responseReader: GoOracleLineReader
     private let diagnostics: LockedData
     private let terminated: DispatchSemaphore
+    private let lifecycle: GoOracleProcessLifecycle
     let metadata: GoOracleMetadata
 
     private init(
         configuration: GoOracleConfiguration, metadata: GoOracleMetadata, process: Process,
         stdin: FileHandle, stdout: FileHandle, stderr: FileHandle,
-        responseReader: GoOracleLineReader, diagnostics: LockedData, terminated: DispatchSemaphore
+        responseReader: GoOracleLineReader, diagnostics: LockedData, terminated: DispatchSemaphore,
+        lifecycle: GoOracleProcessLifecycle
     ) {
         self.configuration = configuration
         self.metadata = metadata
@@ -285,6 +397,7 @@ final class GoOracleClient: @unchecked Sendable {
         self.responseReader = responseReader
         self.diagnostics = diagnostics
         self.terminated = terminated
+        self.lifecycle = lifecycle
     }
 
     static func connect(configuration: GoOracleConfiguration = .default()) throws -> GoOracleAvailability {
@@ -380,18 +493,20 @@ final class GoOracleClient: @unchecked Sendable {
         let reader = GoOracleLineReader(maximumBytes: goOracleMaximumLineBytes)
         let diagnostics = LockedData(maximumBytes: goOracleMaximumLineBytes)
         let terminated = DispatchSemaphore(value: 0)
+        let lifecycle = GoOracleProcessLifecycle(process: process)
         outputPipe.fileHandleForReading.readabilityHandler = { handle in
-            if !reader.append(handle.availableData) { process.terminate() }
+            if !reader.append(handle.availableData) { lifecycle.requestGracefulTermination() }
         }
         errorPipe.fileHandleForReading.readabilityHandler = { handle in
             if !diagnostics.append(handle.availableData) {
                 reader.fail(with: .transport("oracle diagnostics exceeded 1 MiB"))
-                process.terminate()
+                lifecycle.requestGracefulTermination()
             }
         }
         let outputHandle = outputPipe.fileHandleForReading
         let errorHandle = errorPipe.fileHandleForReading
         process.terminationHandler = { process in
+            lifecycle.markExited()
             outputHandle.readabilityHandler = nil
             errorHandle.readabilityHandler = nil
             _ = reader.append(outputHandle.readDataToEndOfFile())
@@ -404,15 +519,17 @@ final class GoOracleClient: @unchecked Sendable {
         }
         do { try process.run() }
         catch {
+            lifecycle.markExited()
             outputPipe.fileHandleForReading.readabilityHandler = nil
             errorPipe.fileHandleForReading.readabilityHandler = nil
             throw GoOracleClientError.transport("could not start oracle serve process: \(error)")
         }
+        lifecycle.markStarted()
         return GoOracleClient(
             configuration: configuration, metadata: metadata, process: process,
             stdin: inputPipe.fileHandleForWriting, stdout: outputPipe.fileHandleForReading,
             stderr: errorPipe.fileHandleForReading, responseReader: reader,
-            diagnostics: diagnostics, terminated: terminated
+            diagnostics: diagnostics, terminated: terminated, lifecycle: lifecycle
         )
     }
 
@@ -424,10 +541,10 @@ final class GoOracleClient: @unchecked Sendable {
     }
 
     private func stopProcess(terminateFirst: Bool) {
-        guard process.isRunning else { return }
-        if terminateFirst { process.terminate() }
+        if terminateFirst { lifecycle.requestGracefulTermination() }
+        guard lifecycle.isRunning else { return }
         if terminated.wait(timeout: .now() + 2) == .timedOut {
-            _ = kill(process.processIdentifier, SIGKILL)
+            lifecycle.requestForceTermination()
             _ = terminated.wait(timeout: .now() + 0.25)
         }
     }
@@ -485,9 +602,17 @@ final class GoOracleClient: @unchecked Sendable {
         let outputFinished = DispatchSemaphore(value: 0)
         let diagnosticsFinished = DispatchSemaphore(value: 0)
         let completed = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in completed.signal() }
+        let lifecycle = GoOracleProcessLifecycle(process: process)
+        process.terminationHandler = { _ in
+            lifecycle.markExited()
+            completed.signal()
+        }
         do { try process.run() }
-        catch { throw GoOracleClientError.transport("could not start oracle: \(error)") }
+        catch {
+            lifecycle.markExited()
+            throw GoOracleClientError.transport("could not start oracle: \(error)")
+        }
+        lifecycle.markStarted()
 
         func drain(
             _ handle: FileHandle,
@@ -500,13 +625,13 @@ final class GoOracleClient: @unchecked Sendable {
                 do {
                     while let chunk = try handle.read(upToCount: 64 * 1_024), !chunk.isEmpty {
                         guard destination.append(chunk) else {
-                            process.terminate()
+                            lifecycle.requestGracefulTermination()
                             return
                         }
                     }
                 } catch {
                     reads.set(label: label, error: error)
-                    process.terminate()
+                    lifecycle.requestGracefulTermination()
                 }
             }
         }
@@ -524,13 +649,13 @@ final class GoOracleClient: @unchecked Sendable {
         )
         if let input {
             do { try stdin.fileHandleForWriting.write(contentsOf: input); try stdin.fileHandleForWriting.close() }
-            catch { process.terminate(); throw GoOracleClientError.transport("could not write request: \(error)") }
+            catch { lifecycle.requestGracefulTermination(); throw GoOracleClientError.transport("could not write request: \(error)") }
         }
 
         if completed.wait(timeout: .now() + configuration.startupDeadline) == .timedOut {
-            process.terminate()
+            lifecycle.requestGracefulTermination()
             if completed.wait(timeout: .now() + 2) == .timedOut {
-                _ = kill(process.processIdentifier, SIGKILL)
+                lifecycle.requestForceTermination()
                 _ = completed.wait(timeout: .now() + 0.25)
             }
             _ = outputFinished.wait(timeout: .now() + 2)

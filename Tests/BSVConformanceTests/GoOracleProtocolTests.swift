@@ -149,6 +149,27 @@ struct GoOracleProtocolTests {
         }
     }
 
+    @Test("Concurrent stdout and stderr shutdown requests race normal exit safely")
+    func concurrentShutdownRace() throws {
+        for iteration in 0..<12 {
+            let script = try fakeOracle(metadata: validMetadata(), serve: .concurrentOutputExit)
+            let client = try requireClient(script)
+            #expect(throws: GoOracleClientError.self) {
+                try client.request(
+                    id: "race-\(iteration)",
+                    operation: "metadata",
+                    arguments: [:]
+                )
+            }
+            client.close()
+
+            let marker = URL(fileURLWithPath: script.path + ".serve-count")
+            let children = try String(contentsOf: marker, encoding: .utf8)
+                .split(separator: "\n")
+            #expect(children.count == 1)
+        }
+    }
+
     @Test("Timeout terminates the child within the two-second grace")
     func timeout() throws {
         let script = try fakeOracle(metadata: validMetadata(), serve: .hang)
@@ -285,7 +306,7 @@ struct GoOracleProtocolTests {
 
 enum ServeBehavior: String, CaseIterable, Sendable {
     case success, sameChild, operationError, unknownID, twoLines, invalidJSON, overlong, hang, noRead, exitSeven
-    case unknownResponseField, unknownErrorField
+    case unknownResponseField, unknownErrorField, concurrentOutputExit
 }
 
 private func validMetadata() -> GoOracleMetadata {
@@ -356,6 +377,8 @@ private func fakeOracle(
         serve = "printf '%s\\n' '{\"schema\":\"bsv-conformance/1\",\"id\":\"one\",\"ok\":true,\"result\":{},\"unknown\":true}'"
     case .unknownErrorField:
         serve = "printf '%s\\n' '{\"schema\":\"bsv-conformance/1\",\"id\":\"one\",\"ok\":false,\"error\":{\"category\":\"internal\",\"message\":\"x\",\"unknown\":true}}'"
+    case .concurrentOutputExit:
+        serve = "printf '%s\\n' \"$$\" >> \"$0.serve-count\"; (/usr/bin/yes o | /usr/bin/head -c 1048577) & (/usr/bin/yes e | /usr/bin/head -c 1048577 >&2) & wait; exit 0"
     }
     let metadataCommand: String
     if let metadataExitDiagnostic {
