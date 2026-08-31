@@ -37,6 +37,7 @@ struct WalletABITests {
         #expect(try WalletTrustSelf("known") == .known)
         #expect(try WalletActionResultStatus("failed") == .failed)
         #expect(try WalletActionStatus("nonfinal") == .nonfinal)
+        #expect(try WalletActionStatus("failed") == .failed)
         #expect(try WalletQueryMode("any") == .any)
         #expect(try WalletOutputInclude("locking scripts") == .lockingScripts)
         #expect(try WalletNetwork("mainnet") == .mainnet)

@@ -23,7 +23,7 @@ public enum WalletActionResultStatus: String, CaseIterable, Codable, Sendable {
 }
 
 public enum WalletActionStatus: String, CaseIterable, Codable, Sendable {
-    case completed, unprocessed, sending, unproven, unsigned, nosend, nonfinal
+    case completed, unprocessed, sending, unproven, unsigned, nosend, nonfinal, failed
     public init(_ text: String) throws {
         guard let value = Self(rawValue: text) else {
             throw WalletABIError.invalidEnumText(type: "WalletActionStatus", value: text)

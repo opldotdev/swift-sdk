@@ -280,6 +280,7 @@ private extension WalletWireCodec {
         case .unsigned: 5
         case .nosend: 6
         case .nonfinal: 7
+        case .failed: 8
         }
     }
 
@@ -292,6 +293,7 @@ private extension WalletWireCodec {
         case 5: .unsigned
         case 6: .nosend
         case 7: .nonfinal
+        case 8: .failed
         default: throw WalletWireError.invalidDiscriminator(kind: "action status", value: value)
         }
     }

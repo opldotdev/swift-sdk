@@ -181,7 +181,7 @@ struct WalletWireActionTests {
         let action = try WalletAction(
             transactionID: id,
             satoshis: -12,
-            status: .completed,
+            status: .failed,
             isOutgoing: true,
             description: "sent",
                 labels: ["label", ""],
