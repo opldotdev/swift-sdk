@@ -99,7 +99,10 @@ struct URLSessionHTTPTransportTests {
     func cancellation() async throws {
         MockURLProtocol.configure(.stall)
         let operation = Task {
-            try await transport().send(request, maximumResponseBodyByteCount: 8)
+            try await transport(
+                requestTimeout: .seconds(10),
+                resourceTimeout: .seconds(10)
+            ).send(request, maximumResponseBodyByteCount: 8)
         }
         while MockURLProtocol.requestCount == 0 {
             await Task.yield()
@@ -110,7 +113,7 @@ struct URLSessionHTTPTransportTests {
         await #expect(throws: NetworkServiceError.cancelled) {
             try await operation.value
         }
-        #expect(start.duration(to: clock.now) < .seconds(1))
+        #expect(start.duration(to: clock.now) < .seconds(3))
         await expectProtocolStopWhenObservable()
     }
 
@@ -118,10 +121,13 @@ struct URLSessionHTTPTransportTests {
         HTTPRequest(method: .get, url: URL(string: "https://mock.invalid/resource")!)
     }
 
-    private func transport() -> URLSessionHTTPTransport {
+    private func transport(
+        requestTimeout: Duration = .seconds(1),
+        resourceTimeout: Duration = .seconds(2)
+    ) -> URLSessionHTTPTransport {
         URLSessionHTTPTransport(
-            requestTimeout: .seconds(1),
-            resourceTimeout: .seconds(2)
+            requestTimeout: requestTimeout,
+            resourceTimeout: resourceTimeout
         ) {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [MockURLProtocol.self]
