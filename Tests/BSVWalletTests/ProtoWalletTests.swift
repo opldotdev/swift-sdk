@@ -62,6 +62,52 @@ final class ProtoWalletTests: XCTestCase {
         XCTAssertEqual(hmac, [81,240,18,153,163,45,174,85,9,246,142,125,209,133,82,76,254,103,46,182,86,59,219,61,126,30,176,232,233,100,234,14])
     }
 
+    func testWalletInternalAdminMetadataEncryptionVector() async throws {
+        let root = try walletTestPrivateKey(42)
+        let protocolID = try WalletProtocolID.walletInternalAdmin(
+            securityLevel: .everyAppAndCounterparty,
+            name: "admin metadata encryption"
+        )
+        let keyID = try WalletKeyID("1")
+        let nonce = (0..<32).map { UInt8($0) }
+        let plaintext = Array("Yours Wallet metadata".utf8)
+        // Pinned against live @bsv/sdk 2.1.6 KeyDeriver/ProtoWallet using
+        // invoice `2-admin metadata encryption-1` and counterparty `self`.
+        XCTAssertEqual(
+            Hex.encode(try WalletKeyDeriver(rootKey: root).deriveSymmetricKey(
+                protocolID: protocolID,
+                keyID: keyID,
+                counterparty: .self
+            ).bytes),
+            "0070b653097c3ff272c94e9e9aa6ccdbd2bd93ead043b7f2c8e79025f2649480"
+        )
+        let wallet = ProtoWallet(
+            rootKey: root,
+            randomSource: FixedRandomSource(bytes: nonce, throwsError: false)
+        )
+
+        let ciphertext = try await wallet.encrypt(WalletEncryptRequest(
+            protocolID: protocolID,
+            keyID: keyID,
+            counterparty: .self,
+            plaintext: plaintext
+        )).ciphertext
+        XCTAssertEqual(
+            Hex.encode(ciphertext),
+            "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+                + "807fec26e74ee6626d38e9fd233e99da007e19d43997557b81ce0d4165636f0f"
+                + "20fb1ca5be"
+        )
+
+        let decrypted = try await ProtoWallet(rootKey: root).decrypt(WalletDecryptRequest(
+            protocolID: protocolID,
+            keyID: keyID,
+            counterparty: .self,
+            ciphertext: ciphertext
+        )).plaintext
+        XCTAssertEqual(decrypted, plaintext)
+    }
+
     func testPublishedBRC3SignatureAndRoundTrips() async throws {
         let (_, counterparty, _, keyID) = try brcValues()
         let protocolID = try WalletProtocolID(securityLevel: .everyAppAndCounterparty, name: "BRC3 Test")

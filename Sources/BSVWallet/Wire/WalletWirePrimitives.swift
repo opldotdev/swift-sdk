@@ -268,6 +268,9 @@ func walletWireEncodeProtocol(
     to writer: inout WalletWireWriter,
     limits: WalletWireLimits
 ) throws {
+    guard !protocolID.name.hasPrefix("admin") else {
+        throw WalletWireError.nonRoundTrippableValue(kind: "BRC-44 wallet-internal protocol identifier")
+    }
     try walletWireRequireText(
         protocolID.name,
         kind: "protocol name",

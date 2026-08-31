@@ -28,6 +28,7 @@ public enum WalletValidationError: Error, Equatable, Sendable {
     case consecutiveProtocolSpaces
     case redundantProtocolSuffix
     case reservedAdminProtocol
+    case walletInternalProtocolRequiresAdminPrefix
     case keyIDTooShort
     case keyIDTooLong(actualUTF8ByteCount: Int, maximum: Int)
     case privilegedReasonTooLong(actualUTF8ByteCount: Int, maximum: Int)
@@ -49,6 +50,38 @@ public struct WalletProtocolID: Hashable, Codable, Sendable {
     public let name: String
 
     public init(securityLevel: WalletSecurityLevel, name: String) throws {
+        let normalized = try Self.canonicalName(name)
+        guard !normalized.hasPrefix("admin") else {
+            throw WalletValidationError.reservedAdminProtocol
+        }
+
+        self.securityLevel = securityLevel
+        self.name = normalized
+    }
+
+    /// Constructs a BRC-44 reserved protocol for trusted wallet software.
+    ///
+    /// This is intentionally separate from the normal initializer. Values
+    /// created here can be used for in-process wallet cryptography, but their
+    /// Codable and wallet-wire encoders reject them so they cannot cross an
+    /// external BRC-100 boundary accidentally.
+    public static func walletInternalAdmin(
+        securityLevel: WalletSecurityLevel,
+        name: String
+    ) throws -> Self {
+        let normalized = try canonicalName(name)
+        guard normalized.hasPrefix("admin") else {
+            throw WalletValidationError.walletInternalProtocolRequiresAdminPrefix
+        }
+        return Self(securityLevel: securityLevel, canonicalName: normalized)
+    }
+
+    private init(securityLevel: WalletSecurityLevel, canonicalName: String) {
+        self.securityLevel = securityLevel
+        self.name = canonicalName
+    }
+
+    private static func canonicalName(_ name: String) throws -> String {
         let source = Array(name.utf8)
         let start = source.firstIndex(where: { !Self.isASCIIWhitespace($0) }) ?? source.endIndex
         let end: Int
@@ -94,12 +127,7 @@ public struct WalletProtocolID: Hashable, Codable, Sendable {
         guard !normalized.hasSuffix(" protocol") else {
             throw WalletValidationError.redundantProtocolSuffix
         }
-        guard !normalized.hasPrefix("admin") else {
-            throw WalletValidationError.reservedAdminProtocol
-        }
-
-        self.securityLevel = securityLevel
-        self.name = normalized
+        return normalized
     }
 
     public init(from decoder: Decoder) throws {
@@ -122,6 +150,15 @@ public struct WalletProtocolID: Hashable, Codable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
+        guard !name.hasPrefix("admin") else {
+            throw EncodingError.invalidValue(
+                self,
+                EncodingError.Context(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "BRC-44 admin protocols are wallet-internal and cannot be encoded"
+                )
+            )
+        }
         var container = encoder.unkeyedContainer()
         try container.encode(securityLevel)
         try container.encode(name)
