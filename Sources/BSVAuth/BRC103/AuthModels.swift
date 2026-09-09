@@ -288,8 +288,28 @@ public struct AuthLimits: Equatable, Sendable {
     public static let standard = AuthLimits(standard: ())
 }
 
-public enum AuthError: Error, Equatable, Sendable {
+public enum AuthError: Error, Equatable, Sendable, LocalizedError {
     case invalidMessage, invalidNonce, invalidSignature, replay, sessionNotFound, unexpectedMessage,
         peerMismatch, notAuthenticated, certificateExchangeUnavailable, invalidCertificateRequest,
         certificateValidationFailed, resourceLimit, handshakeTimedOut, randomGenerationFailed
+
+    public var errorDescription: String? {
+        switch self {
+        case .notAuthenticated:
+            "Not authenticated with the storage server."
+        case .sessionNotFound:
+            "The storage session is no longer valid."
+        case .resourceLimit:
+            "The storage session reached its message limit."
+        case .handshakeTimedOut:
+            "Authentication with the storage server timed out."
+        case .invalidSignature, .replay, .peerMismatch:
+            "The storage server could not be verified."
+        case .invalidMessage, .invalidNonce, .unexpectedMessage, .invalidCertificateRequest,
+            .certificateValidationFailed, .certificateExchangeUnavailable:
+            "The storage server sent an invalid authentication message."
+        case .randomGenerationFailed:
+            "A secure random value could not be generated."
+        }
+    }
 }
