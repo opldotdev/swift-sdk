@@ -156,6 +156,40 @@ final class WalletBRC100JSONCodecTests: XCTestCase {
         XCTAssertThrowsError(try codec.decodeRequest(route: route, from: Array("{".utf8)))
     }
 
+    /// The direct acquisition a certifier hands a web page, as `toDirectAcquireArgs` in
+    /// b-open-io/1sat-sdk builds it: `keyringRevealer: 'certifier'`, plus a `subject` the wallet
+    /// ignores. `@bsv/sdk` types the revealer as `'certifier' | PubKeyHex` and requires it.
+    func testDirectCertificateKeyringRevealerIsCertifierOrPublicKey() throws {
+        let codec = try makeCodec()
+        let fixture = try WalletWireCertificateFixture()
+        let route = try XCTUnwrap(WalletJSONRoute(methodName: "acquireCertificate"))
+        func json(revealer: String?) -> String {
+            let revealerMember = revealer.map { ",\"keyringRevealer\":\"\($0)\"" } ?? ""
+            return "{\"type\":\"\(fixture.type.base64)\",\"certifier\":\"\(Hex.encode(fixture.certifier.compressedBytes))\",\"acquisitionProtocol\":\"direct\",\"fields\":{\"alpha\":\"CQg=\"},\"serialNumber\":\"\(fixture.serial.base64)\",\"revocationOutpoint\":\"\(fixture.outpoint)\",\"signature\":\"\(Hex.encode(fixture.signature.derBytes))\"\(revealerMember),\"keyringForSubject\":{\"alpha\":\"AQI=\"},\"subject\":\"\(Hex.encode(fixture.subject.compressedBytes))\"}"
+        }
+
+        let certifierRequest = try codec.decodeRequest(route: route, from: Array(json(revealer: "certifier").utf8))
+        guard case .certificate(.acquireCertificate(let acquisition)) = certifierRequest,
+              case .direct(let direct) = acquisition.acquisition else { return XCTFail("not a direct acquisition") }
+        XCTAssertEqual(direct.keyringRevealer, .certifier)
+        XCTAssertEqual(acquisition.fields[fixture.alpha], "CQg=")
+        let encoded = String(decoding: try codec.encodeRequest(certifierRequest), as: UTF8.self)
+        XCTAssertTrue(encoded.contains("\"keyringRevealer\":\"certifier\""), encoded)
+        XCTAssertFalse(encoded.contains("\"subject\""), encoded)
+
+        let verifierHex = Hex.encode(fixture.verifier.compressedBytes)
+        let keyRequest = try codec.decodeRequest(route: route, from: Array(json(revealer: verifierHex).utf8))
+        guard case .certificate(.acquireCertificate(let keyAcquisition)) = keyRequest,
+              case .direct(let keyDirect) = keyAcquisition.acquisition else { return XCTFail("not a direct acquisition") }
+        XCTAssertEqual(keyDirect.keyringRevealer, .publicKey(fixture.verifier))
+        let keyEncoded = String(decoding: try codec.encodeRequest(keyRequest), as: UTF8.self)
+        XCTAssertTrue(keyEncoded.contains("\"keyringRevealer\":\"\(verifierHex)\""), keyEncoded)
+
+        XCTAssertThrowsError(try codec.decodeRequest(route: route, from: Array(json(revealer: nil).utf8)))
+        XCTAssertThrowsError(try codec.decodeRequest(route: route, from: Array(json(revealer: "Certifier").utf8)))
+        XCTAssertThrowsError(try codec.decodeRequest(route: route, from: Array(json(revealer: "").utf8)))
+    }
+
     func testCertificateCiphertextUsesCanonicalBase64AcrossJSONRoutes() throws {
         let raw: [UInt8] = [0x00, 0xff, 0x80, 0x01, 0x7f, 0xa5, 0x42, 0xc3]
         let expectedBase64 = "AP+AAX+lQsM="
