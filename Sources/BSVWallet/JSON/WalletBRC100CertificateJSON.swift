@@ -105,6 +105,8 @@ private struct RevealSpecificResultDTO: Codable {
 }
 
 private struct AcquireCertificateDTO: Codable {
+    /// `KeyringRevealer` in `@bsv/sdk` is `'certifier' | PubKeyHex`, and a direct acquisition must name one.
+    static let certifierRevealer = "certifier"
     let type: CertificateTypeID; let certifier: String; let acquisitionProtocol: WalletCertificateAcquisitionProtocol
     let fields: [String: String]; let serialNumber: CertificateSerialNumber?; let revocationOutpoint: String?
     let signature: String?; let certifierUrl: String?; let keyringRevealer: String?
@@ -117,7 +119,7 @@ private struct AcquireCertificateDTO: Codable {
         case .direct(let direct):
             serialNumber = direct.serialNumber; revocationOutpoint = direct.revocationOutpoint.description
             signature = Hex.encode(direct.signature.derBytes); certifierUrl = nil
-            switch direct.keyringRevealer { case .certifier: keyringRevealer = nil; case .publicKey(let key): keyringRevealer = Hex.encode(key.compressedBytes) }
+            switch direct.keyringRevealer { case .certifier: keyringRevealer = Self.certifierRevealer; case .publicKey(let key): keyringRevealer = Hex.encode(key.compressedBytes) }
             keyringForSubject = Dictionary(uniqueKeysWithValues: direct.keyringForSubject.map { ($0.key.value, $0.value) })
         case .issuance(let issuance):
             serialNumber = nil; revocationOutpoint = nil; signature = nil; certifierUrl = issuance.certifierURL
@@ -130,11 +132,13 @@ private struct AcquireCertificateDTO: Codable {
         let acquisition: WalletCertificateAcquisition
         switch acquisitionProtocol {
         case .direct:
-            guard let serialNumber, let revocationOutpoint, let signature, let keyringForSubject else { throw WalletJSONCodecError.invalidJSON }
+            guard let serialNumber, let revocationOutpoint, let signature, let keyringRevealer, let keyringForSubject else { throw WalletJSONCodecError.invalidJSON }
             let signatureBytes = try decodeCanonicalHex(signature, maximum: 72)
             let parsedSignature = try ECDSASignature(derBytes: signatureBytes)
             guard parsedSignature.derBytes == signatureBytes else { throw WalletJSONCodecError.invalidJSON }
-            let revealer: WalletKeyringRevealer = try keyringRevealer.map { .publicKey(try decodeWalletJSONPublicKey($0)) } ?? .certifier
+            let revealer: WalletKeyringRevealer = keyringRevealer == Self.certifierRevealer
+                ? .certifier
+                : .publicKey(try decodeWalletJSONPublicKey(keyringRevealer))
             let keyring = try dictionaryCiphertexts(keyringForSubject, limits: codec.certificateLimits)
             acquisition = .direct(try .init(serialNumber: serialNumber, revocationOutpoint: .init(revocationOutpoint), signature: parsedSignature, keyringRevealer: revealer, keyringForSubject: keyring, limits: codec.abiLimits))
         case .issuance:
