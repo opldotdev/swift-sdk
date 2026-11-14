@@ -346,8 +346,9 @@ Run the complete Swift test suite:
 swift test --disable-sandbox
 ```
 
-GitHub Actions runs the test suite on macOS and Linux. It also checks the
-public API and compares supported wire behavior with the pinned Go SDK v1.3.3.
+CircleCI runs the test suite and the public API check on macOS (Xcode 26).
+GitHub Actions runs them on Linux, and also compares supported wire behavior
+with the pinned Go SDK v1.3.3. Mac builds never run on GitHub Actions.
 
 ## Code standards
 
