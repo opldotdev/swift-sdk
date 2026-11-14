@@ -26,7 +26,10 @@ struct WhatsOnChainBroadcasterTests {
             #expect(request.method == .post)
             #expect(request.url.absoluteString ==
                 "https://api.whatsonchain.com/v1/bsv/\(networkPath)/tx/raw")
-            #expect(request.headers == ["Content-Type": "application/json"])
+            #expect(request.headers == [
+                "Content-Type": "application/json",
+                "Accept": "text/plain",
+            ])
             #expect(request.body == Data(
                 "{\"txhex\":\"01000000000000000000\"}".utf8
             ))
@@ -50,9 +53,82 @@ struct WhatsOnChainBroadcasterTests {
         #expect(await transport.attemptCount() == 1)
     }
 
+    @Test("accepts WhatsOnChain's JSON string transaction ID", arguments: [
+        "plain", "trailing-newline", "surrounding-whitespace",
+    ])
+    func quotedSuccess(_ kind: String) async throws {
+        let transaction = Transaction(version: 2, lockTime: 9)
+        let limits = try testLimits()
+        let transactionID = try transaction.transactionID(limits: limits)
+        let quoted = "\"\(transactionID.displayHex)\""
+        let body: String
+        switch kind {
+        case "plain":
+            body = quoted
+        case "trailing-newline":
+            body = quoted + "\n"
+        default:
+            body = " \t\(quoted)\r\n"
+        }
+        let transport = ScriptedBroadcastTransport([
+            .success(HTTPResponse(
+                statusCode: 200,
+                headers: ["Content-Type": "application/json; charset=utf-8"],
+                body: Data(body.utf8)
+            )),
+        ])
+        let result = try await makeBroadcaster(network: .testnet, transport: transport)
+            .broadcast(transaction, limits: limits)
+
+        #expect(result == BroadcastResult(transactionID: transactionID))
+        #expect(result.message == nil)
+        #expect(await transport.attemptCount() == 1)
+    }
+
+    @Test("treats WhatsOnChain's already-in-mempool rejection as success", arguments: [
+        (500, false), (400, false), (500, true),
+    ])
+    func alreadyInMempool(_ status: Int, _ quoted: Bool) async throws {
+        let transaction = Transaction(version: 2, lockTime: 9)
+        let limits = try testLimits()
+        let transactionID = try transaction.transactionID(limits: limits)
+        let text = "unexpected response code 500: Transaction already in the mempool"
+        let transport = ScriptedBroadcastTransport([
+            .success(response(status: status, body: quoted ? "\"\(text)\"" : text)),
+        ])
+        let result = try await makeBroadcaster(transport: transport)
+            .broadcast(transaction, limits: limits)
+
+        #expect(result == BroadcastResult(
+            transactionID: transactionID,
+            message: "Transaction already in the mempool"
+        ))
+        #expect(await transport.attemptCount() == 1)
+    }
+
+    @Test("provider rejections stay failures with the provider's decoded message", arguments: [
+        "unexpected response code 500: 258: txn-mempool-conflict",
+        "unexpected response code 500: Missing inputs",
+        "unexpected response code 500: 257: txn-already-known",
+        "Transaction already in the mempool",
+    ])
+    func providerRejection(_ text: String) async throws {
+        for body in [text, "\"\(text)\""] {
+            let transport = ScriptedBroadcastTransport([
+                .success(response(status: 400, body: body)),
+            ])
+            await #expect(throws: NetworkServiceError.httpStatus(code: 400, message: text)) {
+                try await makeBroadcaster(transport: transport)
+                    .broadcast(Transaction(), limits: testLimits())
+            }
+            #expect(await transport.attemptCount() == 1)
+        }
+    }
+
     @Test("rejects noncanonical or malformed HTTP 200 bodies", arguments: [
-        "empty", "malformed", "short", "long", "uppercase", "quoted",
-        "mismatched", "unicode-whitespace", "invalid-utf8",
+        "empty", "malformed", "short", "long", "uppercase", "mismatched",
+        "unicode-whitespace", "invalid-utf8", "quoted-uppercase", "quoted-mismatched",
+        "quoted-inner-whitespace", "unterminated-quote", "double-quoted", "json-object",
     ])
     func rejectsInvalidSuccess(_ kind: String) async throws {
         let transaction = Transaction()
@@ -70,13 +146,24 @@ struct WhatsOnChainBroadcasterTests {
             body = Data((localID + "0").utf8)
         case "uppercase":
             body = Data(localID.uppercased().utf8)
-        case "quoted":
-            body = Data("\"\(localID)\"".utf8)
         case "mismatched":
             let replacement = localID.last == "0" ? "1" : "0"
             body = Data((localID.dropLast() + replacement).utf8)
         case "unicode-whitespace":
             body = Data("\u{00a0}\(localID)\u{00a0}".utf8)
+        case "quoted-uppercase":
+            body = Data("\"\(localID.uppercased())\"".utf8)
+        case "quoted-mismatched":
+            let replacement = localID.last == "0" ? "1" : "0"
+            body = Data("\"\(localID.dropLast() + replacement)\"".utf8)
+        case "quoted-inner-whitespace":
+            body = Data("\" \(localID) \"".utf8)
+        case "unterminated-quote":
+            body = Data("\"\(localID)".utf8)
+        case "double-quoted":
+            body = Data("\"\"\(localID)\"\"".utf8)
+        case "json-object":
+            body = Data("{\"txid\":\"\(localID)\"}".utf8)
         default:
             body = Data([0xff])
         }
