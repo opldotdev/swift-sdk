@@ -29,14 +29,28 @@ peer has sent are also charged together against
 `AuthLimits.maximumCertificateAggregateBytes` (33 bytes per certifier, and
 32 per type plus its field names), so one authenticated peer can make a
 session hold no more than one request may hold. A received request identical
-to one already open fails with `AuthError.unexpectedMessage`.
+to one already open fails with `AuthError.unexpectedMessage`; this rule is
+Swift's own, since `@bsv/sdk` keeps one entry per request nonce and accepts
+identical requests. A refused request still uses up its nonce and counts
+against `maximumMessages`, as `Peer.ts:1088-1092` claims the nonce before it
+acts, so it cannot be replayed. The peer sends nothing back when it refuses a
+request, so a Swift sender keeps it open until the caller calls
+`withdrawCertificateRequest(_:using:)`, which `@bsv/sdk` does itself when
+sending fails (`Peer.ts:480-485`).
 
-A response does not name the request it answers. As in `Peer.ts:1229-1241`,
-its signature is verified first; it then settles the oldest certificateRequest
-it fits and the handshake policy only if none fits. An empty response declines
-the oldest open request in the same order, where `@bsv/sdk` leaves its
-requests open (`Peer.ts:1229`); a TypeScript `Peer` without certificates sends
-one empty response per request (`Peer.ts:1117`), so the two stay in step.
+A response does not name the request it answers. As in `Peer.ts:1202-1227`,
+its signature is verified and its nonce claimed before anything else,
+including the refusal of a response when nothing is open. It then settles
+the oldest certificateRequest it fits, or the handshake policy if none fits
+(`Peer.ts:1236-1240`, `:1245`). When it carries certificates that also fit
+the handshake policy, it settles that policy too, as `Peer.ts:1247` marks the
+handshake requirement met whether or not a request matched, and Swift
+returns one certificate-response action for each request settled. The
+sending side settles the same requests. An empty response declines the
+oldest open request in the same order and nothing else, where `@bsv/sdk`
+leaves its requests open (`Peer.ts:1229`); a TypeScript `Peer` without
+certificates sends one empty response per request (`Peer.ts:1117`), so the two
+stay in step.
 `makeCertificateResponse(_:using:answering:)` can name the request being
 answered on the sending side only: the peer still settles the first of its
 own requests the certificates fit. A response that fits no open request, or

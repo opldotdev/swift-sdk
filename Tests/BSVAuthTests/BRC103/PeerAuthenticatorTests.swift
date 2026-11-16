@@ -107,6 +107,49 @@ struct PeerAuthenticatorTests {
         #expect(await expiring.session(start.sessionID) == nil)
     }
 
+    @Test("a general message at the default payload limit is signed and verified")
+    func defaultPayloadLimitThroughTheWallet() async throws {
+        // `AuthLimits` and the default wallet share one bound, so whatever
+        // the authenticator accepts, `ProtoWallet` can sign and verify.
+        #expect(AuthLimits.defaultPayloadBytes == WalletCryptoLimits.defaultPayloadByteCount)
+        #expect(AuthLimits.standard.maximumPayloadBytes == (16 << 20) + (512 << 10))
+        let aKey = try privateKey(3)
+        let bKey = try privateKey(7)
+        let a = PeerAuthenticator(wallet: ProtoWallet(rootKey: aKey))
+        let b = PeerAuthenticator(wallet: ProtoWallet(rootKey: bKey))
+        let start = try await a.beginAuthentication(with: bKey.publicKey)
+        _ = try await a.receive(try sentMessage(try await b.receive(try sentMessage(start.actions))))
+        let payload = [UInt8](repeating: 0x2a, count: AuthLimits.defaultPayloadBytes)
+        let message = try sentMessage([
+            try await a.makeGeneralMessage(payload: payload, using: start.sessionID)
+        ])
+        guard case .deliver(let delivered) = try await b.receive(message).first else {
+            Issue.record("the general message was not delivered")
+            return
+        }
+        #expect(delivered.payload.count == AuthLimits.defaultPayloadBytes)
+
+        // One byte more is refused on both sides, before the wallet is asked.
+        await #expect(throws: AuthError.resourceLimit) {
+            try await a.makeGeneralMessage(payload: payload + [0], using: start.sessionID)
+        }
+        let larger = AuthLimits.defaultPayloadBytes + 1
+        let wide = PeerAuthenticator(
+            wallet: ProtoWallet(
+                rootKey: aKey, limits: try WalletCryptoLimits(maximumPayloadByteCount: larger)),
+            limits: try AuthLimits(maximumPayloadBytes: larger))
+        let wideStart = try await wide.beginAuthentication(with: bKey.publicKey)
+        _ = try await wide.receive(
+            try sentMessage(try await b.receive(try sentMessage(wideStart.actions))))
+        let oversized = try sentMessage([
+            try await wide.makeGeneralMessage(payload: payload + [0], using: wideStart.sessionID)
+        ])
+        // `AuthMessageCodec.validate` refuses it before the signature is checked.
+        await #expect(throws: AuthError.invalidMessage) {
+            try await b.receive(oversized)
+        }
+    }
+
     @Test("redacts authentication values")
     func redaction() async throws {
         let peer = PeerAuthenticator(wallet: ProtoWallet(rootKey: try privateKey(3)))

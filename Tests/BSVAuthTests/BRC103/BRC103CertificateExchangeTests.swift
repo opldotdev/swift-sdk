@@ -331,7 +331,7 @@ struct BRC103CertificateExchangeTests {
         #expect(received.requested == first)
     }
 
-    @Test("a certificateRequest is settled before the handshake policy, as in Peer.ts")
+    @Test("a response fitting a certificateRequest and the handshake policy settles both, as in Peer.ts")
     func requestBeforeHandshakePolicy() async throws {
         let requesterKey = try key(3)
         let peerKey = try key(7)
@@ -350,30 +350,62 @@ struct BRC103CertificateExchangeTests {
         _ = try await peer.receive(
             try sent(try await requester.makeCertificateRequest(request, using: session.requester)))
 
-        // The certificate fits both. `Peer.ts:1236-1241` takes the
-        // certificateRequest first, and both sides now agree on that.
+        // The certificate fits both. `Peer.ts:1240` validates it against
+        // the certificateRequest, `:1245` settles that request and `:1247`
+        // counts the handshake policy as answered too.
         let certificate = try fixtureCertificate(
             subject: peerKey.publicKey, certifier: certifierKey.publicKey, type: type, field: name)
         let answer = try sent(
             try await peer.makeCertificateResponse([certificate], using: session.peer))
-        guard case .certificateResponse(let first) = try await requester.receive(answer).first
-        else {
-            Issue.record("missing certificate response")
-            return
+        let actions = try await requester.receive(answer)
+        let settled = actions.compactMap { action -> AuthRequestedCertificateSet? in
+            guard case .certificateResponse(let response) = action else { return nil }
+            #expect(response.certificates == [certificate])
+            return response.requested
         }
-        #expect(first.requested == request)
+        #expect(settled == [request, policy])
 
-        // The handshake policy is still open on both sides.
-        let decline = try sent(try await peer.makeCertificateResponse([], using: session.peer))
-        guard case .certificateResponse(let second) = try await requester.receive(decline).first
-        else {
-            Issue.record("missing certificate response")
-            return
-        }
-        #expect(second.requested == policy)
+        // Nothing is open on either side now.
         await #expect(throws: AuthError.notAuthenticated) {
             try await peer.makeCertificateResponse([], using: session.peer)
         }
+    }
+
+    @Test("an empty response settles one request, not the handshake policy as well")
+    func emptyResponseSettlesOne() async throws {
+        let requesterKey = try key(3)
+        let peerKey = try key(7)
+        let certifierKey = try key(11)
+        let type = try CertificateTypeID([UInt8](repeating: 0x31, count: 32))
+        let name = try CertificateFieldName("name")
+        let policy = try AuthRequestedCertificateSet(
+            certifiers: [certifierKey.publicKey], certificateTypes: [type: [name]])
+        let requester = PeerAuthenticator(
+            wallet: ProtoWallet(rootKey: requesterKey), certificatesToRequest: policy)
+        let peer = PeerAuthenticator(wallet: ProtoWallet(rootKey: peerKey))
+        let session = try await authenticate(requester, peer, peerKey: peerKey.publicKey)
+        let request = try AuthRequestedCertificateSet(
+            certifiers: [certifierKey.publicKey],
+            certificateTypes: [type: [name, try CertificateFieldName("age")]])
+        _ = try await peer.receive(
+            try sent(try await requester.makeCertificateRequest(request, using: session.requester)))
+        // `Peer.ts:1229` looks at a response only when it carries certificates.
+        let decline = try sent(try await peer.makeCertificateResponse([], using: session.peer))
+        let first = try await requester.receive(decline)
+        #expect(first.count == 1)
+        guard case .certificateResponse(let declined) = first.first else {
+            Issue.record("missing certificate response")
+            return
+        }
+        #expect(declined.requested == request)
+        // The handshake policy is still open on both sides.
+        let second = try await requester.receive(
+            try sent(try await peer.makeCertificateResponse([], using: session.peer)))
+        guard case .certificateResponse(let declinedPolicy) = second.first else {
+            Issue.record("missing certificate response")
+            return
+        }
+        #expect(declinedPolicy.requested == policy)
     }
 
     @Test("open received requests share one byte budget, and a repeat is refused")
@@ -450,13 +482,138 @@ struct BRC103CertificateExchangeTests {
         #expect(log.lines.isEmpty)
     }
 
+    @Test("an unsolicited response is checked for its signature before it is refused")
+    func unsolicitedResponseSignatureFirst() async throws {
+        let requesterKey = try key(3)
+        let peerKey = try key(7)
+        let certifierKey = try key(11)
+        let requester = PeerAuthenticator(wallet: ProtoWallet(rootKey: requesterKey))
+        let peer = PeerAuthenticator(wallet: ProtoWallet(rootKey: peerKey))
+        let session = try await authenticate(requester, peer, peerKey: peerKey.publicKey)
+        let request = try AuthRequestedCertificateSet(
+            certifiers: [certifierKey.publicKey],
+            certificateTypes: [
+                try CertificateTypeID([UInt8](repeating: 0x31, count: 32)):
+                    [try CertificateFieldName("name")]
+            ])
+        _ = try await peer.receive(
+            try sent(try await requester.makeCertificateRequest(request, using: session.requester)))
+        let response = try sent(try await peer.makeCertificateResponse([], using: session.peer))
+        _ = try await requester.receive(response)
+        // Nothing is open now. `Peer.ts:1202-1217` checks the signature first.
+        let forged = AuthMessage(
+            messageType: .certificateResponse, identityKey: response.identityKey,
+            nonce: Base64Encoding.encode([UInt8](repeating: 0x77, count: 32)),
+            initialNonce: response.initialNonce, yourNonce: response.yourNonce,
+            signature: response.signature, certificates: [])
+        await #expect(throws: AuthError.invalidSignature) {
+            try await requester.receive(forged)
+        }
+    }
+
+    @Test("a refused certificateRequest uses up its nonce")
+    func refusedRequestCannotBeReplayed() async throws {
+        let requesterKey = try key(3)
+        let peerKey = try key(7)
+        let certifierKey = try key(11)
+        let requester = PeerAuthenticator(wallet: ProtoWallet(rootKey: requesterKey))
+        let peer = PeerAuthenticator(wallet: ProtoWallet(rootKey: peerKey))
+        let session = try await authenticate(requester, peer, peerKey: peerKey.publicKey)
+        let request = try AuthRequestedCertificateSet(
+            certifiers: [certifierKey.publicKey],
+            certificateTypes: [
+                try CertificateTypeID([UInt8](repeating: 0x31, count: 32)):
+                    [try CertificateFieldName("name")]
+            ])
+        _ = try await peer.receive(
+            try sent(try await requester.makeCertificateRequest(request, using: session.requester)))
+        let repeated = try sent(
+            try await requester.makeCertificateRequest(request, using: session.requester))
+        let log = AuthLogLines()
+        await log.record {
+            await #expect(throws: AuthError.unexpectedMessage) {
+                try await peer.receive(repeated)
+            }
+            // `Peer.ts:1088-1092` claims the nonce before acting on the request.
+            await #expect(throws: AuthError.replay) {
+                try await peer.receive(repeated)
+            }
+            // Even once the first request is answered and the repeat would fit.
+            _ = try? await peer.makeCertificateResponse([], using: session.peer)
+            await #expect(throws: AuthError.replay) {
+                try await peer.receive(repeated)
+            }
+        }
+        #expect(log.lines.count == 1)
+    }
+
+    @Test("a sender can stop waiting for a request the peer refused")
+    func withdrawRefusedRequest() async throws {
+        let requesterKey = try key(3)
+        let peerKey = try key(7)
+        let certifierKey = try key(11)
+        let requester = PeerAuthenticator(wallet: ProtoWallet(rootKey: requesterKey))
+        let peer = PeerAuthenticator(wallet: ProtoWallet(rootKey: peerKey))
+        let session = try await authenticate(requester, peer, peerKey: peerKey.publicKey)
+        let request = try AuthRequestedCertificateSet(
+            certifiers: [certifierKey.publicKey],
+            certificateTypes: [
+                try CertificateTypeID([UInt8](repeating: 0x31, count: 32)):
+                    [try CertificateFieldName("name")]
+            ])
+        _ = try await peer.receive(
+            try sent(try await requester.makeCertificateRequest(request, using: session.requester)))
+        await #expect(throws: AuthError.unexpectedMessage) {
+            try await peer.receive(
+                try self.sent(
+                    try await requester.makeCertificateRequest(request, using: session.requester)))
+        }
+        #expect(await requester.withdrawCertificateRequest(request, using: session.requester))
+        // One answer settles the one request still open on each side.
+        _ = try await requester.receive(
+            try sent(try await peer.makeCertificateResponse([], using: session.peer)))
+        #expect(await requester.withdrawCertificateRequest(request, using: session.requester) == false)
+    }
+
     @Test("only errors this SDK defines are logged in clear")
-    func logPrivacy() {
-        struct WalletFailure: Error { let secret = "do not log" }
+    func logPrivacy() async throws {
         #expect(AuthLog.isSDKError(AuthError.invalidSignature))
         #expect(AuthLog.isSDKError(BRC104Error.invalidMethod))
-        #expect(!AuthLog.isSDKError(WalletFailure()))
+        #expect(!AuthLog.isSDKError(WalletFailure(secret: "x")))
         #expect(!AuthLog.isSDKError(CocoaError(.fileNoSuchFile)))
+
+        // Through a real call path: a caller's wallet fails while a
+        // certificate field is decrypted.
+        let certifierKey = try key(13)
+        let subjectKey = try key(17)
+        let verifierKey = try key(19)
+        let type = try CertificateTypeID([UInt8](repeating: 0x41, count: 32))
+        let field = try CertificateFieldName("email")
+        let master = try await CertificateEngine.issue(
+            type: type, subject: .publicKey(subjectKey.publicKey),
+            plaintextFields: [field: "alice@example.test"],
+            using: ProtoWallet(rootKey: certifierKey))
+        let projected = try await CertificateEngine.project(
+            master, fields: [field], to: verifierKey.publicKey,
+            using: ProtoWallet(rootKey: subjectKey))
+        let request = try AuthRequestedCertificateSet(
+            certifiers: [certifierKey.publicKey], certificateTypes: [type: [field]])
+        let failing = FailingDecryptWallet(
+            base: ProtoWallet(rootKey: verifierKey), secret: "wallet secret 1234")
+        let entries = AuthLogEntries()
+        await entries.record {
+            await #expect(throws: AuthError.certificateValidationFailed) {
+                try await AuthCertificateExchange.validate(
+                    [projected], from: subjectKey.publicKey, requested: request, using: failing)
+            }
+        }
+        let walletEntry = try #require(
+            entries.entries.first { $0.detail.contains("wallet secret 1234") })
+        #expect(walletEntry.detailIsPrivate)
+        #expect(walletEntry.prefix.hasPrefix("CertificateEngine field key decryption: WalletFailure"))
+        #expect(entries.entries.allSatisfy { !$0.publicText.contains("wallet secret 1234") })
+        // The SDK's own errors along the same path are public.
+        #expect(entries.entries.contains { !$0.detailIsPrivate })
     }
 
     @Test("wallet preparation and validation are exact and all-or-nothing")
@@ -589,6 +746,58 @@ struct BRC103CertificateExchangeTests {
     private func sent(_ action: AuthPeerAction) throws -> AuthMessage {
         guard case .send(let message) = action else { throw AuthError.invalidMessage }
         return message
+    }
+}
+
+private struct WalletFailure: Error {
+    let secret: String
+}
+
+/// A caller's wallet that fails to decrypt with an error holding a secret.
+private struct FailingDecryptWallet: CertificateWallet {
+    let base: ProtoWallet
+    let secret: String
+
+    func getPublicKey(_ request: WalletGetPublicKeyRequest) async throws -> WalletGetPublicKeyResult {
+        try await base.getPublicKey(request)
+    }
+    func createSignature(
+        _ request: WalletCreateSignatureRequest
+    ) async throws -> WalletCreateSignatureResult {
+        try await base.createSignature(request)
+    }
+    func verifySignature(
+        _ request: WalletVerifySignatureRequest
+    ) async throws -> WalletVerifySignatureResult {
+        try await base.verifySignature(request)
+    }
+    func encrypt(_ request: WalletEncryptRequest) async throws -> WalletEncryptResult {
+        try await base.encrypt(request)
+    }
+    func decrypt(_ request: WalletDecryptRequest) async throws -> WalletDecryptResult {
+        throw WalletFailure(secret: secret)
+    }
+}
+
+/// Collects `AuthLog` entries about underlying errors while a test runs.
+private final class AuthLogEntries: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [AuthLog.Entry] = []
+
+    var entries: [AuthLog.Entry] {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored
+    }
+
+    func record(_ body: () async throws -> Void) async rethrows {
+        try await AuthLog.$entryObserver.withValue({ [self] entry in
+            lock.lock()
+            stored.append(entry)
+            lock.unlock()
+        }) {
+            try await body()
+        }
     }
 }
 

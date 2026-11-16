@@ -196,8 +196,9 @@ final class WalletIdentifierTests: XCTestCase {
     }
 
     func testCryptoLimitsValidation() throws {
-        XCTAssertEqual(WalletCryptoLimits.standard.maximumPayloadByteCount, 16_777_216)
-        XCTAssertEqual(WalletCryptoLimits.standard.maximumCiphertextByteCount, 16_777_264)
+        XCTAssertEqual(WalletCryptoLimits.standard.maximumPayloadByteCount, 17_301_504)
+        XCTAssertEqual(WalletCryptoLimits.defaultPayloadByteCount, 17_301_504)
+        XCTAssertEqual(WalletCryptoLimits.standard.maximumCiphertextByteCount, 17_301_552)
         XCTAssertEqual(try WalletCryptoLimits(), WalletCryptoLimits.standard)
         XCTAssertEqual(try WalletCryptoLimits(maximumPayloadByteCount: 0).maximumCiphertextByteCount, 48)
         XCTAssertThrowsError(try WalletCryptoLimits(maximumPayloadByteCount: -1))

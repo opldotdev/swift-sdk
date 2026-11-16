@@ -92,7 +92,11 @@ SDK disagreed on the wire, Swift now follows the SDK:
   (`clients/AuthFetch.ts:147`), 100 certificates, certifiers and types
   (`AuthMessageValidation.ts:12-14`), and 512 headers, 1 KiB names, 32 KiB
   values and 256 KiB in total, with 256 KiB for `x-bsv-payment`
-  (`transports/SimplifiedFetchTransport.ts:25-28`, `:655-661`).
+  (`transports/SimplifiedFetchTransport.ts:25-28`, `:655-661`). BRC-103 signs
+  each general payload through the wallet, so `WalletCryptoLimits` defaults to
+  the same 16 MiB plus 512 KiB (`WalletCryptoLimits.defaultPayloadByteCount`,
+  which `AuthLimits.defaultPayloadBytes` is); the TypeScript `ProtoWallet` has
+  no bound.
 
 `Tests/BSVAuthTests/BRC103/TypeScriptInteropTests.swift` replays TypeScript
 messages from `TypeScriptAuthVectors.md` and checks Swift messages against a

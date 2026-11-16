@@ -263,7 +263,9 @@ public struct AuthMessage: Equatable, Sendable, CustomStringConvertible,
 public struct AuthLimits: Equatable, Sendable {
     public static let maximumAllowedJSONBytes = 64 << 20
     public static let maximumAllowedPayloadBytes = 32 << 20
-    public static let defaultPayloadBytes = (16 << 20) + (512 << 10)
+    /// 16 MiB plus 512 KiB, shared with `WalletCryptoLimits.defaultPayloadByteCount` so the
+    /// default wallet can sign and verify every payload these limits accept.
+    public static let defaultPayloadBytes = WalletCryptoLimits.defaultPayloadByteCount
     public static let maximumAllowedSessions = 65_536
     public static let maximumAllowedSessionsPerIdentity = 4_096
     public static let maximumAllowedPendingSessions = 65_536
