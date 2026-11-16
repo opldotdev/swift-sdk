@@ -58,7 +58,7 @@ struct WalletWireSubstrateTests {
     /// (16 MiB plus 512 KiB, the BRC-103 general-message bound), with the
     /// longest originator, protocol name and key ID, in a request and in an
     /// encrypt result 48 bytes longer. Frames were capped at 16 MiB before.
-    @Test("a maximum-size payload is signed, verified, encrypted and decrypted over the wire")
+    @Test("a maximum-size payload is signed, encrypted and HMACed over the wire, and one byte more is not")
     func maximumPayloadOverWire() async throws {
         let limits = WalletWireLimits.standard
         #expect(
@@ -104,12 +104,51 @@ struct WalletWireSubstrateTests {
             protocolID: protocolID, keyID: keyID, ciphertext: encrypted.ciphertext))
         #expect(decrypted.plaintext == payload)
 
-        // One byte more is refused before anything is sent.
-        await #expect(throws: (any Error).self) {
+        let hmac = try await client.createHMAC(WalletCreateHMACRequest(
+            protocolID: protocolID, keyID: keyID, counterparty: .anyone, data: payload))
+        let hmacVerified = try await client.verifyHMAC(WalletVerifyHMACRequest(
+            protocolID: protocolID, keyID: keyID, counterparty: .anyone, data: payload,
+            hmac: hmac.hmac))
+        #expect(hmacVerified.valid)
+
+        // One payload byte more is refused by the transceiver before anything is sent.
+        let over = WalletCryptoLimits.defaultPayloadByteCount + 1
+        await #expect(throws: WalletWireError.byteLimitExceeded(
+            kind: "signature data", actual: over, maximum: WalletCryptoLimits.defaultPayloadByteCount)
+        ) {
             try await client.createSignature(WalletCreateSignatureRequest(
                 protocolID: protocolID, keyID: keyID, counterparty: .anyone,
                 payload: .data(payload + [0])))
         }
+        await #expect(throws: WalletWireError.byteLimitExceeded(
+            kind: "HMAC data", actual: over, maximum: WalletCryptoLimits.defaultPayloadByteCount)
+        ) {
+            try await client.createHMAC(WalletCreateHMACRequest(
+                protocolID: protocolID, keyID: keyID, counterparty: .anyone, data: payload + [0]))
+        }
+
+        // The frame bound itself: a frame of exactly the limit is read, one
+        // byte more is refused as a request frame and answered in band.
+        let frameMaximum = limits.maximumFrameByteCount
+        var frame = [WalletCall.getHeight.rawValue, 0]
+        frame += [UInt8](repeating: 0, count: frameMaximum - frame.count)
+        #expect(try WalletWireCodec.decodeRequestFrame(frame, limits: limits).parameters.count
+            == frameMaximum - 2)
+        #expect(throws: WalletWireError.byteLimitExceeded(
+            kind: "request frame", actual: frameMaximum + 1, maximum: frameMaximum)
+        ) {
+            try WalletWireCodec.decodeRequestFrame(frame + [0], limits: limits)
+        }
+        let answer = try WalletWireCodec.decodeResultFrame(
+            try await processor.transmit(frame + [0], maximumResponseByteCount: frameMaximum),
+            limits: limits)
+        guard case .failure(let remote) = answer else {
+            Issue.record("an oversized frame was not answered with an error frame")
+            return
+        }
+        #expect(remote.code == 1)
+        #expect(remote.message.contains(
+            "request frame is \(frameMaximum + 1) bytes, above the limit of \(frameMaximum)"))
     }
 
     @Test("strict parameter decoding happens before originator authorization")
@@ -628,6 +667,12 @@ private struct CryptoWallet: WalletInterface {
     }
     func verifySignature(_ request: WalletVerifySignatureRequest) async throws -> WalletVerifySignatureResult {
         try await crypto.verifySignature(request)
+    }
+    func createHMAC(_ request: WalletCreateHMACRequest) async throws -> WalletCreateHMACResult {
+        try await crypto.createHMAC(request)
+    }
+    func verifyHMAC(_ request: WalletVerifyHMACRequest) async throws -> WalletVerifyHMACResult {
+        try await crypto.verifyHMAC(request)
     }
 }
 

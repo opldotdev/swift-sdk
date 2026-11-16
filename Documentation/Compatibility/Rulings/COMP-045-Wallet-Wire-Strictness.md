@@ -58,7 +58,10 @@ of framing (`frameOverheadByteCount`); the call parameters or result payload
 of a frame default to the same bound, and `WalletABILimits` bounds an ABI
 value's payloads in total by the same amount, so a wallet reached over the
 wire signs, verifies, HMACs, encrypts and decrypts every payload BSVAuth and
-the wallet's own cryptography accept. TypeScript sets no frame bound.
+the wallet's own cryptography accept. TypeScript sets no frame bound. The
+JSON form keeps its 8 MiB bounds (`WalletABILimits.maximumBytePayloadCount`
+and `WalletCryptoLimits.maximumJSONByteCount`), so a payload over 8 MiB
+crosses the binary wire but not a JSON substrate.
 
 ## Divergence from pinned Go v1.3.3
 
