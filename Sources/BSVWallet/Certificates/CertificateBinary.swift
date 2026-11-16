@@ -63,9 +63,14 @@ extension Certificate {
 
     /// Parses one complete canonical BRC-52 binary certificate.
     ///
+    /// Fields may arrive in any order: `@bsv/sdk` 4.1.1 writes them sorted with
+    /// `localeCompare` (auth/certificates/Certificate.ts:290), which differs from
+    /// raw byte order when names differ in case, digits or punctuation (for
+    /// example `cardholder` before `cardNumber`). Swift still writes byte order.
+    ///
     /// Unlike the pinned Go decoder, this rejects nonminimal CompactSize values,
-    /// unsorted fields, duplicate names, high-width vouts, noncanonical Base64,
-    /// noncanonical DER, and DER trailing bytes.
+    /// duplicate names, high-width vouts, noncanonical Base64, noncanonical DER,
+    /// and DER trailing bytes.
     public init(binary bytes: [UInt8], limits: CertificateLimits = .standard) throws {
         guard bytes.count <= limits.maximumBinaryByteCount else {
             throw CertificateError.certificateTooLarge(actual: bytes.count, maximum: limits.maximumBinaryByteCount)
@@ -85,7 +90,7 @@ extension Certificate {
                 throw CertificateError.tooManyFields(actual: Int(clamping: fieldCount), maximum: limits.maximumFieldCount)
             }
             var fields: [CertificateFieldName: CertificateCiphertext] = [:]
-            var previous: [UInt8]?
+            var seenNames = Set<[UInt8]>()
             for _ in 0..<Int(fieldCount) {
                 let nameBytes = try cursor.readVarBytes(
                     maximumLength: UInt64(limits.maximumFieldNameUTF8ByteCount),
@@ -93,10 +98,7 @@ extension Certificate {
                 ).bytes
                 guard let nameText = String(bytes: nameBytes, encoding: .utf8),
                       Array(nameText.utf8) == nameBytes else { throw CertificateError.invalidUTF8 }
-                if let previous, !previous.lexicographicallyPrecedes(nameBytes) {
-                    throw previous == nameBytes ? CertificateError.duplicateFieldName : CertificateError.fieldsNotInCanonicalOrder
-                }
-                previous = nameBytes
+                guard seenNames.insert(nameBytes).inserted else { throw CertificateError.duplicateFieldName }
                 let valueBytes = try cursor.readVarBytes(
                     maximumLength: UInt64(limits.maximumFieldCiphertextBase64UTF8ByteCount),
                     canonicality: .required
