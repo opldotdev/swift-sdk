@@ -31,9 +31,21 @@ Encoding follows the TypeScript writers in
 - A false `verifyHMAC` or `verifySignature` result is the error frame
   TypeScript sends: code 1 with `HMAC is not valid` or
   `Signature is not valid`.
+- A false `waitForAuthentication` result is code 1 with `Wallet did not
+  affirmatively authenticate` (`WalletWireProcessor.ts:1683`).
 - Error frames carry a code from 1 to 8. Any other code is sent as 1. The
   message is cut to 4,096 UTF-8 bytes on a character boundary, and the stack
   is empty. The standard remote message limit is 4,096 bytes.
+- Error text follows TypeScript where peers see it: an originator that is not
+  UTF-8 is `The encoded data was not valid for encoding utf-8` (a fatal
+  `TextDecoder`, `primitives/utils.ts:237`), and a bad getPublicKey
+  `identityKey` byte is `Invalid identityKey flag: expected 0 or 1, received N`
+  (`WalletWireProcessor.ts:49`). Other request failures name the field and the
+  reason, for example `Invalid Wallet Wire createAction request: <reason>`.
+- A processor never sends an error's type or value to the peer. An error the
+  codecs do not describe gets a fixed text (`Invalid Wallet Wire <call>
+  request`, `Invalid <call> result`). The full error goes to the local log:
+  subsystem `dev.opl.swift-sdk`, category `BSVWallet` (`WalletLog`).
 
 Swift keeps these bounds: canonical CompactSize, explicit frame, payload,
 text, originator and error limits, checked UInt32 values, low-S DER

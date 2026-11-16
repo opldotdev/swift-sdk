@@ -162,12 +162,11 @@ public struct WalletCreateActionOptions: Equatable, Sendable {
             )
         }
         if let noSendChange {
+            // TS 4.1.1 takes noSendChange whatever noSend says (validationHelpers.ts:680,
+            // WalletWireProcessor.ts:539-556), and its clients send it that way.
             try walletABIRequireCount(
                 noSendChange.count, kind: "no-send change", maximum: limits.maximumCollectionCount
             )
-            guard noSend == true else {
-                throw WalletABIError.invalidFieldRelation("noSendChange requires noSend to be true")
-            }
         }
         if let sendWith {
             try walletABIRequireCount(

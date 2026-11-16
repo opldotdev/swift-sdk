@@ -63,6 +63,15 @@ struct WalletWireTypeScriptOracleTests {
                 #expect(actual.first != 0, "\(vector.name): legacy type answered in-band")
                 continue
             }
+            if vector.isCertificateFieldOrderDivergence, !frame.request.hasPrefix("1d") {
+                // TS writes certificate fields in localeCompare order
+                // (auth/certificates/Certificate.ts:290); the Swift processor writes
+                // byte order until BSVWallet signs in that order too. Same fields,
+                // same length, another order.
+                #expect(actual.first == 0, "\(vector.name): processor answered in-band")
+                #expect(actual.count == expected.count, "\(vector.name): processor response length")
+                continue
+            }
             #expect(Hex.encode(actual) == frame.response, "\(vector.name): processor response")
             _ = expected
         }
@@ -165,6 +174,7 @@ struct TSWalletWireVector: Decodable, Sendable {
     let frames: [Frame]
 
     var isLegacyCertificateTypeDivergence: Bool { divergence == "legacy-certificate-type" }
+    var isCertificateFieldOrderDivergence: Bool { divergence == "certificate-field-order" }
 }
 
 private struct TSOracleStubHandler: WalletRequestHandling {

@@ -25,9 +25,17 @@ balances must cross the wire between Swift and TypeScript in both directions.
   broadcast`. The transceiver reads code 8 as `aborted: false`.
 - **List totals.** `totalActions` and `totalOutputs` count every match. The
   page follows the total with no record count and ends at the end of the
-  frame. A page may be shorter than its total. Swift rejects a page with more
-  records than its total, or more records than the request's limit (BRC-100
-  default 10).
+  frame. A page may be shorter than its total. A Swift processor checks a
+  wallet's page in TypeScript order and with its text: more records than the
+  total (`Invalid listOutputs result totalOutputs: expected at least N`), more
+  than the request's limit, BRC-100 default 10 (`... expected at most the
+  requested limit of N`, `wallet/WalletResultValidation.ts:1932-1951`), then a
+  total above UInt32 (`Invalid listOutputs result total: expected an integer
+  from 0 to 4294967295, received N`, `WalletWireProcessor.ts:178-191`). A
+  transceiver stops reading at the request's limit.
+- **createAction options.** `noSendChange` is accepted with or without
+  `noSend`, as TypeScript validates and reads it
+  (`wallet/validationHelpers.ts:680`, `WalletWireProcessor.ts:539-556`).
 - **BRC-112 balance.** For a basket matching `^(?:balance |p [^ ]+ balance )`,
   `totalOutputs` is a UInt64 balance with no outputs and no BEEF
   (`walletIsBalanceBasket`). Other totals stay within UInt32.

@@ -45,8 +45,14 @@ extension WalletWireCodec {
                 )
             }
         case .listActions(let value):
-            try walletWireRequirePage(
-                records: value.actions.count, total: UInt64(value.totalActions), call: "listActions"
+            try walletWireRequireResultPage(
+                records: value.actions.count,
+                total: UInt64(value.totalActions),
+                limit: walletWireRequestedPageLimit(request),
+                call: "listActions",
+                totalField: "totalActions",
+                entriesField: "actions",
+                resultName: "listActions result"
             )
             writer.writeCompactSize(UInt64(value.totalActions))
             for action in value.actions {
@@ -79,8 +85,14 @@ extension WalletWireCodec {
             if balance {
                 try walletWireRequireBalanceResult(value)
             } else {
-                try walletWireRequirePage(
-                    records: value.outputs.count, total: value.totalOutputs, call: "listOutputs"
+                try walletWireRequireResultPage(
+                    records: value.outputs.count,
+                    total: value.totalOutputs,
+                    limit: walletWireRequestedPageLimit(request),
+                    call: "listOutputs",
+                    totalField: "totalOutputs",
+                    entriesField: "outputs",
+                    resultName: "listOutputs result"
                 )
             }
             let spendable = listOutputsEncoding == .spendable
@@ -225,7 +237,7 @@ extension WalletWireCodec {
                     limits: limits.abiLimits
                 ))
             }
-            try walletWireRequirePage(records: actions.count, total: totalRaw, call: "listActions")
+            try walletWireRequireResponsePage(records: actions.count, total: totalRaw, call: "listActions")
             value = .listActions(try WalletListActionsResult(
                 totalActions: total, actions: actions, limits: limits.abiLimits
             ))
@@ -295,7 +307,7 @@ extension WalletWireCodec {
             if balance {
                 try walletWireRequireBalanceResult(result)
             } else {
-                try walletWireRequirePage(records: outputs.count, total: total, call: "listOutputs")
+                try walletWireRequireResponsePage(records: outputs.count, total: total, call: "listOutputs")
             }
             value = .listOutputs(result)
         case .relinquishOutput:
@@ -306,6 +318,15 @@ extension WalletWireCodec {
         }
         try reader.requireEnd()
         return value
+    }
+}
+
+/// The page size a list request asks for, or nil when there is no request to check against.
+func walletWireRequestedPageLimit(_ request: WalletWireActionRequest?) -> Int? {
+    switch request {
+    case .listActions(let value)?: Int(value.pagination.effectiveLimit)
+    case .listOutputs(let value)?: Int(value.pagination.effectiveLimit)
+    default: nil
     }
 }
 
@@ -326,16 +347,49 @@ func walletWireRequirePageCapacity(_ returned: Int, limit: Int, call: String) th
     }
 }
 
-/// A page may be shorter than its total: the total counts every matching record.
-func walletWireRequirePage(records: Int, total: UInt64, call: String) throws {
-    guard total <= UInt64(UInt32.max) else {
+/// Checks a wallet's list result before a processor writes it, in `@bsv/sdk` 4.1.1 order:
+/// the result checks (`wallet/WalletResultValidation.ts:1932-1951`), then the wire total
+/// (`wallet/substrates/WalletWireProcessor.ts:178-191`). A page may be shorter than its
+/// total, because the total counts every matching record, but never longer than the
+/// request's limit (10 when the request gives none).
+func walletWireRequireResultPage(
+    records: Int,
+    total: UInt64,
+    limit: Int?,
+    call: String,
+    totalField: String,
+    entriesField: String,
+    resultName: String
+) throws {
+    let maximumSafeInteger: UInt64 = 9_007_199_254_740_991
+    guard total <= maximumSafeInteger else {
         throw WalletWireResultRejection(
-            message: "Invalid \(call) result: total \(total) does not fit in 32 bits"
+            message: "Invalid \(call) result \(totalField): expected an integer from 0 to \(maximumSafeInteger)"
         )
     }
     guard UInt64(records) <= total else {
         throw WalletWireResultRejection(
-            message: "Invalid \(call) result: returned \(records) records but declared a total of \(total)"
+            message: "Invalid \(call) result \(totalField): expected at least \(records)"
+        )
+    }
+    if let limit, records > limit {
+        throw WalletWireResultRejection(
+            message: "Invalid \(call) result \(entriesField): expected at most the requested limit of \(limit)"
+        )
+    }
+    guard total <= UInt64(UInt32.max) else {
+        throw WalletWireResultRejection(
+            message: "Invalid \(resultName) total: expected an integer from 0 to \(UInt32.max), received \(total)"
+        )
+    }
+}
+
+/// A page read from a peer may be shorter than its total, never longer
+/// (`wallet/substrates/WalletWireTransceiver.ts:2088-2094`).
+func walletWireRequireResponsePage(records: Int, total: UInt64, call: String) throws {
+    guard UInt64(records) <= total else {
+        throw WalletWireResultRejection(
+            message: "Wallet Wire \(call) response returned \(records) records but declared a total of \(total)"
         )
     }
 }

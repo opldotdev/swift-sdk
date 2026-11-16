@@ -334,6 +334,7 @@ public struct WalletWireTransceiver:
         return try WalletWireCodec.decodeCertificateResult(
             response,
             expectedCall: request.call,
+            request: request,
             certificateLimits: certificateLimits,
             limits: wireLimits
         )

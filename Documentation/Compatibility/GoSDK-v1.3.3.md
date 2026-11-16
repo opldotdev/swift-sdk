@@ -478,7 +478,10 @@ Certificate wire codecs follow COMP-048. They use the existing strict BRC-52
 binary codec, display-order revocation transaction IDs, low-S DER, bounded
 maps that Swift writes UTF-8-byte-sorted and reads in any order (as
 `@bsv/sdk` 4.1.1 writes them), and exact keyring presence. `nil` keyring emits `00`;
-a nonempty keyring emits `01` and its map. A present empty keyring is rejected.
+a nonempty keyring emits `01` and its map. An empty keyring is stored as `nil`
+and emits `00`, as `@bsv/sdk` 4.1.1 writes it. Certificate binary fields are
+read in any order (TypeScript writes `localeCompare` order) and written in
+byte order.
 The Swift codec supports bounded multi-certificate discovery through the
 intended nested grammar. Live-Go parity uses zero or one item, and the safe Go
 adapter rejects multiple items before the pinned identity-certificate reader

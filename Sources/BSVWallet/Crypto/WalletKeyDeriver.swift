@@ -154,12 +154,9 @@ public struct WalletKeyDeriver:
 
     /// The public key a counterparty stands for: the identity key for `self`
     /// and the public key of private key 1 for `anyone`.
+    /// Rethrows the underlying error unchanged, so a caller's log keeps the cause.
     public func resolvedCounterparty(_ counterparty: WalletCounterparty) throws -> PublicKey {
-        do {
-            return try normalizedCounterparty(counterparty)
-        } catch {
-            throw WalletCryptoError.keyDerivationFailed
-        }
+        try normalizedCounterparty(counterparty)
     }
 
     private func normalizedCounterparty(_ counterparty: WalletCounterparty) throws -> PublicKey {

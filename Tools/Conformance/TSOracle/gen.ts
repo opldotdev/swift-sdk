@@ -384,6 +384,178 @@ await raw('unknown-call-30', '1e00')
 await raw('truncated-getHeight-frame', '19')
 await raw('trailing-getHeight', '190000')
 
+// ---- review cases (wallet-pr-review.md): mixed-case certificate fields, empty
+// arrays, balance baskets, page limits, false results and raw malformed frames.
+// TS sorts certificate fields with localeCompare (auth/certificates/Certificate.ts:290):
+// 'cardholder' comes before 'cardNumber'. The Swift processor still writes byte
+// order, so its answer differs in field order only (divergence certificate-field-order);
+// the Swift transceiver must read the TS bytes.
+const certMixed = await makeCertificate(typeA, { cardNumber: 'bmFtZQ==', cardholder: 'ZW1haWw=' })
+await run({
+  name: 'X-listCertificates-mixed-case-fields', divergence: 'certificate-field-order', method: 'listCertificates',
+  args: { certifiers: [certifierPub], types: [typeA] },
+  result: { totalCertificates: 1, certificates: [{ ...certJSON(certMixed), keyring: {} }] }
+})
+await run({
+  name: 'X-acquireCertificate-mixed-case-fields', divergence: 'certificate-field-order', method: 'acquireCertificate',
+  args: { ...certJSON(certMixed), acquisitionProtocol: 'direct', keyringRevealer: 'certifier', keyringForSubject: { cardNumber: 'a2V5MQ==', cardholder: 'a2V5Mg==' } },
+  result: certJSON(certMixed)
+})
+await run({
+  name: 'X-discover-mixed-case-fields', divergence: 'certificate-field-order', method: 'discoverByIdentityKey',
+  args: { identityKey },
+  result: { totalCertificates: 1, certificates: [{ ...certJSON(certMixed), certifierInfo: { name: 'Certifier', iconUrl: 'https://example.com/i.png', description: 'Trusted cert', trust: 5 }, publiclyRevealedKeyring: {}, decryptedFields: {} }] }
+})
+await run({
+  name: 'X-proveCertificate-mixed-case-fields', method: 'proveCertificate',
+  args: { certificate: certJSON(certMixed), fieldsToReveal: ['cardholder'], verifier: counterpartyKey },
+  result: { keyringForVerifier: { cardholder: 'a2V5MQ==' } }
+})
+await run({
+  name: 'X-listCertificates-empty-keyring-no-verifier', method: 'listCertificates',
+  args: { certifiers: [certifierPub], types: [typeA] },
+  result: { totalCertificates: 1, certificates: [{ ...certJSON(certA), keyring: {} }] }
+})
+await run({
+  name: 'X-listCertificates-over-limit', method: 'listCertificates',
+  args: { certifiers: [certifierPub], types: [typeA], limit: 1 },
+  result: { totalCertificates: 3, certificates: [{ ...certJSON(certA) }, { ...certJSON(certMixed) }] }
+})
+await run({ name: 'X-isAuthenticated-false', method: 'isAuthenticated', args: {}, result: { authenticated: false } })
+await run({
+  name: 'X-createAction-empty-arrays', method: 'createAction', processorOnly: true,
+  args: {
+    description: 'Empty arrays', inputs: [], labels: [],
+    outputs: [{ lockingScript: ls, satoshis: 1, outputDescription: 'Pay out', tags: [], basket: 'default' }],
+    options: { noSendChange: [`${txA}.2`], sendWith: [txB, txA], knownTxids: [], returnTXIDOnly: true }
+  },
+  result: { txid: txA }
+})
+await run({
+  name: 'X-createAction-options-roundtrip', method: 'createAction',
+  args: {
+    description: 'Options here',
+    outputs: [{ lockingScript: ls, satoshis: 1, outputDescription: 'Pay out' }],
+    options: { noSendChange: [`${txA}.2`], sendWith: [txB, txA], noSend: true, returnTXIDOnly: true }
+  },
+  result: { txid: txA, noSendChange: [] }
+})
+// A TS client may send noSendChange without noSend (validationHelpers.ts:680).
+await run({
+  name: 'X-createAction-noSendChange-without-noSend', method: 'createAction',
+  args: {
+    description: 'Options here',
+    outputs: [{ lockingScript: ls, satoshis: 1, outputDescription: 'Pay out' }],
+    options: { noSendChange: [`${txA}.2`], sendWith: [txB], returnTXIDOnly: true }
+  },
+  result: { txid: txA }
+})
+await run({
+  name: 'X-createAction-input-no-script', method: 'createAction', processorOnly: true,
+  args: {
+    description: 'No script len', inputBEEF: Array.from(parent.toBEEF()),
+    inputs: [{ outpoint: `${parent.id('hex')}.0`, inputDescription: 'Spend parent', unlockingScriptLength: 0 }]
+  },
+  result: { signableTransaction: { tx: Array.from(signableAtomic), reference: 'cmVmZXJlbmNl' } }
+})
+await run({
+  name: 'X-listOutputs-empty-strings', method: 'listOutputs',
+  args: { basket: 'default', tags: [], includeCustomInstructions: true, includeTags: true, includeLabels: true },
+  result: { totalOutputs: 1, outputs: [{ outpoint: `${txA}.1`, satoshis: 0, lockingScript: '', spendable: true, customInstructions: '', tags: [], labels: [] }] }
+})
+await run({
+  name: 'X-listOutputs-balance-zero', method: 'listOutputs',
+  args: { basket: 'balance default' },
+  result: { totalOutputs: 0, outputs: [] }
+})
+await run({
+  name: 'X-listOutputs-balance-huge', method: 'listOutputs',
+  args: { basket: 'balance default' },
+  result: { totalOutputs: 2100000000000000, outputs: [] }
+})
+await run({
+  name: 'X-listOutputs-not-balance', method: 'listOutputs',
+  args: { basket: 'p btms tokens' },
+  result: { totalOutputs: 5000000000, outputs: [] }
+})
+await run({
+  name: 'X-listOutputs-spendable-balance', method: 'listOutputs', spendable: true,
+  args: { basket: 'balance default' },
+  result: { totalOutputs: 5000000000, outputs: [] }
+})
+await run({
+  name: 'X-listOutputs-over-limit', method: 'listOutputs',
+  args: { basket: 'default', limit: 1 },
+  result: { totalOutputs: 5, outputs: [{ outpoint: `${txA}.1`, satoshis: 1, spendable: true }, { outpoint: `${txA}.2`, satoshis: 1, spendable: true }] }
+})
+await run({
+  name: 'X-listOutputs-more-than-total', method: 'listOutputs',
+  args: { basket: 'default' },
+  result: { totalOutputs: 1, outputs: [{ outpoint: `${txA}.1`, satoshis: 1, spendable: true }, { outpoint: `${txA}.2`, satoshis: 1, spendable: true }] }
+})
+await run({
+  name: 'X-listActions-positive-big', method: 'listActions',
+  args: { labels: [] },
+  result: { totalActions: 1, actions: [{ txid: txA, satoshis: 5000000000, status: 'failed', isOutgoing: false, description: 'Big one', version: 2, lockTime: 4294967295 }] }
+})
+await run({
+  name: 'X-listActions-output-no-basket', transceiverOnly: true, method: 'listActions',
+  args: { labels: [], includeOutputs: true },
+  result: { totalActions: 1, actions: [{ txid: txA, satoshis: -1, status: 'nosend', isOutgoing: true, description: 'No basket', version: 1, lockTime: 0, outputs: [{ outputIndex: 0, satoshis: 1, spendable: true, outputDescription: 'An output' }] }] }
+})
+await run({
+  name: 'X-getPublicKey-privileged', method: 'getPublicKey',
+  args: { identityKey: true, privileged: true, privilegedReason: 'needed for test', seekPermission: false }
+})
+await run({
+  name: 'X-verifySignature-hash', method: 'verifySignature',
+  args: { protocolID: [2, 'wire tests'], keyID: '1', counterparty: counterpartyKey, hashToDirectlyVerify: Array(32).fill(5), signature: sig }
+})
+await run({
+  name: 'X-encrypt-default-counterparty', method: 'encrypt', processorOnly: true,
+  args: { protocolID: [1, 'wire tests'], keyID: '1', plaintext: [] }
+})
+await run({
+  name: 'X-internalize-no-tags-empty-labels', method: 'internalizeAction', processorOnly: true,
+  args: {
+    tx: Array.from(childAtomic), description: 'Receive token', labels: [],
+    outputs: [{ outputIndex: 0, protocol: 'basket insertion', insertionRemittance: { basket: 'tokens' } }]
+  },
+  result: { accepted: true }
+})
+await run({
+  name: 'X-internalize-refused', method: 'internalizeAction',
+  args: {
+    tx: Array.from(childAtomic), description: 'Receive token',
+    outputs: [{ outputIndex: 0, protocol: 'basket insertion', insertionRemittance: { basket: 'tokens' } }]
+  },
+  result: { accepted: false }
+})
+await run({ name: 'X-relinquishOutput-false', method: 'relinquishOutput', args: { basket: 'default', output: `${txA}.1` }, result: { relinquished: false } })
+await run({
+  name: 'X-relinquishCertificate-false', method: 'relinquishCertificate',
+  args: { type: typeA, serialNumber: serialA, certifier: certifierPub }, result: { relinquished: false }
+})
+await run({ name: 'X-waitForAuthentication-false', method: 'waitForAuthentication', args: {}, result: { authenticated: false } })
+await run({
+  name: 'X-discoverByAttributes-unsorted', method: 'discoverByAttributes', processorOnly: true,
+  args: { attributes: { name: 'Alice', email: 'user@example.com' } },
+  result: { totalCertificates: 0, certificates: [] }
+})
+await run({ name: 'X-empty-originator', method: 'getHeight', originator: '', args: {}, result: { height: 1 } })
+await run({
+  name: 'X-revealSpecific-pubkey', method: 'revealSpecificKeyLinkage',
+  args: { counterparty: counterpartyKey, verifier: certifierPub, protocolID: [0, 'wire tests'], keyID: 'key one', privileged: false }, processorOnly: true
+})
+await raw('X-raw-empty', '')
+await raw('X-raw-call-0', '0000')
+await raw('X-raw-call-29-probe-trailing', '1d00000100')
+await raw('X-raw-originator-truncated', '1905ab')
+await raw('X-raw-originator-bad-utf8', '1902c328')
+await raw('X-raw-listOutputs-ext-2', '0600' + '0764656661756c74' + '00' + 'ffffffffff' + 'ffffffffffffffffff' + 'ffffffffffffffffff' + 'ff' + '02')
+await raw('X-raw-listOutputs-ext-trailing', '0600' + '0764656661756c74' + '00' + 'ffffffffff' + 'ffffffffffffffffff' + 'ffffffffffffffffff' + 'ff' + '0100')
+await raw('X-raw-getPublicKey-bad-flag', '080002')
+
 await Bun.write(OUTPUT, JSON.stringify({
   source: SOURCE,
   rootKey: 'f0efba88c117ca2614554bb676d743f413822a31e3c8d70cfcc5fff119d20a07',

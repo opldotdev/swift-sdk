@@ -38,18 +38,20 @@ func walletWireRequireActionBytes(
     }
 }
 
-func walletWireMapABIError(_ error: WalletABIError) -> WalletWireError {
+/// Maps size failures to wire limits and keeps every other ABI error as it is, so
+/// the error frame and the log both say which value was wrong.
+func walletWireMapABIError(_ error: WalletABIError) -> any Error {
     switch error {
     case .countLimitExceeded(let kind, let actual, let maximum):
-        return .countLimitExceeded(kind: kind, actual: UInt64(max(0, actual)), maximum: maximum)
+        return WalletWireError.countLimitExceeded(kind: kind, actual: UInt64(max(0, actual)), maximum: maximum)
     case .byteLimitExceeded(let kind, let actual, let maximum):
-        return .byteLimitExceeded(kind: kind, actual: actual, maximum: maximum)
+        return WalletWireError.byteLimitExceeded(kind: kind, actual: actual, maximum: maximum)
     case .aggregatePayloadTooLarge(let actual, let maximum):
-        return .byteLimitExceeded(kind: "aggregate wallet payload", actual: actual, maximum: maximum)
+        return WalletWireError.byteLimitExceeded(kind: "aggregate wallet payload", actual: actual, maximum: maximum)
     case .sizeOverflow:
-        return .byteLimitExceeded(kind: "aggregate wallet payload", actual: Int.max, maximum: Int.max)
+        return WalletWireError.byteLimitExceeded(kind: "aggregate wallet payload", actual: Int.max, maximum: Int.max)
     default:
-        return .nonRoundTrippableValue(kind: "wallet action value")
+        return error
     }
 }
 

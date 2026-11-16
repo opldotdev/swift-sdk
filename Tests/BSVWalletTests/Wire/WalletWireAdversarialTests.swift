@@ -135,9 +135,14 @@ final class WalletWireAdversarialTests: XCTestCase {
             ),
             [1, 22] + Array("Signature is not valid".utf8) + [0]
         )
-        XCTAssertThrowsError(try WalletWireCodec.encodeKeyQueryResult(
-            .waitForAuthentication(WalletAuthenticatedResult(authenticated: false))
-        ))
+        // WalletWireProcessor.ts:1683: a false waitForAuthentication is code 1,
+        // "Wallet did not affirmatively authenticate".
+        XCTAssertEqual(
+            try WalletWireCodec.encodeKeyQueryResult(
+                .waitForAuthentication(WalletAuthenticatedResult(authenticated: false))
+            ),
+            [1, 41] + Array("Wallet did not affirmatively authenticate".utf8) + [0]
+        )
 
         let request = WalletVerifySignatureRequest(
             protocolID: try walletTestProtocol("wire test"),

@@ -208,9 +208,10 @@ public enum WalletWireCodec {
         )
     }
 
-    /// Encodes a key or query result frame. A false verification result is the
-    /// error frame `@bsv/sdk` 4.1.1 sends: code 1, "HMAC is not valid" or
-    /// "Signature is not valid".
+    /// Encodes a key or query result frame. A false verification or
+    /// waitForAuthentication result is the error frame `@bsv/sdk` 4.1.1 sends:
+    /// code 1, "HMAC is not valid", "Signature is not valid" or "Wallet did not
+    /// affirmatively authenticate" (WalletWireProcessor.ts:1683).
     public static func encodeKeyQueryResult(
         _ result: WalletWireKeyQueryResult,
         limits: WalletWireLimits = .standard
@@ -220,6 +221,8 @@ public enum WalletWireCodec {
         case .verifyHMAC(let value) where !value.valid: refusal = WalletWireFailureText.invalidHMAC
         case .verifySignature(let value) where !value.valid:
             refusal = WalletWireFailureText.invalidSignature
+        case .waitForAuthentication(let value) where !value.authenticated:
+            refusal = WalletWireFailureText.notAuthenticated
         default: refusal = nil
         }
         if let refusal {

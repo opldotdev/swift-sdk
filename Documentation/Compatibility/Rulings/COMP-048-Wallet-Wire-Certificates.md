@@ -13,20 +13,36 @@ certificate frames must be read and answered without rejection.
 - **Map order.** TypeScript writes keyrings, fields and attributes in object
   insertion order. Swift reads maps in any order and rejects only a repeated
   name. Swift writes maps sorted by raw UTF-8 bytes, which TypeScript accepts.
+- **Certificate field order.** TypeScript writes the fields inside certificate
+  binary sorted with `localeCompare` (`auth/certificates/Certificate.ts:290`),
+  which differs from byte order when names differ in case, digits or
+  punctuation (`cardholder` comes before `cardNumber`). Swift reads certificate
+  fields in any order and rejects only a repeated name, so acquireCertificate,
+  listCertificates and discovery read TypeScript answers. Swift still writes
+  byte order; signing and writing in `localeCompare` order follows once that
+  comparator is available below BSVAuth.
 - **List and discovery totals.** `totalCertificates` counts every match. The
   records follow with no count and end at the end of the frame. A page may be
-  shorter than its total but never longer, and never longer than the
-  request's limit.
+  shorter than its total but never longer. A processor refuses a page longer
+  than the request's limit with the TypeScript text (`Invalid listCertificates
+  result certificates: expected at most the requested limit of N`,
+  `wallet/WalletResultValidation.ts:1948`); a transceiver stops reading at the
+  request's limit, 10 when it gives none (`WalletWireTransceiver.ts:2097-2102`).
 - **listCertificates verifier.** The wire carries the 33 compressed key bytes,
   or length 0 when absent. The ABI and JSON keep the hex text. Any other
   length is refused.
 - **Keyring presence.** `nil` is `00`; a nonempty map is `01` and the map.
-  TypeScript writes an empty keyring as `00` and returns `{}` for it, so JSON
-  `keyring: {}` reads as no keyring.
+  TypeScript writes an empty keyring as `00` (`WalletWireProcessor.ts:2118`)
+  and reads `01` with no entries as `{}`. Swift stores an empty keyring as no
+  keyring, from the ABI, from JSON `keyring: {}` and from the wire.
+- **False relinquish.** `relinquished: false` is code 1 `The wallet did not
+  relinquish the certificate` (`WalletWireProcessor.ts:2293`).
 - **Call 29.** TypeScript 4.x probes call 29 (certificate compatibility
   profile) before discovery and some list, prove and relinquish calls. A Swift
   processor answers code 1 `Invalid call code: 29`, the exact answer on which
-  the TypeScript transceiver falls back to the plain calls. The full profile
+  the TypeScript transceiver falls back to the plain calls. A probe with
+  trailing bytes gets the TypeScript text `Wallet Wire certificate
+  compatibility probe request contains trailing data`. The full profile
   is not implemented: it exists to carry certificate types other than 32 bytes,
   which Swift `CertificateTypeID` cannot represent.
 

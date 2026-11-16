@@ -72,6 +72,7 @@ public struct WalletWireProcessor:
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            WalletLog.failure("Wallet wire request decode", call: call, underlying: error)
             response = try failureFrame(
                 code: WalletWireErrorCode.unknownError,
                 message: walletWireRequestFailureMessage(error, call: call),
@@ -95,6 +96,7 @@ public struct WalletWireProcessor:
         // Call 29 is the @bsv/sdk 4.1 certificate compatibility profile. This
         // processor answers it as an older processor does, with exactly the
         // error a TypeScript transceiver downgrades on (see COMP-050).
+        try walletWireRejectCompatibilityProfile(request)
         let frame = try WalletWireCodec.decodeRequestFrame(request, limits: wireLimits)
         switch frame.call {
         case .createAction, .signAction, .abortAction, .listActions,
@@ -199,6 +201,7 @@ public struct WalletWireProcessor:
         return try encodeResult(call: decoded.request.call, limits: responseLimits) {
             try WalletWireCodec.encodeCertificateResult(
                 result,
+                request: decoded.request,
                 certificateLimits: certificateLimits,
                 limits: responseLimits
             )
@@ -251,12 +254,14 @@ public struct WalletWireProcessor:
         do {
             return try encode()
         } catch let rejection as WalletWireResultRejection {
+            WalletLog.failure("Wallet wire result", call: call, underlying: rejection)
             return try failureFrame(
                 code: WalletWireErrorCode.clamped(rejection.code),
                 message: rejection.message,
                 limits: limits
             )
         } catch {
+            WalletLog.failure("Wallet wire result encode", call: call, underlying: error)
             return try failureFrame(
                 code: WalletWireErrorCode.unknownError,
                 message: walletWireResultFailureMessage(error, call: call),
