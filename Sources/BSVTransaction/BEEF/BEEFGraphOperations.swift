@@ -218,6 +218,27 @@ extension BEEF {
         }
     }
 
+    /// Reorders records parents-first with the same stable sort ``merging(_:limits:)`` uses.
+    ///
+    /// Duplicate transaction IDs are rejected here, as the strict initializer would.
+    static func parentsFirst(
+        _ transactions: [BEEFTransaction],
+        limits: TransactionLimits
+    ) throws -> [BEEFTransaction] {
+        var entries: [TransactionID: BEEFTransaction] = [:]
+        entries.reserveCapacity(transactions.count)
+        var firstSeen: [TransactionID] = []
+        firstSeen.reserveCapacity(transactions.count)
+        for entry in transactions {
+            let transactionID = try entry.transactionID(limits: limits)
+            guard entries.updateValue(entry, forKey: transactionID) == nil else {
+                throw BEEFError.duplicateTransactionID(transactionID)
+            }
+            firstSeen.append(transactionID)
+        }
+        return try topologicallyOrdered(entries: entries, firstSeen: firstSeen)
+    }
+
     private static func topologicallyOrdered(
         entries: [TransactionID: BEEFTransaction],
         firstSeen: [TransactionID]

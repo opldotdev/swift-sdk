@@ -202,7 +202,13 @@ enum OverlayHTTPCodec {
         let beef: BEEF
         do {
             sharedBytes = try cursor.read(count: cursor.remaining)
-            beef = try BEEF(bytes: sharedBytes, limits: configuration.beefLimits)
+            // Overlay services write BEEF with `@bsv/sdk`, whose writer can list a
+            // child before its parents; read it in any order, as that SDK does.
+            beef = try BEEF(
+                bytes: sharedBytes,
+                limits: configuration.beefLimits,
+                transactionOrder: .any
+            )
         } catch {
             throw OverlayHTTPError.malformedResponse
         }

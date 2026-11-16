@@ -267,23 +267,25 @@ func walletWireReadOutpointCollection(
     return result
 }
 
+/// Reads BEEF from a wallet wire message in any record order, as `@bsv/sdk` writes it.
 func walletWireParseBEEF(_ bytes: [UInt8], limits: BEEFLimits) throws -> BEEF {
     guard bytes.count <= limits.maximumByteCount else {
         throw WalletWireError.byteLimitExceeded(
             kind: "BEEF", actual: bytes.count, maximum: limits.maximumByteCount
         )
     }
-    do { return try BEEF(bytes: bytes, limits: limits) }
+    do { return try BEEF(bytes: bytes, limits: limits, transactionOrder: .any) }
     catch { throw WalletWireError.nonRoundTrippableValue(kind: "BEEF") }
 }
 
+/// Reads Atomic BEEF from a wallet wire message in any record order, as `@bsv/sdk` writes it.
 func walletWireParseAtomicBEEF(_ bytes: [UInt8], limits: BEEFLimits) throws -> AtomicBEEF {
     guard bytes.count <= limits.maximumByteCount else {
         throw WalletWireError.byteLimitExceeded(
             kind: "Atomic BEEF", actual: bytes.count, maximum: limits.maximumByteCount
         )
     }
-    do { return try AtomicBEEF(bytes: bytes, limits: limits) }
+    do { return try AtomicBEEF(bytes: bytes, limits: limits, transactionOrder: .any) }
     catch { throw WalletWireError.nonRoundTrippableValue(kind: "Atomic BEEF") }
 }
 
