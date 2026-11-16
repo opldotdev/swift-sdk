@@ -1,3 +1,4 @@
+import BSVKeys
 import BSVScript
 import BSVTransaction
 import BSVWallet
@@ -66,6 +67,23 @@ public struct IdentityLimits: Hashable, Sendable {
     }
 }
 
+/// The fixed verifier of a public identity reveal.
+///
+/// TypeScript `IdentityClient.publiclyRevealAttributes` always proves the
+/// certificate to the "anyone" key, the public key of scalar 1, and the
+/// `tm_identity` topic manager decrypts the keyring with that key. A keyring
+/// for any other verifier produces a token the overlay refuses.
+public enum IdentityPublicReveal {
+    /// The compressed "anyone" public key in hex.
+    public static let verifierPublicKeyHex =
+        "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+    /// The "anyone" public key.
+    public static func verifierPublicKey() throws -> PublicKey {
+        try WalletKeyDeriver.anyone().identityKey
+    }
+}
+
 /// Options for an identity disclosure transaction.
 public struct IdentityClientOptions:
     Hashable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
@@ -89,8 +107,11 @@ public struct IdentityClientOptions:
         if let protocolID {
             self.protocolID = protocolID
         } else {
+            // [1, "identity"]: TypeScript identity/types/index.ts
+            // DEFAULT_IDENTITY_CLIENT_OPTIONS, and the only protocol the
+            // tm_identity topic manager admits.
             self.protocolID = try WalletProtocolID(
-                securityLevel: .everyAppAndCounterparty,
+                securityLevel: .everyApp,
                 name: "identity"
             )
         }
@@ -180,7 +201,7 @@ public struct DisplayableIdentity:
             identityKey: "",
             badgeIconURL: "XUUV39HVPkpmMzYNTx7rpKzJvXfeiVyQWg2vfSpjBAuhunTCA9uG",
             badgeLabel: "Not verified by anyone you trust.",
-            badgeClickURL: "https://projectbabbage.com/docs/unknown-identity",
+            badgeClickURL: "https://bsv-blockchain.github.io/ts-sdk/reference/identity/",
             limits: limits
         )
     }

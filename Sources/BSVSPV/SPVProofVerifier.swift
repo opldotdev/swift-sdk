@@ -37,7 +37,10 @@ public enum SPVProofVerifier {
     ///
     /// The envelope must prove every reachable source transaction either through
     /// a trusted Merkle root or through a complete chain of raw transactions.
-    /// Transactions below a trusted Merkle anchor are not re-executed. Every
+    /// Transactions below a trusted Merkle anchor are not re-executed. An
+    /// anchor proven at offset zero is its block's coinbase: as in @bsv/sdk
+    /// `Transaction.verify`, this returns `false` unless the tracker's
+    /// `currentHeight()` is at least 100 above that block. Every
     /// unproven transaction has its source outputs resolved, value conservation
     /// checked, and input scripts evaluated. When supplied, `feeModel` applies to
     /// the root transaction only, matching the Go SDK's fee-policy boundary.
@@ -97,9 +100,31 @@ public enum SPVProofVerifier {
 
         var pending = [rootTransactionID]
         var visited: Set<TransactionID> = []
+        var currentHeight: UInt32?
         while let transactionID = pending.popLast() {
             guard visited.insert(transactionID).inserted else { continue }
-            guard !provenTransactionIDs.contains(transactionID) else { continue }
+            if provenTransactionIDs.contains(transactionID) {
+                // A proven coinbase anchors the walk only once it is mature,
+                // as @bsv/sdk `Transaction.verify` checks through
+                // `MerklePath.verify`.
+                if let entry = entries[transactionID],
+                   let blockHeight = coinbaseBlockHeight(
+                       transactionID,
+                       entry: entry,
+                       in: beef
+                   )
+                {
+                    if currentHeight == nil {
+                        currentHeight = try await chainTracker.currentHeight()
+                    }
+                    guard let currentHeight,
+                          UInt64(blockHeight) + 100 <= UInt64(currentHeight)
+                    else {
+                        return false
+                    }
+                }
+                continue
+            }
             guard let entry = entries[transactionID] else {
                 throw SPVValidationError.rootTransactionMissing(transactionID)
             }
@@ -151,6 +176,29 @@ public enum SPVProofVerifier {
             }
         }
         return true
+    }
+
+    /// The block height of the proof that anchors `transactionID`, when that
+    /// proof places it at offset zero (its block's coinbase).
+    ///
+    /// Uses the entry's own BUMP when it holds the transaction, as
+    /// `BEEF.isProven` does, and otherwise the first BUMP that does.
+    private static func coinbaseBlockHeight(
+        _ transactionID: TransactionID,
+        entry: BEEFTransaction,
+        in beef: BEEF
+    ) -> UInt32? {
+        guard let hash = try? Hash256(transactionID.wireBytes) else { return nil }
+        var candidates = beef.merklePaths
+        if let index = entry.merklePathIndex, beef.merklePaths.indices.contains(index) {
+            candidates.insert(beef.merklePaths[index], at: 0)
+        }
+        guard let path = candidates.first(where: { BEEF.path($0, contains: transactionID) }),
+              path.levels[0].first(where: { $0.hash == hash })?.offset == 0
+        else {
+            return nil
+        }
+        return path.blockHeight
     }
 
     private static func contextualTransaction(

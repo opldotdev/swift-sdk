@@ -127,6 +127,7 @@ public struct ARCClient: Broadcaster, Sendable, CustomStringConvertible,
                 )
             }
         } catch {
+            NetworkLog.failure("ARCClient.submit", request: request, underlying: error)
             throw ARCError.uncertainDelivery(
                 transactionID: transactionID,
                 cause: .transport(code: nil)
@@ -134,10 +135,22 @@ public struct ARCClient: Broadcaster, Sendable, CustomStringConvertible,
         }
 
         do {
-            return try validatedBroadcastResponse(
-                response,
-                expectedTransactionID: transactionID
-            )
+            do {
+                return try validatedBroadcastResponse(
+                    response,
+                    expectedTransactionID: transactionID
+                )
+            } catch {
+                NetworkLog.failure(
+                    "ARCClient.submit",
+                    request: request,
+                    statusCode: response.statusCode,
+                    body: response.body,
+                    redacting: responseRedactions,
+                    reason: "transaction \(transactionID.displayHex): \(String(reflecting: error))"
+                )
+                throw error
+            }
         } catch let error as ARCError {
             switch error {
             case .rejected:
@@ -189,10 +202,22 @@ public struct ARCClient: Broadcaster, Sendable, CustomStringConvertible,
     public func status(for transactionID: TransactionID) async throws -> ARCResponse {
         let request = try makeStatusRequest(transactionID: transactionID)
         let response = try await statusResponse(for: request)
-        return try validatedStatusResponse(
-            response,
-            expectedTransactionID: transactionID
-        )
+        do {
+            return try validatedStatusResponse(
+                response,
+                expectedTransactionID: transactionID
+            )
+        } catch {
+            NetworkLog.failure(
+                "ARCClient.status",
+                request: request,
+                statusCode: response.statusCode,
+                body: response.body,
+                redacting: responseRedactions,
+                reason: "transaction \(transactionID.displayHex): \(String(reflecting: error))"
+            )
+            throw error
+        }
     }
 
     private func validatedBroadcastResponse(
@@ -418,6 +443,7 @@ public struct ARCClient: Broadcaster, Sendable, CustomStringConvertible,
                 }
                 throw error
             } catch {
+                NetworkLog.failure("ARCClient.status", request: request, underlying: error)
                 let normalized = NetworkServiceError.transport(code: nil)
                 if attempt < statusPolicy.maximumAttempts {
                     try await sleep(nextBackoff)

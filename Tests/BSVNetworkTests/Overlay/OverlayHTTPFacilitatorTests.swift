@@ -209,6 +209,37 @@ struct OverlayHTTPFacilitatorTests {
         }
     }
 
+    @Test("a refused submit carries the overlay's short reason in plain words")
+    func rejectionReason() async throws {
+        let tagged = try TaggedBEEF(
+            beef: [1], topics: [OverlayTopic(rawValue: "tm_test")]
+        )
+        let topic = HTTPSOverlayTopicFacilitator(
+            configuration: try configuration(),
+            transport: OverlayRecordingTransport(result: .success(HTTPResponse(
+                statusCode: 400,
+                headers: ["Content-Type": "application/json"],
+                body: Data(#"{"status":"error","message":"Output not admitted by topic manager"}"#.utf8)
+            )))
+        )
+        do {
+            _ = try await topic.submit(
+                tagged,
+                to: OverlayHost(rawValue: "https://overlay.example")
+            )
+            Issue.record("Expected a rejection")
+        } catch let error as OverlayHTTPError {
+            #expect(error == .rejected(
+                statusCode: 400,
+                message: "Output not admitted by topic manager"
+            ))
+            #expect(error.localizedDescription ==
+                "The overlay refused the request (HTTP 400): Output not admitted by topic manager.")
+        }
+        #expect(OverlayHTTPError.rejected(statusCode: 502).localizedDescription ==
+            "The overlay could not answer (HTTP 502). Try again in a minute.")
+    }
+
     private func assertBinaryFailure(
         _ body: [UInt8],
         configuration: OverlayHTTPConfiguration
