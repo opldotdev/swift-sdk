@@ -344,8 +344,11 @@ extension BEEF {
     /// own Merkle path or is transaction-ID-only. As in `@bsv/sdk`, a raw record
     /// whose transaction ID merely appears in another record's Merkle path is
     /// not treated as proven, so its inputs are still followed. The Merkle
-    /// paths kept are those the selected records reference, in the order the
-    /// records first reference them. Throws ``BEEFError/missingSubjectTransaction(_:)``
+    /// paths kept are those the selected records reference, in the order this
+    /// envelope's records (parents first) first reference them. `@bsv/sdk`
+    /// uses the order the records arrived in, so when a sender lists a child
+    /// before its parents the two can write the same paths in another order.
+    /// Throws ``BEEFError/missingSubjectTransaction(_:)``
     /// when the subject is absent and ``BEEFError/missingAncestor(transaction:ancestor:)``
     /// when an unproven selected record spends a transaction this envelope lacks.
     package func atomicBEEF(
@@ -354,6 +357,20 @@ extension BEEF {
     ) throws -> AtomicBEEF {
         let identifiers = try transactions.map {
             try $0.transactionID(limits: limits.transactionLimits)
+        }
+        return try atomicBEEF(for: subject, identifiers: identifiers, limits: limits)
+    }
+
+    /// ``atomicBEEF(for:limits:)`` with each record's transaction ID already
+    /// computed, in record order, so that a caller building many envelopes
+    /// from one BEEF hashes each record once.
+    package func atomicBEEF(
+        for subject: TransactionID,
+        identifiers: [TransactionID],
+        limits: BEEFLimits
+    ) throws -> AtomicBEEF {
+        guard identifiers.count == transactions.count else {
+            return try atomicBEEF(for: subject, limits: limits)
         }
         var entries: [TransactionID: BEEFTransaction] = [:]
         for (transactionID, entry) in zip(identifiers, transactions) {

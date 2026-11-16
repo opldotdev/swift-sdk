@@ -1,5 +1,6 @@
 import BSVCore
 import BSVOverlay
+import BSVScript
 import BSVTransaction
 import Foundation
 import Testing
@@ -450,6 +451,69 @@ struct OverlayTSWireTests {
         let steak = try await submit(responseBody: #"{"tm_test":{}}"#, topics: [topic]).steak
         #expect(steak.instructions[topic] != nil)
         #expect(!steak.acknowledges(topic))
+    }
+
+    @Test("M1: Atomic BEEF built for an aggregated chain stops at the answer limit")
+    func aggregatedChainIsBounded() throws {
+        // 900 unproven transactions, each spending the one before and each
+        // listed as an output: about 1 MB on the wire, but Atomic BEEF i holds
+        // i transactions, so building all of them would take about 400 MB.
+        // The build must stop once the answer limit is passed. Before the
+        // fix this took about 40 seconds and 900 MB.
+        let beefLimits = try beefLimits()
+        let pad = [UInt8](repeating: 0, count: 1_000)
+        let script = try Script(bytes: [0x00, 0x6a, 0x4d, 0xe8, 0x03] + pad, maximumByteCount: 2_000)
+        let unlocking = try Script(bytes: [0x51], maximumByteCount: 1)
+        var transactions: [BEEFTransaction] = []
+        var identifiers: [TransactionID] = []
+        for _ in 0..<900 {
+            let inputs = identifiers.last.map {
+                [
+                    TransactionInput(
+                        previousOutput: Outpoint(transactionID: $0, outputIndex: 0),
+                        unlockingScript: unlocking)
+                ]
+            } ?? []
+            let transaction = Transaction(
+                inputs: inputs, outputs: [TransactionOutput(satoshis: 1, lockingScript: script)])
+            identifiers.append(try transaction.transactionID(limits: beefLimits.transactionLimits))
+            transactions.append(.raw(transaction))
+        }
+        let shared = try BEEF(
+            version: .v2, merklePaths: [], transactions: transactions, limits: beefLimits
+        ).serialized(limits: beefLimits)
+        var body = CompactSize.encode(UInt64(identifiers.count))
+        for identifier in identifiers {
+            body.append(contentsOf: identifier.displayBytes)
+            body.append(contentsOf: CompactSize.encode(0))
+            body.append(contentsOf: CompactSize.encode(0))
+        }
+        body.append(contentsOf: shared)
+
+        let configuration = try OverlayHTTPConfiguration(
+            overlayLimits: try OverlayLimits(
+                maximumTaggedBEEFByteCount: 1_024,
+                maximumOffChainValueByteCount: 1_024,
+                maximumTopicCount: 16,
+                maximumTopicUTF8ByteCount: 256,
+                maximumServiceUTF8ByteCount: 256,
+                maximumHostUTF8ByteCount: 2_048,
+                maximumMetadataUTF8ByteCount: 1_024,
+                maximumLookupQueryByteCount: 1_024,
+                maximumLookupOutputCount: 1_000,
+                maximumLookupOutputBEEFByteCount: 32 * 1_024 * 1_024,
+                maximumLookupAnswerByteCount: 4 * 1_024 * 1_024,
+                maximumFreeformByteCount: 1_024
+            ),
+            beefLimits: beefLimits
+        )
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            #expect(throws: OverlayHTTPError.resourceLimit) {
+                _ = try OverlayHTTPCodec.lookupBinaryResponse(body, configuration: configuration)
+            }
+        }
+        #expect(elapsed < .seconds(10))
     }
 
     // MARK: Helpers

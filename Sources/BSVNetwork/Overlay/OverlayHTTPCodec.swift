@@ -87,8 +87,10 @@ enum OverlayHTTPCodec {
         configuration: OverlayHTTPConfiguration
     ) throws -> LookupAnswer {
         let limits = configuration.overlayLimits
-        guard bytes.count <= limits.maximumLookupAnswerByteCount,
-            StrictOverlayJSONPreflight.accepts(bytes),
+        guard bytes.count <= limits.maximumLookupAnswerByteCount else {
+            throw OverlayHTTPError.resourceLimit
+        }
+        guard StrictOverlayJSONPreflight.accepts(bytes),
             bytes.first(where: { ![0x20, 0x09, 0x0a, 0x0d].contains($0) }) == 0x7b
         else { throw OverlayHTTPError.malformedResponse }
 
@@ -299,7 +301,8 @@ enum OverlayHTTPCodec {
         }
         let sharedBytes: [UInt8]
         let beef: BEEF
-        let entries: [TransactionID: BEEFTransaction]
+        let identifiers: [TransactionID]
+        var entries: [TransactionID: BEEFTransaction] = [:]
         do {
             sharedBytes = try cursor.read(count: cursor.remaining)
             // Overlay services write BEEF with `@bsv/sdk`, whose writer can list a
@@ -309,12 +312,24 @@ enum OverlayHTTPCodec {
                 limits: configuration.beefLimits,
                 transactionOrder: .any
             )
-            entries = try beef.indexedEntries(
-                limits: configuration.beefLimits.transactionLimits
-            )
+            identifiers = try beef.transactions.map {
+                try $0.transactionID(limits: configuration.beefLimits.transactionLimits)
+            }
         } catch {
+            NetworkLog.error(
+                "OverlayHTTPCodec.lookupBinaryResponse: shared BEEF unreadable: "
+                    + "\(type(of: error)): \(String(reflecting: error))")
             throw OverlayHTTPError.malformedResponse
         }
+        for (transactionID, entry) in zip(identifiers, beef.transactions) {
+            entries[transactionID] = entry
+        }
+        // Each distinct transaction gets its own Atomic BEEF. For a chain of
+        // unproven transactions those grow with the chain, so their total is
+        // bounded as it is built, as `extractAtomicOutputs` in @bsv/sdk does
+        // (`LookupResolver.ts:917-938`), rather than only once every one exists.
+        var generatedByteCount = 0
+        var extractedByteCount = 0
         var atomicByTransactionID: [TransactionID: [UInt8]] = [:]
         var outputs: [OutputListItem] = []
         outputs.reserveCapacity(metadata.count)
@@ -327,9 +342,17 @@ enum OverlayHTTPCodec {
                 outputBEEF = cached
             } else {
                 outputBEEF = try atomicOutputBEEF(
-                    beef, subject: item.transactionID, shared: sharedBytes,
-                    limits: configuration.beefLimits)
+                    beef, subject: item.transactionID, identifiers: identifiers,
+                    shared: sharedBytes, limits: configuration.beefLimits)
+                generatedByteCount += outputBEEF.count
+                guard generatedByteCount <= limits.maximumLookupAnswerByteCount else {
+                    throw OverlayHTTPError.resourceLimit
+                }
                 atomicByTransactionID[item.transactionID] = outputBEEF
+            }
+            extractedByteCount += outputBEEF.count + (item.context?.count ?? 0)
+            guard extractedByteCount <= limits.maximumLookupAnswerByteCount else {
+                throw OverlayHTTPError.resourceLimit
             }
             do {
                 outputs.append(
@@ -358,17 +381,25 @@ enum OverlayHTTPCodec {
     private static func atomicOutputBEEF(
         _ beef: BEEF,
         subject: TransactionID,
+        identifiers: [TransactionID],
         shared: [UInt8],
         limits: BEEFLimits
     ) throws -> [UInt8] {
         do {
-            return try beef.atomicBEEF(for: subject, limits: limits).serialized(limits: limits)
+            return try beef.atomicBEEF(for: subject, identifiers: identifiers, limits: limits)
+                .serialized(limits: limits)
         } catch BEEFError.missingAncestor {
             return shared
-        } catch BEEFError.envelopeTooLarge, BEEFError.serializedSizeOverflow {
-            throw OverlayHTTPError.resourceLimit
         } catch {
-            throw OverlayHTTPError.malformedResponse
+            NetworkLog.error(
+                "OverlayHTTPCodec.lookupBinaryResponse: Atomic BEEF for \(subject.displayHex) "
+                    + "failed: \(type(of: error)): \(String(reflecting: error))")
+            switch error {
+            case BEEFError.envelopeTooLarge, BEEFError.serializedSizeOverflow:
+                throw OverlayHTTPError.resourceLimit
+            default:
+                throw OverlayHTTPError.malformedResponse
+            }
         }
     }
 
