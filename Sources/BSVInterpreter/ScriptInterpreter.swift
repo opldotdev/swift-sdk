@@ -29,7 +29,12 @@ public enum ScriptInterpreter {
         let evaluatesPayToScriptHash = configuration.era == .beforeGenesis
             && configuration.flags.contains(.payToScriptHash)
             && lockingScript.isPayToScriptHash
-        if configuration.flags.contains(.signaturePushOnly) || evaluatesPayToScriptHash {
+        let enforcesNonMalleability = configuration.enforcesNonMalleability(
+            transactionVersion: context?.transaction.version
+        )
+        let requiresPushOnly = configuration.flags.contains(.signaturePushOnly)
+            && enforcesNonMalleability
+        if requiresPushOnly || evaluatesPayToScriptHash {
             let isPushOnly = try isPushOnly(
                 unlockingScript,
                 configuration: configuration
@@ -85,7 +90,8 @@ public enum ScriptInterpreter {
             guard let top = finalStack.last else {
                 throw ScriptExecutionError.consensus(.emptyFinalStack)
             }
-            if configuration.flags.contains(.cleanStack), finalStack.count != 1 {
+            if configuration.flags.contains(.cleanStack), enforcesNonMalleability,
+               finalStack.count != 1 {
                 throw ScriptExecutionError.consensus(.cleanStackViolation(
                     actualItemCount: finalStack.count
                 ))

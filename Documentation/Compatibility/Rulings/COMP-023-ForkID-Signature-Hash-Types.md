@@ -28,3 +28,7 @@ for all six valid combinations are compared with the pinned Go SDK, and the
 compressed P2PKH unlocking script is compared byte-for-byte. Unsupported future
 digest flags require a new explicit API/ruling rather than being silently
 accepted by this ForkID type.
+
+Verification is separate. Under the Chronicle flag the interpreter accepts
+and checks `SIGHASH_CHRONICLE` signatures with the original digest, as SV
+Node does (COMP-064). This type still does not create them.
