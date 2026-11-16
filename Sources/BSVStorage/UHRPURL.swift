@@ -26,7 +26,10 @@ public struct UHRPURL: Hashable, Sendable, CustomStringConvertible,
         self.hash = BSVHashing.sha256(fileBytes)
     }
 
-    /// Parses the Go-compatible bare, `uhrp://`, or `web+uhrp://` form.
+    /// Parses the bare, `uhrp:`, `uhrp://`, or Go-compatible `web+uhrp://` form.
+    ///
+    /// `uhrp:` with or without `//` matches `normalizeURL` in the TypeScript
+    /// SDK (`storage/StorageUtils.ts`). The scheme is case-insensitive.
     public init(parsing value: String, limits: UHRPLimits = .standard) throws {
         let byteCount = value.utf8.count
         guard byteCount <= limits.maximumURLUTF8ByteCount else {
@@ -75,6 +78,9 @@ public struct UHRPURL: Hashable, Sendable, CustomStringConvertible,
         }
         if hasPrefix(source, ascii: Array("uhrp://".utf8)) {
             return "uhrp://".utf8.count
+        }
+        if hasPrefix(source, ascii: Array("uhrp:".utf8)) {
+            return "uhrp:".utf8.count
         }
         return 0
     }

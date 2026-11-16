@@ -21,14 +21,14 @@ BSVCrypto      -> BSVCore, BSVBigNum
 BSVKeys        -> BSVCore, BSVBigNum, BSVCrypto
 BSVMessage     -> BSVCore, BSVCrypto, BSVKeys
 BSVScript      -> BSVCore, BSVBigNum, BSVCrypto, BSVKeys
-BSVKVStore     -> BSVKeys, BSVScript
-BSVStorage     -> BSVCore, BSVCrypto, BSVKeys
+BSVKVStore     -> BSVCrypto, BSVKeys, BSVScript, BSVWallet
+BSVStorage     -> BSVCore, BSVCrypto, BSVKeys, BSVScript
 BSVTransaction -> BSVCore, BSVCrypto, BSVKeys, BSVScript
 BSVInterpreter -> BSVCore, BSVBigNum, BSVCrypto, BSVKeys, BSVScript, BSVTransaction
 BSVSPV         -> BSVCore, BSVCrypto, BSVTransaction, BSVInterpreter
 BSVNetwork     -> BSVCore, BSVScript, BSVStorage, BSVTransaction, BSVSPV, BSVOverlay
 BSVOverlay     -> BSVCore, BSVCrypto, BSVKeys, BSVScript, BSVTransaction
-BSVRegistry    -> BSVCore, BSVKeys, BSVOverlay, BSVScript, BSVTransaction, BSVWallet
+BSVRegistry    -> BSVCore, BSVCrypto, BSVKeys, BSVOverlay, BSVScript, BSVTransaction, BSVWallet
 BSVWallet      -> BSVCore, BSVCrypto, BSVKeys, BSVScript, BSVTransaction
 BSVAuth        -> BSVCore, BSVCrypto, BSVKeys, BSVTransaction, BSVWallet
 BSVIdentity    -> BSVCore, BSVKeys, BSVScript, BSVTransaction, BSVWallet
@@ -187,30 +187,33 @@ cyclic relationship.
 ### BSVIdentity
 
 - Bounded identity parsing and resolution on the typed wallet ABI.
-- Public certificate disclosure through caller-supplied verifier, wallet, and
-  broadcaster capabilities.
+- Public certificate disclosure to the fixed "anyone" verifier through
+  caller-supplied wallet and broadcaster capabilities.
 - No HTTP, overlay discovery, persistence, fallback wallet, or test stubs.
 
 ### BSVRegistry
 
-- Bounded immutable basket, protocol, and certificate definitions with strict
-  before-compatibility PushDrop encoding and decoding.
+- Bounded immutable basket, protocol, and certificate definitions with the
+  operator-signed lock-before PushDrop tokens of `@bsv/sdk` 4.1.1 (COMP-055).
 - Transport-neutral, typed lookup and publication boundaries with no default
   tracker, wallet orchestration, HTTP, or persistence.
 
 ### BSVKVStore
 
-- Bounded, immutable one-field key-value PushDrop tokens using Go's explicit
-  lock-before compatibility layout.
+- Bounded, immutable two-field (value and signature) key-value PushDrop tokens
+  in the lock-before layout of TypeScript `LocalKVStore` (COMP-056).
 - Locator values for a future wallet basket/tag adapter; locator text is not
   claimed to be committed by the locking script.
-- No wallet action orchestration, persistence, BEEF, encryption, overlay, or
-  network policy.
+- Token signing and owner checks through the wallet key and signature
+  capabilities; no wallet action orchestration, persistence, BEEF, encryption,
+  overlay, or network policy.
 
 ### BSVStorage
 
 - Bounded UHRP identifiers with the Go and TypeScript Base58Check layout.
 - Bounded content values and a transport-neutral provider protocol.
+- Decoding and authentication of signed six-field UHRP host advertisements
+  (COMP-057).
 - No HTTP, upload/download client, discovery, auth, wallet, or persistence.
 
 Future wallet-backed key-value work must use named modules after

@@ -226,14 +226,14 @@ print(script.isPayToPublicKeyHash)
 | `BSVMessage` | Supplies bounded BRC-77 signed messages and BRC-78 encrypted messages. |
 | `BSVCompat` | Supplies opt-in BSM, ECIES, BIP-32, BIP-39, and BRC-157 backup APIs. |
 | `BSVScript` | Supplies Script data, BIP-276, opcodes, ASM, numbers, and templates. |
-| `BSVKVStore` | Supplies bounded, transport-neutral, Go-compatible one-field key-value tokens. |
-| `BSVStorage` | Supplies bounded UHRP identifiers, content values, and a transport-neutral content-provider boundary. |
+| `BSVKVStore` | Supplies bounded, transport-neutral, signed two-field key-value tokens in the TypeScript `LocalKVStore` layout. |
+| `BSVStorage` | Supplies bounded UHRP identifiers, content values, signed host-advertisement decoding, and a transport-neutral content-provider boundary. |
 | `BSVTransaction` | Supplies transactions, inscriptions, fees, signing, BUMP, and BEEF. |
 | `BSVInterpreter` | Runs Bitcoin Script with explicit limits. |
 | `BSVSPV` | Parses block headers and verifies BRC-67 SPV proofs. |
 | `BSVNetwork` | Supplies ARC, chain tracking, transaction broadcast services, bounded overlay HTTP facilitators, and bounded UHRP download. |
 | `BSVOverlay` | Supplies bounded SHIP/SLAP values, verified administration advertisements, deterministic lookup resolution, and one-shot topic broadcast policy. |
-| `BSVRegistry` | Supplies bounded registry definitions, PushDrop codecs, records, and transport-neutral lookup or publication boundaries. |
+| `BSVRegistry` | Supplies bounded registry definitions, operator-signed PushDrop token codecs, records, and transport-neutral lookup or publication boundaries. |
 | `BSVWallet` | Supplies offline BRC-100 cryptography and BRC-52 certificate values. |
 | `BSVAuth` | Supplies certificate workflows, BRC-103 peer sessions and signed certificate exchange, BRC-104 payloads, and bounded authenticated HTTP framing. |
 | `BSVIdentity` | Resolves bounded display identities and creates transport-neutral public disclosures. |

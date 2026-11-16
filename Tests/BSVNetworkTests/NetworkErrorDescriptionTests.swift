@@ -1,4 +1,5 @@
 import BSVCore
+import BSVStorage
 import Foundation
 import Testing
 
@@ -78,5 +79,30 @@ struct NetworkErrorDescriptionTests {
         #expect(!line.contains("secret-token"))
         #expect(!line.contains("token="))
         #expect(!line.contains("Bearer"))
+    }
+
+    @Test("UHRP download errors are one plain sentence; the log form lists every reason")
+    func uhrpDownloadSentences() throws {
+        let rejected = [
+            UHRPAdvertisementRejection(answerIndex: 0, reason: .hashMismatch),
+            UHRPAdvertisementRejection(answerIndex: 1, reason: .invalidAdvertisement(.invalidSignature)),
+        ]
+        let none = UHRPDownloadError.noAvailableHosts(rejected: rejected)
+        #expect(
+            none.localizedDescription
+                == "No host is offering this file right now. 2 offers were found, but none could be used."
+        )
+        #expect(String(reflecting: none).contains("output 1: UHRP advertisement signature is invalid"))
+        #expect(UHRPDownloadError.noAvailableHosts(rejected: []).localizedDescription == "No host is offering this file.")
+
+        let failed = UHRPDownloadError.allHostsFailed([
+            UHRPHostFailure(host: URL(string: "https://a.example/f")!, reason: .httpStatus(503)),
+            UHRPHostFailure(host: URL(string: "https://b.example/f")!, reason: .contentHashMismatch),
+        ])
+        #expect(
+            failed.localizedDescription
+                == "The file could not be downloaded from any of its 2 hosts. Try again later."
+        )
+        #expect(String(reflecting: failed).contains("- https://a.example/f: HTTP status 503"))
     }
 }

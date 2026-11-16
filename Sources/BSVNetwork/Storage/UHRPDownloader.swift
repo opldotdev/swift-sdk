@@ -5,7 +5,86 @@ import BSVStorage
 import BSVTransaction
 import Foundation
 
+/// Why one lookup output did not yield a usable host advertisement.
+///
+/// Discovery skips such an output, as TypeScript `StorageDownloader` does, but
+/// keeps the reason so a caller can see why no host was found.
+public struct UHRPAdvertisementRejection: Equatable, Sendable, CustomStringConvertible {
+    public enum Reason: Error, Equatable, Sendable, CustomStringConvertible {
+        /// The output's BEEF did not yield a transaction. The text is the
+        /// underlying error's description.
+        case invalidTransaction(String)
+        case outputIndexOutOfRange(index: UInt32, outputCount: Int)
+        case invalidAdvertisement(UHRPAdvertisementError)
+        /// The advertisement is for other content.
+        case hashMismatch
+        case expired(expiryTime: UInt64, currentTime: UInt64)
+
+        public var description: String {
+            switch self {
+            case .invalidTransaction(let detail):
+                "lookup output is not a valid transaction (\(detail))"
+            case .outputIndexOutOfRange(let index, let outputCount):
+                "lookup output index \(index) is out of range (\(outputCount) outputs)"
+            case .invalidAdvertisement(let error):
+                error.description
+            case .hashMismatch:
+                "advertisement is for other content"
+            case .expired(let expiryTime, let currentTime):
+                "advertisement expired at \(expiryTime) (now \(currentTime))"
+            }
+        }
+    }
+
+    /// The output's position in the lookup answer.
+    public let answerIndex: Int
+    public let reason: Reason
+
+    public init(answerIndex: Int, reason: Reason) {
+        self.answerIndex = answerIndex
+        self.reason = reason
+    }
+
+    public var description: String { "output \(answerIndex): \(reason)" }
+}
+
+/// Why one content host did not return the requested file.
+public struct UHRPHostFailure: Equatable, Sendable, CustomStringConvertible {
+    public enum Reason: Equatable, Sendable, CustomStringConvertible {
+        case httpStatus(Int)
+        case transport(NetworkServiceError)
+        case invalidContent(UHRPError)
+        /// The returned bytes do not hash to the requested identifier.
+        case contentHashMismatch
+        /// Any other error, by its description.
+        case other(String)
+
+        public var description: String {
+            switch self {
+            case .httpStatus(let code): "HTTP status \(code)"
+            case .transport(let error): "transport error \(error)"
+            case .invalidContent(let error): error.description
+            case .contentHashMismatch: "content does not match its UHRP hash"
+            case .other(let detail): detail
+            }
+        }
+    }
+
+    public let host: URL
+    public let reason: Reason
+
+    public init(host: URL, reason: Reason) {
+        self.host = host
+        self.reason = reason
+    }
+
+    public var description: String { "\(host.absoluteString): \(reason)" }
+}
+
 /// Bounded failures from UHRP host discovery and content download.
+///
+/// `description` is a short message. `debugDescription` lists every
+/// rejected advertisement or failed host for logs.
 public enum UHRPDownloadError: Error, Equatable, Sendable, CustomStringConvertible,
     CustomDebugStringConvertible
 {
@@ -13,8 +92,11 @@ public enum UHRPDownloadError: Error, Equatable, Sendable, CustomStringConvertib
     case unexpectedLookupAnswer
     case tooManyAdvertisements(actual: Int, maximum: Int)
     case tooManyHosts(actual: Int, maximum: Int)
-    case noAvailableHosts
-    case allHostsFailed
+    /// No advertisement was usable. Each lookup output that was skipped is
+    /// listed with its reason; the list is empty when the lookup found none.
+    case noAvailableHosts(rejected: [UHRPAdvertisementRejection])
+    /// Every advertised host failed, in the order they were tried.
+    case allHostsFailed([UHRPHostFailure])
 
     public var description: String {
         switch self {
@@ -26,20 +108,49 @@ public enum UHRPDownloadError: Error, Equatable, Sendable, CustomStringConvertib
             "UHRP advertisement count exceeds its limit (\(actual) > \(maximum))"
         case .tooManyHosts(let actual, let maximum):
             "UHRP host count exceeds its limit (\(actual) > \(maximum))"
-        case .noAvailableHosts:
-            "No current UHRP host advertisement is available"
-        case .allHostsFailed:
-            "All UHRP content hosts failed"
+        case .noAvailableHosts(let rejected):
+            if let first = rejected.first {
+                "No current UHRP host advertisement is available (\(rejected.count) rejected; first: \(first.reason))"
+            } else {
+                "No UHRP host advertisement was found"
+            }
+        case .allHostsFailed(let failures):
+            if let first = failures.first {
+                "All \(failures.count) UHRP content hosts failed (first: \(first))"
+            } else {
+                "All UHRP content hosts failed"
+            }
         }
     }
 
-    public var debugDescription: String { description }
+    public var debugDescription: String {
+        switch self {
+        case .noAvailableHosts(let rejected) where !rejected.isEmpty:
+            ([description] + rejected.map { "- \($0)" }).joined(separator: "\n")
+        case .allHostsFailed(let failures) where !failures.isEmpty:
+            ([description] + failures.map { "- \($0)" }).joined(separator: "\n")
+        default:
+            description
+        }
+    }
+}
+
+/// The advertisements one lookup returned, split into those that passed every
+/// check and those that were skipped.
+public struct UHRPAdvertisementLookup: Equatable, Sendable {
+    /// Current advertisements for the requested content, in answer order.
+    public let accepted: [UHRPAdvertisement]
+    public let rejected: [UHRPAdvertisementRejection]
+
+    /// The distinct hosted-file URLs of the accepted advertisements, sorted.
+    public var hosts: [URL] {
+        Set(accepted.map(\.hostedFileLocation)).sorted { $0.absoluteString < $1.absoluteString }
+    }
 }
 
 /// Explicit limits and timeouts for UHRP discovery and download.
 public struct UHRPDownloadConfiguration: Hashable, Sendable {
     public let beefLimits: BEEFLimits
-    public let pushDropLimits: PushDropLimits
     public let overlayLimits: OverlayLimits
     public let uhrpLimits: UHRPLimits
     public let maximumAdvertisementCount: Int
@@ -49,7 +160,6 @@ public struct UHRPDownloadConfiguration: Hashable, Sendable {
 
     public init(
         beefLimits: BEEFLimits,
-        pushDropLimits: PushDropLimits = .standard,
         overlayLimits: OverlayLimits = .standard,
         uhrpLimits: UHRPLimits = .standard,
         maximumAdvertisementCount: Int = 256,
@@ -67,7 +177,6 @@ public struct UHRPDownloadConfiguration: Hashable, Sendable {
             throw UHRPDownloadError.invalidConfiguration
         }
         self.beefLimits = beefLimits
-        self.pushDropLimits = pushDropLimits
         self.overlayLimits = overlayLimits
         self.uhrpLimits = uhrpLimits
         self.maximumAdvertisementCount = maximumAdvertisementCount
@@ -79,8 +188,9 @@ public struct UHRPDownloadConfiguration: Hashable, Sendable {
 
 /// A bounded UHRP downloader with injected overlay discovery.
 ///
-/// The downloader queries `ls_uhrp`, validates each four-field PushDrop
-/// advertisement, and makes at most one GET request to each valid HTTPS host.
+/// The downloader queries `ls_uhrp`, authenticates each six-field signed
+/// advertisement with `UHRPAdvertisement`, and makes at most one GET request
+/// to each valid HTTPS host.
 /// It has no implicit tracker, retry, proxy, cookie, cache, or persistence
 /// policy.
 public struct UHRPDownloader: UHRPContentProvider, Sendable {
@@ -119,6 +229,14 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
 
     /// Resolves current, hash-bound, HTTPS advertisements in deterministic order.
     public func hosts(for identifier: UHRPURL) async throws -> [URL] {
+        try await advertisements(for: identifier).hosts
+    }
+
+    /// Looks up every advertisement for `identifier` and checks each one.
+    ///
+    /// An output that fails a check is skipped, as TypeScript does, so one bad
+    /// advertisement cannot hide valid hosts. Its reason is kept in `rejected`.
+    public func advertisements(for identifier: UHRPURL) async throws -> UHRPAdvertisementLookup {
         try Task.checkCancellation()
         let service: OverlayService
         let question: LookupQuestion
@@ -129,11 +247,14 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
             )
             question = try LookupQuestion(
                 service: service,
-                query: Self.query(for: identifier),
+                query: Self.query(
+                    for: identifier,
+                    maximumAdvertisementCount: configuration.maximumAdvertisementCount
+                ),
                 limits: configuration.overlayLimits
             )
         } catch {
-            NetworkLog.error("UHRPDownloader.hosts: lookup question not built: \(type(of: error)): \(String(reflecting: error))")
+            NetworkLog.error("UHRPDownloader.advertisements: lookup question not built: \(type(of: error)): \(String(reflecting: error))")
             throw UHRPDownloadError.invalidConfiguration
         }
 
@@ -149,36 +270,45 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
             )
         }
 
+        var accepted: [UHRPAdvertisement] = []
+        var rejected: [UHRPAdvertisementRejection] = []
         var hosts: Set<URL> = []
         let currentTime = now()
-        for output in outputs {
+        for (answerIndex, output) in outputs.enumerated() {
             try Task.checkCancellation()
-            guard
-                let host = Self.host(
-                    from: output,
-                    for: identifier,
-                    currentTime: currentTime,
-                    configuration: configuration
-                )
-            else {
-                continue
-            }
-            hosts.insert(host)
-            guard hosts.count <= configuration.maximumHostCount else {
-                throw UHRPDownloadError.tooManyHosts(
-                    actual: hosts.count,
-                    maximum: configuration.maximumHostCount
-                )
+            switch Self.advertisement(
+                from: output,
+                for: identifier,
+                currentTime: currentTime,
+                configuration: configuration
+            ) {
+            case .failure(let reason):
+                let rejection = UHRPAdvertisementRejection(answerIndex: answerIndex, reason: reason)
+                NetworkLog.error("UHRPDownloader.advertisements: skipped \(rejection)")
+                rejected.append(rejection)
+            case .success(let advertisement):
+                accepted.append(advertisement)
+                hosts.insert(advertisement.hostedFileLocation)
+                guard hosts.count <= configuration.maximumHostCount else {
+                    throw UHRPDownloadError.tooManyHosts(
+                        actual: hosts.count,
+                        maximum: configuration.maximumHostCount
+                    )
+                }
             }
         }
-        return hosts.sorted { $0.absoluteString < $1.absoluteString }
+        return UHRPAdvertisementLookup(accepted: accepted, rejected: rejected)
     }
 
     /// Downloads and verifies content from the first successful resolved host.
     public func content(for identifier: UHRPURL) async throws -> StorageContent {
-        let hosts = try await hosts(for: identifier)
-        guard !hosts.isEmpty else { throw UHRPDownloadError.noAvailableHosts }
+        let lookup = try await advertisements(for: identifier)
+        let hosts = lookup.hosts
+        guard !hosts.isEmpty else {
+            throw UHRPDownloadError.noAvailableHosts(rejected: lookup.rejected)
+        }
 
+        var failures: [UHRPHostFailure] = []
         for host in hosts {
             try Task.checkCancellation()
             // Each host is one try; a failed one is logged and the next host is tried.
@@ -196,6 +326,7 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
                         statusCode: response.statusCode,
                         body: response.body
                     )
+                    failures.append(.init(host: host, reason: .httpStatus(response.statusCode)))
                     continue
                 }
                 let content = try StorageContent(
@@ -208,6 +339,7 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
                         "UHRPDownloader.content: \(NetworkLog.location(host)) sent \(response.body.count) bytes "
                             + "that do not hash to the requested content"
                     )
+                    failures.append(.init(host: host, reason: .contentHashMismatch))
                     continue
                 }
                 return content
@@ -215,71 +347,71 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
                 throw CancellationError()
             } catch NetworkServiceError.cancelled {
                 throw CancellationError()
+            } catch let error as NetworkServiceError {
+                NetworkLog.failure("UHRPDownloader.content", request: request, underlying: error)
+                failures.append(.init(host: host, reason: .transport(error)))
+            } catch let error as UHRPError {
+                NetworkLog.failure("UHRPDownloader.content", request: request, underlying: error)
+                failures.append(.init(host: host, reason: .invalidContent(error)))
             } catch {
                 NetworkLog.failure("UHRPDownloader.content", request: request, underlying: error)
-                continue
+                failures.append(.init(host: host, reason: .other(String(describing: error))))
             }
         }
         try Task.checkCancellation()
-        throw UHRPDownloadError.allHostsFailed
+        throw UHRPDownloadError.allHostsFailed(failures)
     }
 
-    private static func query(for identifier: UHRPURL) -> [UInt8] {
-        Array("{\"uhrpUrl\":\"\(identifier.encoded)\"}".utf8)
+    /// The `ls_uhrp` query that `@bsv/sdk` 4.1.1 sends
+    /// (`storage/StorageDownloader.ts`): the bare Base58Check identifier,
+    /// one page of at most 100 results, starting at offset zero.
+    private static func query(for identifier: UHRPURL, maximumAdvertisementCount: Int) -> [UInt8] {
+        let limit = min(maximumLookupResultCount, maximumAdvertisementCount)
+        return Array(
+            "{\"uhrpUrl\":\"\(identifier.encoded)\",\"limit\":\(limit),\"offset\":0}".utf8
+        )
     }
 
-    private static func host(
+    private static let maximumLookupResultCount = 100
+
+    private static func advertisement(
         from output: OutputListItem,
         for identifier: UHRPURL,
         currentTime: UInt64,
         configuration: UHRPDownloadConfiguration
-    ) -> URL? {
-        guard
-            let transaction = try? overlayLookupTransaction(
+    ) -> Result<UHRPAdvertisement, UHRPAdvertisementRejection.Reason> {
+        let transaction: Transaction
+        do {
+            transaction = try overlayLookupTransaction(
                 for: output,
                 beefLimits: configuration.beefLimits
-            ),
-            Int(output.outputIndex) < transaction.outputs.count,
-            let decoded = try? PushDrop.decode(
-                transaction.outputs[Int(output.outputIndex)].lockingScript,
-                lockPosition: .beforeCompatibility,
-                limits: configuration.pushDropLimits
-            ),
-            decoded.fields.count == 4,
-            decoded.fields[0] == identifier.hash.bytes,
-            let advertisedIdentifierText = String(
-                bytes: decoded.fields[1],
-                encoding: .utf8
-            ),
-            let advertisedIdentifier = try? UHRPURL(
-                parsing: advertisedIdentifierText,
-                limits: configuration.uhrpLimits
-            ),
-            advertisedIdentifier == identifier,
-            let expiry = try? CompactSize.decode(
-                decoded.fields[3],
-                canonicality: .required
-            ).value,
-            expiry >= currentTime,
-            let hostText = String(bytes: decoded.fields[2], encoding: .utf8),
-            hostText.utf8.count <= configuration.uhrpLimits.maximumURLUTF8ByteCount,
-            isValidHTTPText(hostText),
-            let components = URLComponents(string: hostText),
-            components.scheme?.lowercased() == "https",
-            components.host?.isEmpty == false,
-            components.user == nil,
-            components.password == nil,
-            components.fragment == nil,
-            let host = components.url
-        else {
-            return nil
+            )
+        } catch {
+            return .failure(.invalidTransaction(String(describing: error)))
         }
-        return host
-    }
-
-    private static func isValidHTTPText(_ value: String) -> Bool {
-        !value.unicodeScalars.contains { scalar in
-            scalar.value < 0x20 || scalar.value == 0x7f
+        let index = Int(output.outputIndex)
+        guard index < transaction.outputs.count else {
+            return .failure(
+                .outputIndexOutOfRange(
+                    index: output.outputIndex,
+                    outputCount: transaction.outputs.count
+                ))
         }
+        let advertisement: UHRPAdvertisement
+        do {
+            advertisement = try UHRPAdvertisement.decode(transaction.outputs[index].lockingScript)
+        } catch let error as UHRPAdvertisementError {
+            return .failure(.invalidAdvertisement(error))
+        } catch {
+            return .failure(.invalidTransaction(String(describing: error)))
+        }
+        guard advertisement.hash == identifier.hash else {
+            return .failure(.hashMismatch)
+        }
+        guard advertisement.expiryTime >= currentTime else {
+            return .failure(
+                .expired(expiryTime: advertisement.expiryTime, currentTime: currentTime))
+        }
+        return .success(advertisement)
     }
 }
