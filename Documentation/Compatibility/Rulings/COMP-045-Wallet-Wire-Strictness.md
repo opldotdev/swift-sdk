@@ -45,7 +45,9 @@ Encoding follows the TypeScript writers in
 - A processor never sends an error's type or value to the peer. An error the
   codecs do not describe gets a fixed text (`Invalid Wallet Wire <call>
   request`, `Invalid <call> result`). The full error goes to the local log:
-  subsystem `dev.opl.swift-sdk`, category `BSVWallet` (`WalletLog`).
+  `BSVLog` category `BSVWallet` (`WalletLog`), which is `os.Logger` subsystem
+  `dev.opl.swift-sdk` on Apple platforms and the caller's `BSVLog` handler on
+  every platform.
 
 Swift keeps these bounds: canonical CompactSize, explicit frame, payload,
 text, originator and error limits, checked UInt32 values, low-S DER

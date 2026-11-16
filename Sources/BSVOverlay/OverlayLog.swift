@@ -1,10 +1,7 @@
+import BSVCore
 import Foundation
 
-#if canImport(os)
-import os
-#endif
-
-/// The overlay policy log: subsystem `dev.opl.swift-sdk`, category `BSVOverlay`.
+/// The overlay policy log: `BSVLog` category `BSVOverlay`.
 ///
 /// The HTTPS facilitators log each failed request through `NetworkLog`. This
 /// log records what the resolver and broadcaster then leave out: a host or
@@ -15,11 +12,11 @@ import os
 /// port only, so a caller host carrying a user name, password, path or query
 /// does not put it in the log; no payload bytes are written.
 ///
-/// Like `NetworkLog`, it writes through `os.Logger`, so it records nothing on
-/// platforms without `os` (Linux).
-enum OverlayLog {
-    static let subsystem = "dev.opl.swift-sdk"
-    static let category = "BSVOverlay"
+/// Like `NetworkLog`, it writes to `os.Logger` on Apple platforms and to the
+/// caller's `BSVLog` handler on every platform, Linux included.
+package enum OverlayLog {
+    package static let subsystem = BSVLog.subsystem
+    package static let category = "BSVOverlay"
 
     static func hostFailure(_ operation: String, _ failure: OverlayHostFailure) {
         error(
@@ -58,9 +55,7 @@ enum OverlayLog {
         return "\(scheme)://\(name)\(port)"
     }
 
-    private static func error(_ message: String) {
-        #if canImport(os)
-        Logger(subsystem: subsystem, category: category).error("\(message, privacy: .public)")
-        #endif
+    package static func error(_ message: String) {
+        BSVLog.error(category: category, message)
     }
 }

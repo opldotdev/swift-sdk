@@ -214,6 +214,16 @@ print(script.isPayToPublicKeyHash)
 - Redacts secret values from default descriptions and reflection.
 - Reports an ARC response failure after POST as uncertain delivery.
 - Compares specified wire formats with the pinned Go SDK v1.3.3.
+- Logs the full cause of a failure it reports more briefly, to `os.Logger` on
+  Apple platforms (subsystem `dev.opl.swift-sdk`) and, on every platform, to a
+  handler you install. Details marked private reach the handler as
+  `<private>` unless you opt in:
+
+  ```swift
+  BSVLog.setHandler { entry in
+      print("[\(entry.category)] \(entry.message)")
+  }
+  ```
 
 ## Modules
 

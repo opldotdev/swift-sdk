@@ -1,21 +1,18 @@
+import BSVCore
 import Foundation
-#if canImport(os)
-import os
-#endif
 
-/// The network log: subsystem `dev.opl.swift-sdk`, category `BSVNetwork`.
+/// The network log: `BSVLog` category `BSVNetwork`, written to `os.Logger` on
+/// Apple platforms and to the caller's `BSVLog` handler on every platform.
 ///
 /// A line names the call, the method, and the host and path. It never holds a query string,
 /// a request header or a request body, because those can carry API keys and callback tokens.
 /// Provider bodies go through `sanitizedProviderText` first, with the caller's secrets redacted.
 package enum NetworkLog {
-    package static let subsystem = "dev.opl.swift-sdk"
+    package static let subsystem = BSVLog.subsystem
     package static let category = "BSVNetwork"
 
     package static func error(_ message: String) {
-        #if canImport(os)
-        Logger(subsystem: subsystem, category: category).error("\(message, privacy: .public)")
-        #endif
+        BSVLog.error(category: category, message)
     }
 
     /// A response that arrived but could not be used: its status, the reason and the body.
