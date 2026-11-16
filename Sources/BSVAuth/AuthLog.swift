@@ -9,8 +9,11 @@ import os
 /// a `BRC104Error` reported as `BRC104HTTPFramingError.invalidFrame`, the
 /// detailed error is written here with its type and case. The reasons this
 /// module writes hold no nonce, signature, payload, header value, certificate
-/// field or key. An underlying error is written as it describes itself, so an
-/// error thrown by a caller's wallet appears as that wallet wrote it.
+/// field or key, and are public in the system log. An underlying error
+/// defined by this SDK carries only counts and sizes and is public too. Any
+/// other underlying error, such as one thrown by a caller's wallet, is public
+/// only by type; its description is marked private, so it can hold whatever
+/// that code put in it without reaching a shared log in clear.
 package enum AuthLog {
     package static let subsystem = "dev.opl.swift-sdk"
     package static let category = "BSVAuth"
@@ -31,8 +34,35 @@ package enum AuthLog {
         _ underlying: any Error,
         as reported: Reported
     ) {
-        error(line(operation, underlying, as: reported))
+        observer?(line(operation, underlying, as: reported))
+        #if canImport(os)
+        let typeName = String(reflecting: type(of: underlying))
+        let detail = String(reflecting: underlying)
+        let outcome = String(reflecting: reported)
+        let logger = Logger(subsystem: subsystem, category: category)
+        if isSDKError(underlying) {
+            logger.error(
+                "\(operation, privacy: .public): \(typeName, privacy: .public): \(detail, privacy: .public); reported as \(outcome, privacy: .public)"
+            )
+        } else {
+            logger.error(
+                "\(operation, privacy: .public): \(typeName, privacy: .public): \(detail, privacy: .private); reported as \(outcome, privacy: .public)"
+            )
+        }
+        #endif
     }
+
+    /// Whether `error` is a type this SDK defines, whose cases carry only
+    /// counts, sizes and names chosen here.
+    package static func isSDKError(_ error: any Error) -> Bool {
+        let module = String(reflecting: type(of: error)).prefix { $0 != "." }
+        return sdkModules.contains(String(module))
+    }
+
+    private static let sdkModules: Set<String> = [
+        "BSVAuth", "BSVCore", "BSVCrypto", "BSVKeys", "BSVMessage", "BSVScript",
+        "BSVTransaction", "BSVWallet",
+    ]
 
     /// Records why a check failed when the caller receives only `reported`.
     package static func rejected<Reported: Error>(

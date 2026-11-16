@@ -113,13 +113,7 @@ public enum AuthCertificateExchange {
         using wallet: any CertificateWallet,
         limits: AuthLimits = .standard
     ) async throws -> [AuthValidatedCertificate] {
-        guard !certificates.isEmpty else {
-            AuthLog.rejected(
-                "AuthCertificateExchange.validate", "no certificates",
-                as: AuthError.certificateValidationFailed)
-            throw AuthError.certificateValidationFailed
-        }
-        return try await validate(
+        try await validate(
             certificates, from: peer, requested: request, using: wallet, limits: limits,
             complete: true)
     }
@@ -132,8 +126,9 @@ public enum AuthCertificateExchange {
     /// that type's requested fields, all of which must decrypt. Types and
     /// fields that were requested but not supplied are allowed: the result
     /// holds exactly what was disclosed, and the caller decides whether that
-    /// is enough. No certificates gives an empty result. Any certificate that
-    /// fails makes the whole call fail.
+    /// is enough. No certificates fails, as `validateCertificates.ts:74`
+    /// does, so a returned value always holds at least one certificate. Any
+    /// certificate that fails makes the whole call fail.
     public static func validateSubset(
         _ certificates: [VerifiableCertificate],
         from peer: PublicKey,
@@ -159,6 +154,7 @@ public enum AuthCertificateExchange {
             AuthLog.rejected(operation, reason, as: AuthError.certificateValidationFailed)
             return AuthError.certificateValidationFailed
         }
+        guard !certificates.isEmpty else { throw reject("no certificates") }
         guard certificates.count <= limits.maximumCertificateCount else {
             throw reject("\(certificates.count) certificates exceed the limit")
         }

@@ -420,10 +420,19 @@ public actor PeerAuthenticator {
         var deadline: ContinuousClock.Instant?
         var seen: Set<String> = []
         var messageCount = 0
-        /// Requests this side sent and has not had answered, oldest first.
+        /// Requests this side sent with certificateRequest messages and has
+        /// not had answered, oldest first.
         var pendingCertificateRequests: [AuthRequestedCertificateSet] = []
-        /// Requests the peer sent and this side has not answered, oldest first.
+        /// The policy this side sent in initialRequest or initialResponse,
+        /// until a response settles it. Responses are matched with it only
+        /// after `pendingCertificateRequests`, as `Peer.ts:1236-1241` does.
+        var pendingHandshakeRequest: AuthRequestedCertificateSet? = nil
+        /// Requests the peer sent with certificateRequest messages and this
+        /// side has not answered, oldest first.
         var receivedCertificateRequests: [AuthRequestedCertificateSet] = []
+        /// The policy the peer sent in initialRequest or initialResponse,
+        /// until this side answers it.
+        var receivedHandshakeRequest: AuthRequestedCertificateSet? = nil
     }
     /// The most certificate requests a session keeps open in each direction.
     /// `@bsv/sdk` keeps any number (`Peer.ts:474-478`); a bound keeps one
@@ -486,7 +495,7 @@ public actor PeerAuthenticator {
         sessions[id] = .init(
             id: id, state: .challengeSent, peer: expectedPeer, ownNonce: nonce, peerNonce: nil,
             deadline: clock.now + limits.handshakeTimeout)
-        sessions[id]?.pendingCertificateRequests = Self.askingRequest(request).map { [$0] } ?? []
+        sessions[id]?.pendingHandshakeRequest = Self.askingRequest(request)
         return (
             id,
             [
@@ -605,7 +614,13 @@ public actor PeerAuthenticator {
     /// peer has sent its first signed message.
     ///
     /// `answering` names the request answered. When it is `nil`, the oldest
-    /// open request the certificates fit is answered.
+    /// certificateRequest the certificates fit is answered, and the
+    /// handshake policy only if none fits, the order in which the peer
+    /// matches the response (`Peer.ts:1236-1241`).
+    ///
+    /// `answering` settles a request on this side only. The response does
+    /// not carry it, so the peer settles the oldest of its own requests that
+    /// the certificates fit, which may be a different one.
     public func makeCertificateResponse(
         _ certificates: [VerifiableCertificate],
         using sessionID: AuthSessionID,
@@ -615,7 +630,7 @@ public actor PeerAuthenticator {
         purgeExpired()
         guard let session = sessions[sessionID], Self.canExchangeCertificates(session),
             let peer = session.peer, let peerNonce = session.peerNonce,
-            !session.receivedCertificateRequests.isEmpty
+            !Self.answerableRequests(session).isEmpty
         else { throw AuthError.notAuthenticated }
         let ownNonce = session.ownNonce
         guard session.messageCount < limits.maximumMessages else {
@@ -632,7 +647,7 @@ public actor PeerAuthenticator {
         try Task.checkCancellation()
         let request: AuthRequestedCertificateSet
         if let answered {
-            guard session.receivedCertificateRequests.contains(answered) else {
+            guard Self.answerableRequests(session).contains(answered) else {
                 throw AuthError.unexpectedMessage
             }
             try requireCertificateMatch(
@@ -640,14 +655,14 @@ public actor PeerAuthenticator {
             request = answered
         } else {
             request = try firstMatchingRequest(
-                certificates, in: session.receivedCertificateRequests, peer: own,
+                certificates, in: Self.answerableRequests(session), peer: own,
                 operation: "makeCertificateResponse")
         }
         let signature = try await sign(data, keyID: nonce + " " + peerNonce, peer: peer)
         try Task.checkCancellation()
         guard var current = sessions[sessionID], Self.canExchangeCertificates(current),
             current.peer == peer, current.peerNonce == peerNonce,
-            let answeredIndex = current.receivedCertificateRequests.firstIndex(of: request)
+            Self.answerableRequests(current).contains(request)
         else { throw AuthError.sessionNotFound }
         guard current.messageCount < limits.maximumMessages else {
             sessions.removeValue(forKey: sessionID)
@@ -655,7 +670,11 @@ public actor PeerAuthenticator {
         }
         current.messageCount += 1
         current.seen.insert(nonce)
-        current.receivedCertificateRequests.remove(at: answeredIndex)
+        if let answeredIndex = current.receivedCertificateRequests.firstIndex(of: request) {
+            current.receivedCertificateRequests.remove(at: answeredIndex)
+        } else {
+            current.receivedHandshakeRequest = nil
+        }
         sessions[sessionID] = current
         return .send(
             AuthMessage(
@@ -692,10 +711,8 @@ public actor PeerAuthenticator {
             id: id, state: .responseSentAwaitingPeerProof, peer: message.identityKey,
             ownNonce: ownNonce,
             peerNonce: incoming, deadline: clock.now + limits.handshakeTimeout, seen: [incoming],
-            pendingCertificateRequests: Self.askingRequest(certificatesToRequest).map { [$0] } ?? [],
-            receivedCertificateRequests: Self.askingRequest(message.requestedCertificates).map {
-                [$0]
-            } ?? [])
+            pendingHandshakeRequest: Self.askingRequest(certificatesToRequest),
+            receivedHandshakeRequest: Self.askingRequest(message.requestedCertificates))
         let signature: [UInt8]
         do {
             signature = try await sign(
@@ -747,10 +764,10 @@ public actor PeerAuthenticator {
         // ignored and any pending request stays open.
         var answered: AuthRequestedCertificateSet?
         if let certificates = message.certificates, !certificates.isEmpty,
-            let pending = sessions[index]?.pendingCertificateRequests, !pending.isEmpty
+            let pending = sessions[index]?.pendingHandshakeRequest
         {
             answered = try firstMatchingRequest(
-                certificates, in: pending, peer: message.identityKey,
+                certificates, in: [pending], peer: message.identityKey,
                 operation: "receive initialResponse")
         }
         guard var session = sessions[index], session.state == .challengeSent,
@@ -766,16 +783,16 @@ public actor PeerAuthenticator {
         // general messages until it receives a matching certificateResponse
         // (`Peer.ts:840-850`, `Peer.ts:1326-1328`).
         let theirRequest = Self.askingRequest(message.requestedCertificates)
-        session.receivedCertificateRequests = theirRequest.map { [$0] } ?? []
+        session.receivedHandshakeRequest = theirRequest
         var actions: [AuthPeerAction] = []
         // A responder answers a handshake policy with certificates in
         // initialResponse (`Peer.ts:836-849`, `Peer.ts:872`). They are not
         // covered by the signature, which binds only the nonces; the initiator
         // validates them as `Peer.ts:960-982` does.
         if let certificates = message.certificates, let request = answered,
-            let answeredIndex = session.pendingCertificateRequests.firstIndex(of: request)
+            session.pendingHandshakeRequest == request
         {
-            session.pendingCertificateRequests.remove(at: answeredIndex)
+            session.pendingHandshakeRequest = nil
             actions.append(
                 .certificateResponse(
                     .init(
@@ -789,6 +806,51 @@ public actor PeerAuthenticator {
                     .init(sessionID: index, peer: message.identityKey, request: request)))
         }
         return actions
+    }
+
+    /// Requests this side is waiting on, in the order a response is matched
+    /// with them: certificateRequests oldest first, then the handshake policy.
+    private static func openRequests(_ session: Session) -> [AuthRequestedCertificateSet] {
+        session.pendingCertificateRequests + (session.pendingHandshakeRequest.map { [$0] } ?? [])
+    }
+
+    /// Requests the peer is waiting on this side to answer, in matching
+    /// order: certificateRequests oldest first, then the handshake policy.
+    private static func answerableRequests(_ session: Session) -> [AuthRequestedCertificateSet] {
+        session.receivedCertificateRequests + (session.receivedHandshakeRequest.map { [$0] } ?? [])
+    }
+
+    /// Refuses a received request that would be the seventeenth open one, is
+    /// identical to one already open, or would take the open requests of the
+    /// session past `maximumCertificateAggregateBytes` together. This bounds
+    /// what one authenticated peer can keep in memory to what one request
+    /// may hold.
+    private func admitReceivedRequest(
+        _ request: AuthRequestedCertificateSet,
+        into session: Session
+    ) throws {
+        let open = Self.answerableRequests(session)
+        guard session.receivedCertificateRequests.count < Self.maximumOpenCertificateRequests else {
+            AuthLog.rejected(
+                "receive certificateRequest",
+                "\(session.receivedCertificateRequests.count) requests are already open",
+                as: AuthError.resourceLimit)
+            throw AuthError.resourceLimit
+        }
+        guard !open.contains(request) else {
+            AuthLog.rejected(
+                "receive certificateRequest", "an identical request is already open",
+                as: AuthError.unexpectedMessage)
+            throw AuthError.unexpectedMessage
+        }
+        let total = (open + [request]).reduce(0) { $0 + $1.accountedBytes }
+        guard total <= limits.maximumCertificateAggregateBytes else {
+            AuthLog.rejected(
+                "receive certificateRequest",
+                "open requests would hold \(total) bytes, over \(limits.maximumCertificateAggregateBytes)",
+                as: AuthError.resourceLimit)
+            throw AuthError.resourceLimit
+        }
     }
 
     /// A requested set that asks for something. `@bsv/sdk` treats a set with
@@ -869,11 +931,12 @@ public actor PeerAuthenticator {
         // A request without certifiers asks for nothing: it is verified and
         // authenticates the sender, and there is nothing to answer
         // (`Peer.ts:1092-1100`).
-        // Several requests may be open at once (`Peer.ts:1236-1240`).
+        // Several requests may be open at once (`Peer.ts:474-478`), within
+        // `admitReceivedRequest`'s bounds.
         let asking = Self.askingRequest(request)
-        guard asking == nil
-            || current.receivedCertificateRequests.count < Self.maximumOpenCertificateRequests
-        else { throw AuthError.resourceLimit }
+        if asking != nil {
+            try admitReceivedRequest(request, into: current)
+        }
         try consumeMessage(on: index, session: &current)
         current.seen.insert(nonce)
         if asking != nil { current.receivedCertificateRequests.append(request) }
@@ -898,15 +961,9 @@ public actor PeerAuthenticator {
         else { throw AuthError.sessionNotFound }
         guard message.initialNonce == session.peerNonce else { throw AuthError.invalidNonce }
         guard !session.seen.contains(nonce) else { throw AuthError.replay }
-        guard !session.pendingCertificateRequests.isEmpty else {
+        guard !Self.openRequests(session).isEmpty else {
             throw AuthError.unexpectedMessage
         }
-        // A response does not name the request it answers, so it is matched
-        // with the oldest open request it fits, as `Peer.ts:1236-1240` does.
-        // An empty response declines the oldest request.
-        let request = try firstMatchingRequest(
-            certificates, in: session.pendingCertificateRequests, peer: message.identityKey,
-            operation: "receive certificateResponse")
         guard inFlightNonces.insert(nonce).inserted else { throw AuthError.replay }
         defer { inFlightNonces.remove(nonce) }
         let data =
@@ -923,12 +980,23 @@ public actor PeerAuthenticator {
         try Task.checkCancellation()
         guard var current = sessions[index], Self.canExchangeCertificates(current),
             current.ownNonce == target, current.peer == message.identityKey,
-            !current.seen.contains(nonce),
-            let answeredIndex = current.pendingCertificateRequests.firstIndex(of: request)
+            !current.seen.contains(nonce)
         else { throw AuthError.replay }
+        // The signature is verified first, as in `Peer.ts:1202-1217`. A
+        // response does not name the request it answers, so it settles the
+        // oldest certificateRequest it fits and only then the handshake
+        // policy (`Peer.ts:1236-1241`). An empty response declines the oldest
+        // open request in the same order.
+        let request = try firstMatchingRequest(
+            certificates, in: Self.openRequests(current), peer: message.identityKey,
+            operation: "receive certificateResponse")
         try consumeMessage(on: index, session: &current)
         current.seen.insert(nonce)
-        current.pendingCertificateRequests.remove(at: answeredIndex)
+        if let answeredIndex = current.pendingCertificateRequests.firstIndex(of: request) {
+            current.pendingCertificateRequests.remove(at: answeredIndex)
+        } else {
+            current.pendingHandshakeRequest = nil
+        }
         markAuthenticated(&current)
         sessions[index] = current
         return [

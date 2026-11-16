@@ -104,10 +104,11 @@ struct TypeScriptInteropTests {
         let subset = try await AuthCertificateExchange.validateSubset(
             received.certificates, from: typeScript, requested: wider, using: swiftWallet)
         #expect(subset.first?.disclosedFields == expected)
-        #expect(
+        // No certificates is a failure, as `validateCertificates.ts:74` has it.
+        await #expect(throws: AuthError.certificateValidationFailed) {
             try await AuthCertificateExchange.validateSubset(
-                [], from: typeScript, requested: wider, using: swiftWallet
-            ).isEmpty)
+                [], from: typeScript, requested: wider, using: swiftWallet)
+        }
         let narrower = try AuthRequestedCertificateSet(
             certifiers: [certifier],
             certificateTypes: [

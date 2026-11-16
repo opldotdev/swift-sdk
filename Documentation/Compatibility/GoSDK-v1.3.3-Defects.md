@@ -1076,10 +1076,10 @@ compare the exact response with that request, and clear the request only after
 successful signature and certificate validation.
 
 Swift handling: `PeerAuthenticator` keeps up to 16 open requests per session
-and direction, as `@bsv/sdk` 4.1.1 does (`Peer.ts:474-478`). It binds each
-response to the oldest open request it fits, rejects unsolicited or mismatched
-responses, and clears that request only after successful response-signature
-verification.
+and direction, as `@bsv/sdk` 4.1.1 does (`Peer.ts:474-478`). After the
+response signature verifies, it binds the response to the oldest open request
+it fits, in the order of `Peer.ts:1236-1241`, rejects unsolicited or
+mismatched responses, and clears that request.
 
 ### GO-063: The requested-certificate HTTP header is not signed
 

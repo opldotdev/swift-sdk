@@ -21,13 +21,26 @@ equal the session nonce it holds for the peer.
 
 ### Open requests
 
-Each direction of a session may have up to 16 open requests at once, as
-`Peer.ts:474-478` keeps one per request nonce. A seventeenth request, sent or
-received, fails with `AuthError.resourceLimit` and leaves the session open.
-A response settles the oldest open request it fits (`Peer.ts:1236-1240`); an
-empty response declines the oldest. `makeCertificateResponse(_:using:answering:)`
-can name the request being answered instead. A response that fits no open
-request, or arrives when none is open, is refused.
+Each direction of a session may have up to 16 open certificateRequests at
+once, as `Peer.ts:474-478` keeps one per request nonce, besides a handshake
+policy. A seventeenth request, sent or received, fails with
+`AuthError.resourceLimit` and leaves the session open. The open requests a
+peer has sent are also charged together against
+`AuthLimits.maximumCertificateAggregateBytes` (33 bytes per certifier, and
+32 per type plus its field names), so one authenticated peer can make a
+session hold no more than one request may hold. A received request identical
+to one already open fails with `AuthError.unexpectedMessage`.
+
+A response does not name the request it answers. As in `Peer.ts:1229-1241`,
+its signature is verified first; it then settles the oldest certificateRequest
+it fits and the handshake policy only if none fits. An empty response declines
+the oldest open request in the same order, where `@bsv/sdk` leaves its
+requests open (`Peer.ts:1229`); a TypeScript `Peer` without certificates sends
+one empty response per request (`Peer.ts:1117`), so the two stay in step.
+`makeCertificateResponse(_:using:answering:)` can name the request being
+answered on the sending side only: the peer still settles the first of its
+own requests the certificates fit. A response that fits no open request, or
+arrives when none is open, is refused.
 
 ### Handshake policies
 
@@ -48,6 +61,9 @@ Certificates a peer includes in `initialResponse` are checked against the
 policy Swift sent and returned as a certificate response, and are ignored when
 none was sent. They are not covered by any signature (`Peer.ts:960-982`).
 
+`@bsv/sdk` holds general messages until its handshake policy is answered
+(`Peer.ts:1326-1328`). Swift delivers them; holding them is caller policy.
+
 ### Validation
 
 `PeerAuthenticator` verifies the peer message signature and correlates each
@@ -58,9 +74,9 @@ The caller validates the certificates with `AuthCertificateExchange`:
   certificate. It fails when given no certificates.
 - `validateSubset` accepts what `validateCertificates` in `@bsv/sdk` accepts
   (`validateCertificates.ts:23-29`): a nonempty subset of the requested fields
-  for each certificate, with requested types allowed to be missing. It returns
-  an empty result for no certificates. The caller decides whether what was
-  disclosed is enough.
+  for each certificate, with requested types allowed to be missing. Like
+  `validateCertificates.ts:74`, it fails when given no certificates. The
+  caller decides whether what was disclosed is enough.
 
 Both verify each BRC-52 signature, bind the subject to the peer, decrypt every
 revealed field, and fail as a whole when any certificate fails. The caller
@@ -75,10 +91,12 @@ requested certificate type.
 Errors stay short and name no side, so the same text fits Swift as client or
 server. The detailed cause of a refused message or certificate, such as the
 underlying `BRC104Error`, JSON or certificate decoding error, or which
-certificate failed which check, is written to the system log through
-`os.Logger` with subsystem `dev.opl.swift-sdk` and category `BSVAuth`.
-The reasons `BSVAuth` writes hold no certificate field value, keyring,
-nonce or signature; an underlying error is written as it describes itself.
+certificate failed which check, is written to the system log on Apple
+platforms through `os.Logger` with subsystem `dev.opl.swift-sdk` and category
+`BSVAuth`. The reasons `BSVAuth` writes hold no certificate field value,
+keyring, nonce or signature. An underlying error defined by this SDK is logged
+in full; any other, such as one from a caller's wallet, is public by type only
+and its description is marked private.
 
 ## Compatibility
 

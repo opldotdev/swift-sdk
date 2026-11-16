@@ -56,6 +56,16 @@ public struct AuthRequestedCertificateSet:
         self.certificateTypes = certificateTypes
     }
 
+    /// The bytes the set is charged in `AuthLimits.maximumCertificateAggregateBytes`:
+    /// 33 per certifier, and 32 per type plus the UTF-8 length of its field names.
+    /// `init` keeps this within the limit, so the sum cannot overflow.
+    var accountedBytes: Int {
+        certifiers.count * 33
+            + certificateTypes.values.reduce(0) { total, fields in
+                total + 32 + fields.reduce(0) { $0 + $1.value.utf8.count }
+            }
+    }
+
     public var description: String { "<redacted requested certificate set>" }
     public var debugDescription: String { description }
     public var customMirror: Mirror {
