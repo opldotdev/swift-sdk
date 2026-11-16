@@ -185,7 +185,11 @@ final class WalletWireKeyQueryTests: XCTestCase {
         }
     }
 
-    func testAbsentForSelfNormalizesToExplicitFalse() throws {
+    /// `@bsv/sdk` 4.1.1 writes an omitted `forSelf` as -1
+    /// (packages/sdk/src/wallet/substrates/WalletWireTransceiver.ts:867 and
+    /// :1225 write a byte only when `typeof args.forSelf === 'boolean'`), and
+    /// TS callers omit `false`. Swift writes `false` as absent and reads an explicit 0 as false.
+    func testFalseForSelfIsWrittenAbsentAndExplicitFalseNormalizes() throws {
         let protocolID = try walletTestProtocol("wire normalization")
         let keyID = try walletTestKeyID("wire-key")
 
@@ -209,10 +213,10 @@ final class WalletWireKeyQueryTests: XCTestCase {
             limits: .standard
         )
         let getPublicKeyForSelfOffset = getPublicKeyReader.position
-        XCTAssertEqual(getPublicKeyFrame.parameters[getPublicKeyForSelfOffset], 0)
+        XCTAssertEqual(getPublicKeyFrame.parameters[getPublicKeyForSelfOffset], 0xFF)
 
         var absentGetPublicKeyParameters = getPublicKeyFrame.parameters
-        absentGetPublicKeyParameters[getPublicKeyForSelfOffset] = 0xFF
+        absentGetPublicKeyParameters[getPublicKeyForSelfOffset] = 0
         let absentGetPublicKey = try WalletWireCodec.encodeRequestFrame(.init(
             call: .getPublicKey,
             originator: "",
@@ -245,10 +249,10 @@ final class WalletWireKeyQueryTests: XCTestCase {
         var verifyReader = WalletWireReader(verifyFrame.parameters)
         _ = try walletWireDecodeKeyParameters(from: &verifyReader, limits: .standard)
         let verifyForSelfOffset = verifyReader.position
-        XCTAssertEqual(verifyFrame.parameters[verifyForSelfOffset], 0)
+        XCTAssertEqual(verifyFrame.parameters[verifyForSelfOffset], 0xFF)
 
         var absentVerifyParameters = verifyFrame.parameters
-        absentVerifyParameters[verifyForSelfOffset] = 0xFF
+        absentVerifyParameters[verifyForSelfOffset] = 0
         let absentVerify = try WalletWireCodec.encodeRequestFrame(.init(
             call: .verifySignature,
             originator: "",

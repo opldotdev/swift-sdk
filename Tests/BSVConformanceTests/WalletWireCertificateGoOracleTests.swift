@@ -140,7 +140,9 @@ final class WalletWireCertificateGoOracleTests: XCTestCase {
                     WalletCertificateResult(
                         certificate: fixture.certificate,
                         keyring: fixture.keyring,
-                        verifier: [7]
+                        // The ABI holds hex text; the wire holds the 33 key
+                        // bytes, as `@bsv/sdk` and pinned Go both write them.
+                        verifier: Array(Hex.encode(fixture.verifier.compressedBytes).utf8)
                     ),
                 ]
             )),
@@ -224,6 +226,10 @@ final class WalletWireCertificateGoOracleTests: XCTestCase {
         XCTAssertFalse(trailingResponse.ok)
         XCTAssertEqual(trailingResponse.error?.category, "trailingData")
 
+        // The pinned Go adapter requires the record count to equal the total.
+        // COMP-048: `@bsv/sdk` 4.1.1 reads records until the frame ends and
+        // treats the total as the count of every match, so Swift reads this
+        // frame as an empty page of a two-certificate result.
         let multiDiscovery = [UInt8](arrayLiteral: 0, 2)
         let discoveryResponse = try certificateOracleRequest(
             client,
@@ -234,6 +240,13 @@ final class WalletWireCertificateGoOracleTests: XCTestCase {
         )
         XCTAssertFalse(discoveryResponse.ok)
         XCTAssertEqual(discoveryResponse.error?.category, "invalidArgument")
+        guard case .discoverByIdentityKey(let page) = try WalletWireCodec.decodeCertificateResult(
+            multiDiscovery, expectedCall: .discoverByIdentityKey
+        ) else {
+            return XCTFail("expected a discovery result")
+        }
+        XCTAssertEqual(page.totalCertificates, 2)
+        XCTAssertTrue(page.certificates.isEmpty)
     }
 }
 

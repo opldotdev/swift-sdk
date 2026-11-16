@@ -128,7 +128,7 @@ func walletWireReadTextMap(
     )
     var result: [CertificateFieldName: String] = [:]
     result.reserveCapacity(min(count, reader.remainingCount / 2))
-    var previous: [UInt8]?
+    var previous = Set<[UInt8]>()
     for _ in 0..<count {
         let nameBytes = try reader.readVarBytes(
             maximum: certificateLimits.maximumFieldNameUTF8ByteCount,
@@ -207,7 +207,7 @@ func walletWireReadKeyring(
     let count = try reader.readCount(maximum: maximum, kind: kind)
     var result: [CertificateFieldName: CertificateCiphertext] = [:]
     result.reserveCapacity(min(count, reader.remainingCount / 2))
-    var previous: [UInt8]?
+    var previous = Set<[UInt8]>()
     for _ in 0..<count {
         let nameBytes = try reader.readVarBytes(
             maximum: certificateLimits.maximumFieldNameUTF8ByteCount,
@@ -234,25 +234,25 @@ func walletWireReadKeyring(
     return result
 }
 
+/// Map entries may arrive in any order (@bsv/sdk writes insertion order), but a
+/// name may appear only once.
 private func walletWireRequireStrictMapOrder(
     _ current: [UInt8],
-    after previous: inout [UInt8]?,
+    after previous: inout Set<[UInt8]>,
     kind: String
 ) throws {
-    if let previous, !previous.lexicographicallyPrecedes(current) {
-        throw WalletWireError.nonRoundTrippableValue(kind: "unsorted or duplicate \(kind)")
+    guard previous.insert(current).inserted else {
+        throw WalletWireError.nonRoundTrippableValue(kind: "duplicate \(kind)")
     }
-    previous = current
 }
 
-func walletWireMapCertificateError(_ error: Error) -> WalletWireError {
-    if let wire = error as? WalletWireError { return wire }
-    guard let certificate = error as? CertificateError else {
-        return .nonRoundTrippableValue(kind: "certificate value")
-    }
+/// Maps certificate size and encoding failures to wire errors and keeps every other
+/// error as it is, so the error frame and the log both say what was wrong.
+func walletWireMapCertificateError(_ error: Error) -> any Error {
+    guard let certificate = error as? CertificateError else { return error }
     switch certificate {
     case .tooManyFields(let actual, let maximum):
-        return .countLimitExceeded(
+        return WalletWireError.countLimitExceeded(
             kind: "certificate fields",
             actual: UInt64(max(0, actual)),
             maximum: maximum
@@ -261,20 +261,20 @@ func walletWireMapCertificateError(_ error: Error) -> WalletWireError {
          .fieldValueTooLarge(let actual, let maximum),
          .keyringValueTooLarge(let actual, let maximum),
          .certificateTooLarge(let actual, let maximum):
-        return .byteLimitExceeded(
+        return WalletWireError.byteLimitExceeded(
             kind: "certificate value",
             actual: actual,
             maximum: maximum
         )
     case .nonCanonicalCompactSize:
-        return .noncanonicalCompactSize
+        return WalletWireError.noncanonicalCompactSize
     case .truncatedCertificate:
-        return .truncated
+        return WalletWireError.truncated
     case .invalidPublicKey:
-        return .invalidPublicKey
+        return WalletWireError.invalidPublicKey
     case .invalidSignature:
-        return .invalidSignature
+        return WalletWireError.invalidSignature
     default:
-        return .nonRoundTrippableValue(kind: "certificate value")
+        return certificate
     }
 }

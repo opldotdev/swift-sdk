@@ -3,15 +3,21 @@ import BSVKeys
 import BSVTransaction
 
 extension WalletWireCodec {
+    /// Encodes an action request frame. `listOutputsEncoding: .spendable` appends
+    /// the one-byte `01` extension to a `listOutputs` request.
     public static func encodeActionRequest(
         _ request: WalletWireActionRequest,
         originator: String,
+        listOutputsEncoding: WalletWireListOutputsEncoding = .legacy,
         beefLimits: BEEFLimits,
         limits: WalletWireLimits = .standard
     ) throws -> [UInt8] {
-        let parameters = try encodeActionParameters(
+        var parameters = try encodeActionParameters(
             request, beefLimits: beefLimits, limits: limits
         )
+        if case .listOutputs = request, listOutputsEncoding == .spendable {
+            parameters.append(1)
+        }
         return try encodeRequestFrame(
             WalletWireRequestFrame(call: request.call, originator: originator, parameters: parameters),
             limits: limits
@@ -25,11 +31,17 @@ extension WalletWireCodec {
     ) throws -> WalletWireDecodedActionRequest {
         let frame = try decodeRequestFrame(bytes, limits: limits)
         do {
+            var parameters = frame.parameters
+            var encoding = WalletWireListOutputsEncoding.legacy
+            if frame.call == .listOutputs {
+                encoding = try walletWireSplitListOutputsExtension(&parameters, limits: limits)
+            }
             return WalletWireDecodedActionRequest(
                 originator: frame.originator,
                 request: try decodeActionParameters(
-                    frame.parameters, call: frame.call, beefLimits: beefLimits, limits: limits
-                )
+                    parameters, call: frame.call, beefLimits: beefLimits, limits: limits
+                ),
+                listOutputsEncoding: encoding
             )
         } catch let error as WalletWireError {
             throw error
@@ -38,29 +50,57 @@ extension WalletWireCodec {
         }
     }
 
+    /// Encodes an action result frame.
+    ///
+    /// `request` supplies what the layout depends on: a BRC-112 balance basket
+    /// and the `listOutputs` encoding. A refused abort is the error frame code 8
+    /// that `@bsv/sdk` 4.1.1 sends. A result with no wire encoding throws
+    /// `WalletWireResultRejection`, which a processor sends in-band.
     public static func encodeActionResult(
         _ result: WalletWireActionResult,
+        request: WalletWireActionRequest? = nil,
+        listOutputsEncoding: WalletWireListOutputsEncoding = .legacy,
         beefLimits: BEEFLimits,
         limits: WalletWireLimits = .standard
     ) throws -> [UInt8] {
+        if case .abortAction(let value) = result, !value.aborted {
+            return try encodeResultFrame(.failure(WalletWireRemoteError(
+                code: WalletWireErrorCode.abortRefused,
+                message: WalletWireFailureText.abortRefused,
+                stack: "",
+                limits: limits
+            )), limits: limits)
+        }
         let payload = try encodeActionResultPayload(
-            result, beefLimits: beefLimits, limits: limits
+            result, request: request, listOutputsEncoding: listOutputsEncoding,
+            beefLimits: beefLimits, limits: limits
         )
         return try encodeResultFrame(.success(payload), limits: limits)
     }
 
+    /// Decodes an action result frame. With `request`, list pages are checked
+    /// against the requested limit and a balance basket's total is read as a
+    /// 64-bit balance. Error code 8 on `abortAction` reads as `aborted: false`.
     public static func decodeActionResult(
         _ bytes: [UInt8],
         expectedCall: WalletCall,
+        request: WalletWireActionRequest? = nil,
+        listOutputsEncoding: WalletWireListOutputsEncoding = .legacy,
         beefLimits: BEEFLimits,
         limits: WalletWireLimits = .standard
     ) throws -> WalletWireActionResult {
         switch try decodeResultFrame(bytes, limits: limits) {
-        case .failure(let remote): throw remote
+        case .failure(let remote):
+            if expectedCall == .abortAction, remote.code == WalletWireErrorCode.abortRefused {
+                return .abortAction(WalletAbortActionResult(aborted: false))
+            }
+            throw remote
         case .success(let payload):
             do {
                 return try decodeActionResultPayload(
-                    payload, call: expectedCall, beefLimits: beefLimits, limits: limits
+                    payload, call: expectedCall, request: request,
+                    listOutputsEncoding: listOutputsEncoding,
+                    beefLimits: beefLimits, limits: limits
                 )
             } catch let error as WalletWireError {
                 throw error
@@ -174,8 +214,9 @@ extension WalletWireCodec {
                     )
                 }
             }
+            // @bsv/sdk writes -1 for omitted labels; they default to none.
             try walletWireWriteStringSlice(
-                value.labels, kind: "labels", to: &writer, limits: limits
+                value.labels.isEmpty ? nil : value.labels, kind: "labels", to: &writer, limits: limits
             )
             try walletWireWriteText(
                 value.description, kind: "action description", to: &writer, limits: limits
@@ -255,14 +296,12 @@ extension WalletWireCodec {
             )
             var spends: [UInt32: WalletSignActionSpend] = [:]
             spends.reserveCapacity(min(count, reader.remainingCount))
-            var priorIndex: UInt32?
             for _ in 0..<count {
                 let rawIndex = try reader.readCompactSize()
                 guard let index = UInt32(exactly: rawIndex) else { throw WalletWireError.uint32Overflow }
-                if let priorIndex, index <= priorIndex {
-                    throw WalletWireError.nonRoundTrippableValue(kind: "unsorted or duplicate spend index")
+                guard spends[index] == nil else {
+                    throw WalletWireError.nonRoundTrippableValue(kind: "duplicate spend index")
                 }
-                priorIndex = index
                 let script = try reader.readVarBytes(
                     maximum: limits.abiLimits.maximumBytePayloadCount, kind: "unlocking script"
                 )
@@ -291,9 +330,9 @@ extension WalletWireCodec {
                 )
             ))
         case .listActions:
-            guard let labels = try walletWireReadStringSlice(
+            let labels = try walletWireReadStringSlice(
                 from: &reader, kind: "labels", optional: false, limits: limits
-            ) else { throw WalletWireError.nonRoundTrippableValue(kind: "absent labels") }
+            ) ?? []
             let mode: WalletQueryMode?
             switch try reader.readByte() {
             case 1: mode = .any
@@ -365,9 +404,9 @@ extension WalletWireCodec {
                     let custom = try reader.readOptionalString(
                         maximum: walletWireMaximumText(limits), kind: "custom instructions"
                     )
-                    guard let tags = try walletWireReadStringSlice(
+                    let tags = try walletWireReadStringSlice(
                         from: &reader, kind: "tags", optional: false, limits: limits
-                    ) else { throw WalletWireError.nonRoundTrippableValue(kind: "absent tags") }
+                    ) ?? []
                     outputs.append(WalletInternalizeOutput(
                         outputIndex: index,
                         remittance: .basketInsertion(try WalletBasketInsertion(
@@ -379,9 +418,9 @@ extension WalletWireCodec {
                     throw WalletWireError.invalidDiscriminator(kind: "internalize protocol", value: flag)
                 }
             }
-            guard let labels = try walletWireReadStringSlice(
+            let labels = try walletWireReadStringSlice(
                 from: &reader, kind: "labels", optional: false, limits: limits
-            ) else { throw WalletWireError.nonRoundTrippableValue(kind: "absent labels") }
+            ) ?? []
             let description = try reader.readString(
                 maximum: walletWireMaximumText(limits), kind: "action description"
             )
@@ -398,9 +437,9 @@ extension WalletWireCodec {
             let basket = try reader.readString(
                 maximum: walletWireMaximumText(limits), kind: "basket"
             )
-            guard let tags = try walletWireReadStringSlice(
+            let tags = try walletWireReadStringSlice(
                 from: &reader, kind: "tags", optional: false, limits: limits
-            ) else { throw WalletWireError.nonRoundTrippableValue(kind: "absent tags") }
+            ) ?? []
             let mode: WalletQueryMode?
             switch try reader.readByte() {
             case 1: mode = .all
@@ -454,9 +493,6 @@ private extension WalletWireCodec {
             writer.writeCompactSize(UInt64.max)
             return
         }
-        guard !inputs.isEmpty else {
-            throw WalletWireError.nonRoundTrippableValue(kind: "empty create-action inputs")
-        }
         guard inputs.count <= limits.abiLimits.maximumCollectionCount else {
             throw WalletWireError.countLimitExceeded(
                 kind: "inputs", actual: UInt64(inputs.count),
@@ -492,9 +528,6 @@ private extension WalletWireCodec {
     ) throws -> [WalletCreateActionInput]? {
         let count = try reader.readCompactSize()
         if count == UInt64.max { return nil }
-        guard count != 0 else {
-            throw WalletWireError.nonRoundTrippableValue(kind: "empty create-action inputs")
-        }
         guard count <= UInt64(limits.abiLimits.maximumCollectionCount), count <= UInt64(Int.max) else {
             throw WalletWireError.countLimitExceeded(
                 kind: "inputs", actual: count, maximum: limits.abiLimits.maximumCollectionCount
@@ -571,7 +604,10 @@ private extension WalletWireCodec {
                 output.customInstructions, kind: "custom instructions",
                 to: &writer, limits: limits
             )
-            try walletWireWriteStringSlice(output.tags, kind: "tags", to: &writer, limits: limits)
+            // @bsv/sdk writes -1 for omitted tags; they default to none.
+            try walletWireWriteStringSlice(
+                output.tags.isEmpty ? nil : output.tags, kind: "tags", to: &writer, limits: limits
+            )
         }
     }
 
@@ -607,9 +643,9 @@ private extension WalletWireCodec {
             let custom = try reader.readOptionalString(
                 maximum: walletWireMaximumText(limits), kind: "custom instructions"
             )
-            guard let tags = try walletWireReadStringSlice(
+            let tags = try walletWireReadStringSlice(
                 from: &reader, kind: "tags", optional: false, limits: limits
-            ) else { throw WalletWireError.nonRoundTrippableValue(kind: "absent tags") }
+            ) ?? []
             result.append(try WalletCreateActionOutput(
                 lockingScript: script, satoshis: satoshis, outputDescription: description,
                 basket: basket, customInstructions: custom, tags: tags, limits: limits.abiLimits
@@ -636,17 +672,10 @@ private extension WalletWireCodec {
         )
         writer.writeOptionalBoolean(options.returnTransactionIDOnly)
         writer.writeOptionalBoolean(options.noSend)
-        if let noSendChange = options.noSendChange {
-            let nestedCount = try walletWireOutpointCollectionByteCount(
-                noSendChange, kind: "no-send change", limits: limits
-            )
-            writer.writeCompactSize(UInt64(nestedCount))
-            try walletWireWriteOutpointCollection(
-                noSendChange, kind: "no-send change", to: &writer, limits: limits
-            )
-        } else {
-            try writer.writeOptionalVarBytes(nil)
-        }
+        // @bsv/sdk 4.1.1: an outpoint count (or -1) followed by the outpoints.
+        try walletWireWriteOutpointCollection(
+            options.noSendChange, kind: "no-send change", to: &writer, limits: limits
+        )
         try walletWireWriteTransactionIDs(
             options.sendWith, kind: "send-with transaction IDs", to: &writer, limits: limits
         )
@@ -675,20 +704,9 @@ private extension WalletWireCodec {
         )
         let txidOnly = try reader.readOptionalBoolean(kind: "return transaction ID only")
         let noSend = try reader.readOptionalBoolean(kind: "no send")
-        let noSendChangeBytes = try reader.readOptionalVarBytes(
-            maximum: limits.maximumPayloadByteCount, kind: "no-send change"
+        let noSendChange = try walletWireReadOutpointCollection(
+            from: &reader, kind: "no-send change", limits: limits
         )
-        let noSendChange: [Outpoint]?
-        if let encoded = noSendChangeBytes {
-            var nested = WalletWireReader(encoded)
-            noSendChange = try walletWireReadOutpointCollection(
-                from: &nested, kind: "no-send change", limits: limits
-            )
-            try nested.requireEnd()
-            if noSendChange == nil {
-                throw WalletWireError.nonRoundTrippableValue(kind: "nested absent no-send change")
-            }
-        } else { noSendChange = nil }
         let sendWith = try walletWireReadTransactionIDs(
             from: &reader, kind: "send-with transaction IDs", limits: limits
         )
@@ -744,4 +762,40 @@ private extension WalletWireCodec {
             limits: limits.abiLimits
         )
     }
+}
+
+/// Splits the optional `listOutputs` request extension. @bsv/sdk 4.1 appends one
+/// `01` byte after `seekPermission` to ask for the spendable response layout.
+func walletWireSplitListOutputsExtension(
+    _ parameters: inout [UInt8],
+    limits: WalletWireLimits
+) throws -> WalletWireListOutputsEncoding {
+    var reader = WalletWireReader(parameters)
+    _ = try reader.readVarBytes(maximum: walletWireMaximumText(limits), kind: "basket")
+    let tagCount = try reader.readCompactSize()
+    if tagCount != UInt64.max, tagCount > 0 {
+        guard tagCount <= UInt64(limits.abiLimits.maximumTagCount) else {
+            throw WalletWireError.countLimitExceeded(
+                kind: "tags", actual: tagCount, maximum: limits.abiLimits.maximumTagCount
+            )
+        }
+        for _ in 0..<Int(tagCount) {
+            let length = try reader.readCompactSize()
+            if length != UInt64.max {
+                guard length <= UInt64(reader.remainingCount) else { throw WalletWireError.truncated }
+                _ = try reader.readBytes(count: Int(length))
+            }
+        }
+    }
+    _ = try reader.readBytes(count: 5) // tag mode, include, three include flags
+    for _ in 0..<2 { _ = try reader.readCompactSize() } // limit, offset
+    _ = try reader.readByte() // seekPermission
+    guard !reader.isAtEnd else { return .legacy }
+    let flag = try reader.readByte()
+    guard flag == 1 else {
+        throw WalletWireResultRejection(message: "Invalid listOutputs encoding extension: expected 1")
+    }
+    try reader.requireEnd()
+    parameters.removeLast()
+    return .spendable
 }

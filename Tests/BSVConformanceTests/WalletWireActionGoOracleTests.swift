@@ -30,20 +30,20 @@ final class WalletWireActionGoOracleTests: XCTestCase {
                     outpoint: outpoint, inputDescription: "input", unlockingScriptLength: 107
                 )],
                 outputs: [WalletCreateActionOutput(
-                    lockingScript: [0x51], satoshis: 1, outputDescription: "output", tags: [""]
+                    lockingScript: [0x51], satoshis: 1, outputDescription: "output", tags: ["t"]
                 )],
-                labels: [""]
+                labels: ["l"]
             )),
             .signAction(try WalletSignActionRequest(
                 reference: WalletBase64Data([1, 2]),
                 spends: [1: WalletSignActionSpend(unlockingScript: [0x51])]
             )),
             .abortAction(WalletAbortActionRequest(reference: try WalletBase64Data([3, 4]))),
-            .listActions(try WalletListActionsRequest(labels: [""], pagination: .standard)),
+            .listActions(try WalletListActionsRequest(labels: ["l"], pagination: .standard)),
             .internalizeAction(try WalletInternalizeActionRequest(
                 transaction: actionOracleAtomicBEEF(limits: beefLimits, id: id),
                 description: "internalize",
-                labels: [""],
+                labels: ["l"],
                 outputs: [WalletInternalizeOutput(
                     outputIndex: 0,
                     remittance: .walletPayment(try WalletPaymentRemittance(
@@ -53,7 +53,7 @@ final class WalletWireActionGoOracleTests: XCTestCase {
                     ))
                 )]
             )),
-            .listOutputs(try WalletListOutputsRequest(basket: "default", tags: [""])),
+            .listOutputs(try WalletListOutputsRequest(basket: "default", tags: ["t"])),
             .relinquishOutput(try WalletRelinquishOutputRequest(
                 basket: "default", output: outpoint
             )),
@@ -77,16 +77,39 @@ final class WalletWireActionGoOracleTests: XCTestCase {
             )
         }
 
+        // COMP-045: `@bsv/sdk` 4.1.1 writes an empty label or tag with length 0
+        // (WalletWireTransceiver.ts:1286 `#writeUTF8Array`). The safe Go adapter
+        // rejects that form as lossy. Swift follows TypeScript and round-trips it.
+        let emptyLabelRequest = WalletWireActionRequest.listActions(
+            try WalletListActionsRequest(labels: [""], pagination: .standard)
+        )
+        let emptyLabelBytes = try WalletWireCodec.encodeActionRequest(
+            emptyLabelRequest, originator: "oracle", beefLimits: beefLimits
+        )
+        let goEmptyLabel = try oracleActionRequest(
+            client, operation: "wallet.wire.request.reencode", call: .listActions,
+            bytes: emptyLabelBytes, sequence: &sequence
+        )
+        XCTAssertFalse(goEmptyLabel.ok)
+        XCTAssertEqual(goEmptyLabel.error?.category, "invalidArgument")
+        XCTAssertEqual(
+            try WalletWireCodec.encodeActionRequest(
+                WalletWireCodec.decodeActionRequest(emptyLabelBytes, beefLimits: beefLimits).request,
+                originator: "oracle", beefLimits: beefLimits
+            ),
+            emptyLabelBytes
+        )
+
         let listedAction = try WalletAction(
             transactionID: id, satoshis: 0, status: .completed, isOutgoing: false,
-            description: "", labels: [""], version: 0, lockTime: 0,
+            description: "", labels: ["l"], version: 0, lockTime: 0,
             inputs: [WalletActionInput(
                 sourceOutpoint: outpoint, sourceSatoshis: 1,
                 sourceLockingScript: [0x51], unlockingScript: [0x52],
                 inputDescription: "", sequenceNumber: 0
             )],
             outputs: [WalletActionOutput(
-                satoshis: 1, lockingScript: [0x51], spendable: true, tags: [""],
+                satoshis: 1, lockingScript: [0x51], spendable: true, tags: ["t"],
                 outputIndex: 0, outputDescription: "", basket: ""
             )]
         )
@@ -100,7 +123,7 @@ final class WalletWireActionGoOracleTests: XCTestCase {
                 totalOutputs: 1,
                 outputs: [WalletOutput(
                     satoshis: 1, lockingScript: [0x51], spendable: true,
-                    tags: [""], outpoint: outpoint, labels: [""]
+                    tags: ["t"], outpoint: outpoint, labels: ["l"]
                 )]
             )),
             .relinquishOutput(WalletRelinquishOutputResult(relinquished: true)),
@@ -109,17 +132,32 @@ final class WalletWireActionGoOracleTests: XCTestCase {
             let encoded = try WalletWireCodec.encodeActionResult(
                 resultValue, beefLimits: beefLimits
             )
+            let decoded = try WalletWireCodec.decodeActionResult(
+                encoded, expectedCall: resultValue.call, beefLimits: beefLimits
+            )
+            XCTAssertEqual(
+                try WalletWireCodec.encodeActionResult(decoded, beefLimits: beefLimits),
+                encoded,
+                "Swift result call \(resultValue.call.rawValue)"
+            )
+            if [WalletCall.createAction, .signAction].contains(resultValue.call) {
+                // COMP-046: Swift writes the `@bsv/sdk` 4.1.1 layout (txid flag
+                // and display-order txid, tx flag, -1 or counted collections,
+                // and for createAction the signable flag;
+                // WalletWireProcessor.ts createAction/signAction). Pinned Go
+                // expects its own layout and cannot read it.
+                let response = try oracleActionRequest(
+                    client, operation: "wallet.wire.result.reencode", call: resultValue.call,
+                    bytes: encoded, sequence: &sequence
+                )
+                XCTAssertFalse(response.ok, "result call \(resultValue.call.rawValue)")
+                continue
+            }
             let canonical = try oracleActionBytes(
                 client, operation: "wallet.wire.result.reencode", call: resultValue.call,
                 bytes: encoded, sequence: &sequence
             )
             XCTAssertEqual(canonical, encoded, "result call \(resultValue.call.rawValue)")
-            XCTAssertEqual(
-                try WalletWireCodec.decodeActionResult(
-                    canonical, expectedCall: resultValue.call, beefLimits: beefLimits
-                ).call,
-                resultValue.call
-            )
         }
     }
 
@@ -135,6 +173,11 @@ final class WalletWireActionGoOracleTests: XCTestCase {
         defer { client.close() }
         var sequence = 50_000
 
+        // These forms are the pinned Go adapter's own strictness. Since
+        // COMP-045/COMP-046 the Swift codec reads the `@bsv/sdk` 4.1.1 forms
+        // instead: absent createAction parts, unsorted spends, empty inputs and
+        // empty labels are legitimate TypeScript traffic, and absent listActions
+        // scripts are optional (WalletWireActionAdversarialTests covers Swift).
         let absentTransactionID = [UInt8](arrayLiteral: 0, 0, 0)
         let response = try oracleActionRequest(
             client, operation: "wallet.wire.result.reencode", call: .createAction,

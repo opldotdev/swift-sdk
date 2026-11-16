@@ -17,13 +17,13 @@ func walletWireWriteOptionalText(
     to writer: inout WalletWireWriter,
     limits: WalletWireLimits
 ) throws {
-    if value == "" {
-        throw WalletWireError.nonRoundTrippableValue(kind: "empty optional \(kind)")
+    guard let value else {
+        writer.writeCompactSize(UInt64.max)
+        return
     }
-    if let value {
-        try walletWireRequireText(value, kind: kind, maximum: walletWireMaximumText(limits))
-    }
-    try writer.writeOptionalString(value)
+    // An empty string keeps its zero length, as `@bsv/sdk` result serializers write it.
+    try walletWireRequireText(value, kind: kind, maximum: walletWireMaximumText(limits))
+    try writer.writeString(value)
 }
 
 func walletWireRequireActionBytes(
@@ -38,18 +38,20 @@ func walletWireRequireActionBytes(
     }
 }
 
-func walletWireMapABIError(_ error: WalletABIError) -> WalletWireError {
+/// Maps size failures to wire limits and keeps every other ABI error as it is, so
+/// the error frame and the log both say which value was wrong.
+func walletWireMapABIError(_ error: WalletABIError) -> any Error {
     switch error {
     case .countLimitExceeded(let kind, let actual, let maximum):
-        return .countLimitExceeded(kind: kind, actual: UInt64(max(0, actual)), maximum: maximum)
+        return WalletWireError.countLimitExceeded(kind: kind, actual: UInt64(max(0, actual)), maximum: maximum)
     case .byteLimitExceeded(let kind, let actual, let maximum):
-        return .byteLimitExceeded(kind: kind, actual: actual, maximum: maximum)
+        return WalletWireError.byteLimitExceeded(kind: kind, actual: actual, maximum: maximum)
     case .aggregatePayloadTooLarge(let actual, let maximum):
-        return .byteLimitExceeded(kind: "aggregate wallet payload", actual: actual, maximum: maximum)
+        return WalletWireError.byteLimitExceeded(kind: "aggregate wallet payload", actual: actual, maximum: maximum)
     case .sizeOverflow:
-        return .byteLimitExceeded(kind: "aggregate wallet payload", actual: Int.max, maximum: Int.max)
+        return WalletWireError.byteLimitExceeded(kind: "aggregate wallet payload", actual: Int.max, maximum: Int.max)
     default:
-        return .nonRoundTrippableValue(kind: "wallet action value")
+        return error
     }
 }
 
@@ -59,8 +61,10 @@ extension WalletWireWriter {
         writeCompactSize(UInt64(value.outputIndex))
     }
 
-    mutating func writeWireTransactionID(_ value: TransactionID) {
-        writeBytes(value.wireBytes)
+    /// Writes a transaction ID in display byte order, as `@bsv/sdk` writes every
+    /// wallet-wire txid (`toArray(txid, 'hex')`).
+    mutating func writeWalletTransactionID(_ value: TransactionID) {
+        writeBytes(value.displayBytes)
     }
 
     mutating func writeDisplayTransactionID(_ value: TransactionID) {
@@ -79,8 +83,9 @@ extension WalletWireReader {
         )
     }
 
-    mutating func readWireTransactionID() throws -> TransactionID {
-        try TransactionID(wireBytes: readBytes(count: 32))
+    /// Reads a transaction ID written in display byte order.
+    mutating func readWalletTransactionID() throws -> TransactionID {
+        try TransactionID(wireBytes: Array(readBytes(count: 32).reversed()))
     }
 
     mutating func readDisplayTransactionID() throws -> TransactionID {
@@ -109,8 +114,7 @@ func walletWireWriteStringSlice(
     writer.writeCompactSize(UInt64(values.count))
     for value in values {
         try walletWireRequireText(value, kind: kind, maximum: walletWireMaximumText(limits))
-        if value.isEmpty { writer.writeCompactSize(UInt64.max) }
-        else { try writer.writeString(value) }
+        try writer.writeString(value)
     }
 }
 
@@ -122,8 +126,8 @@ func walletWireReadStringSlice(
 ) throws -> [String]? {
     let encodedCount = try reader.readCompactSize()
     if encodedCount == UInt64.max {
-        if optional { return nil }
-        throw WalletWireError.nonRoundTrippableValue(kind: "absent \(kind)")
+        // `@bsv/sdk` writes -1 for an omitted array whose JSON default is empty.
+        return optional ? nil : []
     }
     let maximum = kind == "labels" ? limits.abiLimits.maximumLabelCount
         : kind == "tags" ? limits.abiLimits.maximumTagCount
@@ -135,14 +139,11 @@ func walletWireReadStringSlice(
     result.reserveCapacity(min(Int(encodedCount), reader.remainingCount))
     for _ in 0..<Int(encodedCount) {
         let value = try reader.readCompactSize()
-        if value == UInt64.max {
+        // `@bsv/sdk` writes an empty entry with length 0; earlier Swift and Go
+        // peers wrote -1. Both read back as the empty string.
+        if value == UInt64.max || value == 0 {
             result.append("")
             continue
-        }
-        if value == 0 {
-            throw WalletWireError.nonRoundTrippableValue(
-                kind: "zero-length \(kind) entry"
-            )
         }
         guard value <= UInt64(walletWireMaximumText(limits)), value <= UInt64(Int.max) else {
             throw WalletWireError.countLimitExceeded(
@@ -174,7 +175,7 @@ func walletWireWriteTransactionIDs(
         )
     }
     writer.writeCompactSize(UInt64(values.count))
-    for value in values { writer.writeWireTransactionID(value) }
+    for value in values { writer.writeWalletTransactionID(value) }
 }
 
 func walletWireReadTransactionIDs(
@@ -192,7 +193,7 @@ func walletWireReadTransactionIDs(
     guard count <= UInt64(reader.remainingCount / 32) else { throw WalletWireError.truncated }
     var result: [TransactionID] = []
     result.reserveCapacity(Int(count))
-    for _ in 0..<Int(count) { result.append(try reader.readWireTransactionID()) }
+    for _ in 0..<Int(count) { result.append(try reader.readWalletTransactionID()) }
     return result
 }
 

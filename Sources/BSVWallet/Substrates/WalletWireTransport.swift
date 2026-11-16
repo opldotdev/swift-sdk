@@ -59,7 +59,7 @@ public struct WalletWireRedactingFailureMapper:
 
     public init(
         code: UInt8 = 1,
-        message: String = "wallet operation failed",
+        message: String = "Wallet operation failed",
         stack: String = "",
         limits: WalletWireLimits
     ) throws {

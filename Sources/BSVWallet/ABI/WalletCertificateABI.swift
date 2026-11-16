@@ -74,11 +74,7 @@ public struct WalletRevealSpecificKeyLinkageRequest: Equatable, Sendable {
         keyID: WalletKeyID,
         privilege: WalletPrivilege = .standard
     ) throws {
-        guard case .publicKey = counterparty else {
-            throw WalletABIError.invalidFieldRelation(
-                "specific key linkage requires a concrete counterparty public key"
-            )
-        }
+        // `self` and `anyone` resolve to concrete keys, as @bsv/sdk 4.1.1 does (W6).
         self.counterparty = counterparty
         self.verifier = verifier
         self.protocolID = protocolID
@@ -261,9 +257,10 @@ public struct WalletListCertificatesRequest: Equatable, Sendable {
 public struct WalletCertificateResult:
     Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let certificate: Certificate
-    /// `nil` means that the wallet did not return a keyring. A present keyring
-    /// must contain at least one entry because the pinned Go reader cannot
-    /// preserve the distinction between an empty map and an absent map.
+    /// `nil` means that the wallet did not return a keyring. An empty keyring is
+    /// stored as `nil`: `@bsv/sdk` 4.1.1 writes flag 0 for it
+    /// (wallet/substrates/WalletWireProcessor.ts:2118), and the pinned Go reader
+    /// cannot tell an empty map from an absent one.
     public let keyring: [CertificateFieldName: CertificateCiphertext]?
     public let verifier: [UInt8]
     public init(
@@ -272,12 +269,8 @@ public struct WalletCertificateResult:
         verifier: [UInt8],
         limits: WalletABILimits = .standard
     ) throws {
+        let keyring = keyring?.isEmpty == true ? nil : keyring
         if let keyring {
-            guard !keyring.isEmpty else {
-                throw WalletABIError.invalidFieldRelation(
-                    "a present certificate keyring must not be empty"
-                )
-            }
             try walletABIRequireCount(
                 keyring.count,
                 kind: "certificate keyring",

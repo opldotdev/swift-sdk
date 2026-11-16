@@ -284,3 +284,25 @@ Typed errors take precedence. The one pinned message fallback is isolated and
 unit tested; diagnostic messages are not a compatibility surface. An operation
 panic is recovered as `oraclePanic`. Startup, pin, or stream corruption exits
 nonzero; ordinary operation errors return a response and keep `serve` alive.
+
+## TypeScript wallet-wire oracle
+
+`TSOracle` drives the real `@bsv/sdk` `WalletWireTransceiver` against its own
+`WalletWireProcessor` and records every frame, request argument and result as
+JSON. Like the Go oracle it only reads an external checkout and stores no
+TypeScript source or generated answers here. It needs Bun.
+
+```sh
+BSV_TS_SDK_PATH=$HOME/code/ts-stack/packages/sdk Tools/Conformance/TSOracle/generate.sh
+BSV_TS_WALLET_WIRE_VECTORS=$PWD/.build/ts-oracle/ts-wallet-wire-vectors.json \
+  swift test --filter WalletWireTypeScriptOracleTests
+```
+
+The default output is `.build/ts-oracle/ts-wallet-wire-vectors.json`.
+`WalletWireTypeScriptOracleTests` checks that the Swift processor answers each
+TypeScript request with the TypeScript bytes and that the Swift transceiver
+sends the TypeScript request bytes and reads the TypeScript answers. Without
+`BSV_TS_WALLET_WIRE_VECTORS` the suite prints a skip. Vectors marked
+`processorOnly`, `transceiverOnly` or with a `divergence` record forms the
+Swift ABI does not keep (an omitted counterparty, insertion-ordered maps,
+certificate types other than 32 bytes); see COMP-045 and COMP-048.

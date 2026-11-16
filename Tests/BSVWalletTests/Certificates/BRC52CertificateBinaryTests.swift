@@ -267,7 +267,7 @@ final class BRC52CertificateBinaryTests: XCTestCase {
         }
     }
 
-    func testDuplicateDescendingInvalidUTF8AndTrailingBytesAreRejected() throws {
+    func testAnyFieldOrderIsReadAndDuplicatesInvalidUTF8AndTrailingBytesAreRejected() throws {
         let a = try CertificateFieldName("a")
         let b = try CertificateFieldName("b")
         let certificate = try Certificate(
@@ -284,10 +284,17 @@ final class BRC52CertificateBinaryTests: XCTestCase {
         duplicate[172] = Character("a").asciiValue!
         assertCertificateError(.duplicateFieldName) { _ = try Certificate(binary: duplicate) }
 
+        // `@bsv/sdk` writes fields in `localeCompare` order
+        // (auth/certificates/Certificate.ts:290), so a descending byte order
+        // is legitimate input. Swift reads it and writes byte order.
         var descending = bytes
         descending[165] = Character("b").asciiValue!
         descending[172] = Character("a").asciiValue!
-        assertCertificateError(.fieldsNotInCanonicalOrder) { _ = try Certificate(binary: descending) }
+        let reordered = try Certificate(binary: descending)
+        XCTAssertEqual(reordered.fields.count, 2)
+        XCTAssertEqual(reordered.fields[a], try CertificateCiphertext([2]))
+        XCTAssertEqual(reordered.fields[b], try CertificateCiphertext([1]))
+        XCTAssertNotEqual(try reordered.binary(includingSignature: false), descending)
 
         var invalidName = bytes
         invalidName[165] = 0xff

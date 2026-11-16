@@ -182,7 +182,11 @@ private struct CertificateResultDTO: Codable {
     let revocationOutpoint: String; let signature: String?; let fields: [String: String]
     let keyring: [String: CertificateCiphertext]?; let verifier: String?
     init(_ value: WalletCertificateResult) throws { let certificate = try CertificateDTO(value.certificate); type = certificate.type; subject = certificate.subject; serialNumber = certificate.serialNumber; certifier = certificate.certifier; revocationOutpoint = certificate.revocationOutpoint; signature = certificate.signature; fields = certificate.fields; keyring = value.keyring.map { Dictionary(uniqueKeysWithValues: $0.map { ($0.key.value, $0.value) }) }; if value.verifier.isEmpty { verifier = nil } else { guard let text = String(bytes: value.verifier, encoding: .utf8) else { throw WalletJSONCodecError.invalidJSON }; verifier = text } }
-    func model(_ codec: WalletBRC100JSONCodec) throws -> WalletCertificateResult { try .init(certificate: CertificateDTO(type: type, subject: subject, serialNumber: serialNumber, certifier: certifier, revocationOutpoint: revocationOutpoint, signature: signature, fields: fields).model(codec), keyring: try keyring.map { try dictionaryCiphertexts($0, limits: codec.certificateLimits) }, verifier: verifier.map { Array($0.utf8) } ?? [], limits: codec.abiLimits) }
+    // `@bsv/sdk` 4.1.1 treats an empty keyring as absent: its processor writes
+    // the no-keyring flag for `{}` and its transceiver returns `{}` for that flag
+    // (WalletWireProcessor.ts:2118, WalletWireTransceiver.ts:1622). JSON `{}` is
+    // therefore read as no keyring.
+    func model(_ codec: WalletBRC100JSONCodec) throws -> WalletCertificateResult { try .init(certificate: CertificateDTO(type: type, subject: subject, serialNumber: serialNumber, certifier: certifier, revocationOutpoint: revocationOutpoint, signature: signature, fields: fields).model(codec), keyring: try keyring.flatMap { $0.isEmpty ? nil : try dictionaryCiphertexts($0, limits: codec.certificateLimits) }, verifier: verifier.map { Array($0.utf8) } ?? [], limits: codec.abiLimits) }
 }
 private struct ListCertificatesResultDTO: Codable {
     let totalCertificates: UInt32; let certificates: [CertificateResultDTO]
