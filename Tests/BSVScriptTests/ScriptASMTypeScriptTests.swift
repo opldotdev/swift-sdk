@@ -112,8 +112,22 @@ struct ScriptASMTypeScriptTests {
         #expect(throws: ScriptError.invalidASMPushDataLength(index: 2)) {
             try parse("OP_1 OP_PUSHDATA1 0x05 1010101010")
         }
-        #expect(throws: ScriptError.pushOpcodeRequiresData(.pushData1)) {
+        // The length token is the plain decimal byte count: no leading zeros.
+        #expect(throws: ScriptError.invalidASMPushDataLength(index: 1)) {
+            try parse("OP_PUSHDATA1 05 1010101010")
+        }
+        // @bsv/sdk reads a missing data token as no data (Script.ts:108).
+        #expect(try parse("OP_PUSHDATA1").hex == "4c00")
+        #expect(try parse("OP_PUSHDATA1 0").hex == "4c00")
+        #expect(try parse("OP_1 OP_PUSHDATA2").hex == "514d0000")
+        // @bsv/sdk returns 4c00 here too; Swift keeps the length-token rule.
+        #expect(throws: ScriptError.invalidASMPushDataLength(index: 1)) {
             try parse("OP_PUSHDATA1 5")
+        }
+        // The data token skips @bsv/sdk's raw-token check, so uppercase is read.
+        #expect(try parse("OP_PUSHDATA1 2 ABCD").hex == "4c02abcd")
+        #expect(throws: ScriptError.pushOpcodeRequiresData(.pushData1)) {
+            try Script(asm: "OP_PUSHDATA1", dialect: .brc106, maximumScriptByteCount: 2, maximumASMByteCount: 12)
         }
         #expect(throws: ScriptError.dataTooLargeForPush(actual: 256)) {
             try parse("OP_PUSHDATA1 256 " + String(repeating: "00", count: 256))
@@ -132,6 +146,10 @@ struct ScriptASMTypeScriptTests {
         // ...and `add` as the bytes 0x0add.
         #expect(try parse("add").hex == "020add")
         #expect(throws: ScriptError.invalidASMToken(index: 0)) { try parse("dup") }
+        // @bsv/sdk re-encodes raw data and rejects uppercase (Script.ts:116).
+        #expect(throws: ScriptError.invalidASMToken(index: 1)) { try parse("OP_1 ABCD") }
+        #expect(throws: ScriptError.invalidASMToken(index: 0)) { try parse("abCd") }
+        #expect(try Script(asm: "ABCD", dialect: .brc106, maximumScriptByteCount: 3, maximumASMByteCount: 4).hex == "02abcd")
         #expect(throws: ScriptError.invalidASMToken(index: 0)) { try parse("OP_UNKNOWN186") }
         // BRC-106 keeps rejecting odd-length data.
         #expect(throws: ScriptError.invalidASMData(index: 0, .oddLength)) {
@@ -163,6 +181,11 @@ struct ScriptASMTypeScriptTests {
         let afterEndIf = try Script(hex: "6368" + "6a0268", maximumByteCount: 5)
         #expect(try format(afterEndIf) == "OP_IF OP_ENDIF OP_RETURN 68")
 
+        // That text is lossy: it reads back as a well-formed push of the
+        // bytes that remained. `style: .canonical` is the strict check.
+        #expect(try parse(format(truncated)).hex == "6a026869")
+        #expect(try parse(format(missingLength)).hex == "6a00")
+
         // Inside a conditional, and in the other styles, malformed pushes stay errors.
         let inBranch = try Script(hex: "636a0568", maximumByteCount: 4)
         #expect(throws: ScriptError.truncatedPushData(offset: 2, expected: 5, remaining: 1)) {
@@ -177,6 +200,21 @@ struct ScriptASMTypeScriptTests {
         #expect(throws: ScriptError.pushDataTooLarge(actual: 2, maximum: 1)) {
             try truncated.asm(maximumPushDataByteCount: 1, maximumASMByteCount: 64)
         }
+    }
+
+    @Test("where @bsv/sdk 4.1.1 toASM cannot be read back, Swift writes the unmerged fixes' text")
+    func differencesFromTypeScript411() throws {
+        // @bsv/sdk 4.1.1 toASM: "OP_0 0568656c6c6f" (drops OP_RETURN; reads back as 00060568656c6c6f).
+        let opReturn = try Script(hex: "006a0568656c6c6f", maximumByteCount: 8)
+        #expect(try format(opReturn) == "OP_0 OP_RETURN 68656c6c6f")
+        // @bsv/sdk 4.1.1 toASM: "" (empty string).
+        #expect(try format(Script(hex: "6a", maximumByteCount: 1)) == "OP_RETURN")
+        // @bsv/sdk 4.1.1 toASM: "" (a blank token).
+        #expect(try format(Script(hex: "4c00", maximumByteCount: 2)) == "OP_0")
+        // @bsv/sdk 4.1.1 toASM: "OP_0 OP_IF  OP_ENDIF OP_1" (two spaces).
+        #expect(try format(Script(hex: "00634c006851", maximumByteCount: 6)) == "OP_0 OP_IF OP_0 OP_ENDIF OP_1")
+        // @bsv/sdk 4.1.1 fromASM(""): script 00.
+        #expect(try parse("").hex == "")
     }
 
     @Test("empty text, blank tokens, and zero-length pushes")

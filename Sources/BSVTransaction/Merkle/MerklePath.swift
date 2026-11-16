@@ -473,8 +473,11 @@ public struct MerklePath: Hashable, Sendable {
     /// `legalOffsetsOnly` rule of @bsv/sdk `MerklePath`.
     private static func legalOffsets(levels: [[MerklePathElement]]) -> [Set<UInt64>] {
         var legal = Array(repeating: Set<UInt64>(), count: levels.count)
+        // Only levels that hold nodes are looked up, so only fill those.
+        let heights = levels.indices.dropFirst().filter { !levels[$0].isEmpty }
+        guard !heights.isEmpty else { return legal }
         for element in levels[0] where !element.isDuplicate {
-            for height in legal.indices.dropFirst() {
+            for height in heights {
                 legal[height].insert((element.offset >> height) ^ 1)
             }
         }

@@ -110,31 +110,13 @@ public struct Script: Hashable, Sendable {
         let opcode = Opcode(rawValue: storage[offset])
         offset += 1
 
-        let length: Int
         let lengthByteCount: Int
         switch opcode.rawValue {
-        case 0x01...0x4b:
-            length = Int(opcode.rawValue)
-            lengthByteCount = 0
-        case 0x4c:
-            lengthByteCount = 1
-            length = Int(storage[offset..<min(offset + 1, storage.count)].first ?? 0)
-        case 0x4d:
-            lengthByteCount = 2
-            length = storage[offset..<min(offset + 2, storage.count)]
-                .reversed()
-                .reduce(0) { ($0 << 8) | Int($1) }
-        case 0x4e:
-            lengthByteCount = 4
-            let declared = storage[offset..<min(offset + 4, storage.count)]
-                .reversed()
-                .reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
-            guard UInt64(declared) <= UInt64(Int.max) else {
-                throw ScriptError.pushDataLengthNotRepresentable(declared)
-            }
-            length = Int(declared)
-        default:
-            return .opcode(opcode)
+        case 0x01...0x4b: lengthByteCount = 0
+        case 0x4c: lengthByteCount = 1
+        case 0x4d: lengthByteCount = 2
+        case 0x4e: lengthByteCount = 4
+        default: return .opcode(opcode)
         }
 
         let lengthBytesRemaining = storage.count - offset
@@ -148,6 +130,18 @@ public struct Script: Hashable, Sendable {
             }
             offset = storage.count
             return .push(opcode: opcode, data: [])
+        }
+        let length: Int
+        if lengthByteCount == 0 {
+            length = Int(opcode.rawValue)
+        } else {
+            let declared = storage[offset..<(offset + lengthByteCount)]
+                .reversed()
+                .reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+            guard UInt64(declared) <= UInt64(Int.max) else {
+                throw ScriptError.pushDataLengthNotRepresentable(declared)
+            }
+            length = Int(declared)
         }
         offset += lengthByteCount
 

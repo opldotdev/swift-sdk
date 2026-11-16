@@ -51,6 +51,42 @@ struct SPVProofVerifierTests {
         ))
     }
 
+    @Test("a transaction spending a coinbase verifies only once the coinbase is 100 blocks deep")
+    func coinbaseMaturity() async throws {
+        // @bsv/sdk Transaction.ts:1311 verifies every proven ancestor with
+        // MerklePath.verify, which applies the 100-block rule (MerklePath.ts:510-519).
+        let fixture = try FullSPVFixture()
+        #expect(fixture.path.levels[0][0].offset == 0)
+        let root = try fixture.path.root(for: fixture.parentID)
+        let height = fixture.path.blockHeight
+
+        let shallow = FixedChainTracker(root: root, blockHeight: height, tipHeight: height + 99)
+        #expect(!(try await SPVProofVerifier.verify(
+            fixture.beef,
+            rootTransactionID: fixture.childID,
+            using: shallow,
+            scriptConfiguration: fixture.scriptConfiguration,
+            limits: fixture.beefLimits
+        )))
+
+        let deep = FixedChainTracker(root: root, blockHeight: height, tipHeight: height + 100)
+        #expect(try await SPVProofVerifier.verify(
+            fixture.beef,
+            rootTransactionID: fixture.childID,
+            using: deep,
+            scriptConfiguration: fixture.scriptConfiguration,
+            limits: fixture.beefLimits
+        ))
+
+        // The proof-stage BEEF check, like @bsv/sdk Beef.verify, has no maturity rule.
+        #expect(try await SPVProofVerifier.verify(
+            fixture.beef,
+            using: shallow,
+            allowTransactionIDOnly: false,
+            limits: fixture.transactionLimits
+        ))
+    }
+
     @Test("untrusted roots return false before transaction execution")
     func rejectedRoot() async throws {
         let fixture = try FullSPVFixture()
@@ -433,6 +469,7 @@ private struct FixedFeeModel: TransactionFeeModel {
 private struct FixedChainTracker: ChainTracker {
     let root: Hash256
     let blockHeight: UInt32
+    var tipHeight: UInt32?
 
     func isValidRoot(
         _ candidate: Hash256,
@@ -442,7 +479,7 @@ private struct FixedChainTracker: ChainTracker {
     }
 
     func currentHeight() async throws -> UInt32 {
-        // Deep enough that a coinbase proof (offset 0) is mature.
-        blockHeight + 100
+        // By default deep enough that a coinbase proof (offset 0) is mature.
+        tipHeight ?? blockHeight + 100
     }
 }

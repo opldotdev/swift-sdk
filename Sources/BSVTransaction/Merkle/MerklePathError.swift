@@ -24,6 +24,7 @@ public enum MerklePathError: Error, Equatable, Sendable {
     case countNotRepresentable(UInt64)
     /// Not produced by the parser, which reads flags as a bitmask like
     /// @bsv/sdk and the Go SDK. Retained for source compatibility.
+    @available(*, deprecated, message: "No longer thrown; flags are a bitmask")
     case invalidFlags(level: Int, leaf: Int, flags: UInt8)
     case duplicateLeafOffset(level: Int, offset: UInt64)
     case duplicateMarkerRequiresOddOffset(level: Int, offset: UInt64)
