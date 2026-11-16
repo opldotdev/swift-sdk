@@ -903,6 +903,74 @@ extension NodeConformanceRegressionTests {
         #expect(!ScriptMachine.isValidSignatureEncoding(hex("300602010002010101") + [0]))
     }
 
+    @Test("LOW_S reads r = 0 with a high s the way the node's lax parser does")
+    func lowSOnZeroR() throws {
+        // node interpreter.cpp:282-289 and pubkey.cpp:32-175, 353-363: r = 0 is
+        // not an overflow, so the lax parse keeps s = n - 1, which is high.
+        let nMinusOne = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140"
+        let signature = "29" + "3026020100022100" + nMinusOne + "01"
+        let key = "21" + Self.generatorPublicKeyHex
+        let checkSig = signature + key + "ac91"
+        let checkMultiSig = "00" + signature + "51" + key + "51" + "ae91"
+        for lock in [checkSig, checkMultiSig] {
+            #expect(throws: ScriptExecutionError.consensus(.invalidSignatureEncoding)) {
+                try run(lock: lock, era: .afterGenesis, flags: [.lowS], context: true, version: 1)
+            }
+            // Chronicle relaxes LOW_S for version two; the check then fails.
+            #expect(try run(
+                lock: lock, era: .afterChronicle, flags: [.lowS], context: true, version: 2
+            ).stack == [[1]])
+            #expect(try run(lock: lock, era: .afterGenesis, flags: [.derSignatures], context: true).stack == [[1]])
+        }
+        // A low s with r = 0 passes LOW_S and simply fails.
+        let lowS = "09" + "300602010002010101"
+        #expect(try run(lock: lowS + key + "ac91", era: .afterGenesis, flags: [.lowS], context: true).stack == [[1]])
+        // Overflowing values read as the zero signature, which is low S.
+        let order = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"
+        #expect(ScriptMachine.laxParseIsLowS(hex("3026022100" + order + "020101")))
+        #expect(!ScriptMachine.laxParseIsLowS(hex("3026020100022100" + nMinusOne)))
+        #expect(ScriptMachine.laxParseIsLowS(hex("3026020101022100" + String(repeating: "ff", count: 32))))
+    }
+
+    @Test("2MUL results are bounded by the number limit")
+    func twoMulResultBound() throws {
+        // 2MUL is bn += bn (interpreter.cpp:1247-1249), checked like ADD.
+        // A local 1,000-byte number budget exercises the same check cheaply.
+        let size = 1_000
+        let largest = Array(repeating: UInt8(0xff), count: size - 1) + [0x7f]
+        let lock = [Opcode.pushData2.rawValue, UInt8(size & 0xff), UInt8(size >> 8)] + largest
+            + [0x8d, Opcode.drop.rawValue, Opcode.one.rawValue]
+        let standard = ScriptResourceLimits.standard
+        let limits = ScriptResourceLimits(
+            maximumScriptByteCount: standard.maximumScriptByteCount,
+            maximumPushDataByteCount: standard.maximumPushDataByteCount,
+            maximumStackItemCount: standard.maximumStackItemCount,
+            maximumStackMemoryByteCount: standard.maximumStackMemoryByteCount,
+            maximumOperationCountPerScript: standard.maximumOperationCountPerScript,
+            maximumConditionalDepth: standard.maximumConditionalDepth,
+            maximumScriptNumberByteCount: size
+        )
+        func execute(_ bytes: [UInt8]) throws -> ScriptExecutionResult {
+            try ScriptInterpreter.execute(
+                unlockingScript: try Script(bytes: [], maximumByteCount: 1),
+                lockingScript: try Script(bytes: bytes, maximumByteCount: bytes.count),
+                configuration: ScriptExecutionConfiguration(era: .afterChronicle, resourceLimits: limits),
+                context: nil
+            )
+        }
+        #expect(throws: ScriptExecutionError.resourceBudgetExceeded(
+            .scriptNumberByteCount(actual: size + 1, maximum: size)
+        )) {
+            try execute(lock)
+        }
+        // 2MUL of a value one byte shorter fits.
+        let shorter = Array(repeating: UInt8(0xff), count: size - 2) + [0x3f]
+        #expect(try execute(
+            [Opcode.pushData2.rawValue, UInt8((size - 1) & 0xff), UInt8((size - 1) >> 8)] + shorter
+                + [0x8d, Opcode.drop.rawValue, Opcode.one.rawValue]
+        ).stack == [[1]])
+    }
+
     @Test("ADD, SUB, MUL and 1ADD results are bounded by the number limit after Genesis")
     func arithmeticResultBound() throws {
         // node script_num.cpp:166, 196, 216: bint results longer than the

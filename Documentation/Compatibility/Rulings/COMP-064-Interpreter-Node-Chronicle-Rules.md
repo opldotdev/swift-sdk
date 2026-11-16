@@ -52,15 +52,19 @@ Swift follows SV Node v1.2.3 for the rules below. References are to
    `MUST_USE_FORKID` when ForkID is enabled and the bit is missing
    (line 306).
 8. **Structural DER only.** The DER rule is the node's structural
-   `IsValidSignatureEncoding` (lines 177-235). A structurally valid
+   `IsValidSignatureEncoding` (lines 177-245). A structurally valid
    signature whose `r` or `s` is zero or not below the curve order passes
-   it, counts as low S, and fails verification without an error, as the
-   node's lax parser reads it as the zero signature. NULLFAIL still applies.
+   it and fails verification without an error. LOW_S follows the node's lax
+   parser (`CPubKey::CheckLowS`, `src/pubkey.cpp:32-175, 353-363`): a value
+   longer than 32 bytes or not below the curve order makes it read the zero
+   signature, which is low S; otherwise the real `s` is checked, so `r = 0`
+   with `s` above half the order fails LOW_S. NULLFAIL still applies.
 9. **Arithmetic results.** After Genesis, a numeric result longer than the
    script-number limit fails with `numberTooLarge`, as the node's big-number
    `+=`, `-=` and `*=` do (`script_num.cpp:166, 196, 216`). This covers
    `OP_ADD`, `OP_SUB`, `OP_MUL`, `OP_1ADD`, `OP_1SUB` and `OP_2MUL`. Before
-   Genesis the node computes in int64 and five-byte results stay valid.
+   Genesis the node computes in int64 with no result check, so a result can
+   be up to eight bytes (`OP_MUL`).
 10. **ForkID digest only with ForkID enabled (T8).** A hash type with the
     ForkID bit, verified without `.enableForkID`, uses the original digest.
 11. **Original-digest script code (T9).** `SerializeScriptCode` (line 1864)

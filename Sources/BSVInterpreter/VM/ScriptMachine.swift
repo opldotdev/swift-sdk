@@ -817,8 +817,8 @@ package struct ScriptMachine {
         // longer than the number limit (script_num.cpp:166, 196, 216). Only
         // ADD, SUB, MUL and the one-operand forms built on them can grow a
         // value; every other result is no longer than an operand that was
-        // already checked. Before Genesis the node computes in int64 and
-        // allows five-byte results.
+        // already checked. Before Genesis the node computes in int64 with no
+        // result check, so a result can be up to eight bytes (OP_MUL).
         if configuration.era != .beforeGenesis {
             try checkNumberSize(encoded.count)
         }
@@ -1148,10 +1148,13 @@ package struct ScriptMachine {
     /// whose scalars cannot be used, so that the check fails without an error.
     ///
     /// The DER rule is the node's structural `IsValidSignatureEncoding`. It
-    /// does not check the scalar range: a structurally valid signature with
-    /// `r` or `s` zero or at least the curve order passes it, and the node's
-    /// lax parser then reads it as the zero signature, which is low S and
-    /// never verifies.
+    /// does not check the scalar range, so a structurally valid signature
+    /// with `r` or `s` zero or at least the curve order passes it. The node's
+    /// low-S rule then reads the signature with its lax parser
+    /// (`CPubKey::CheckLowS`), which keeps `(r, s)` unless a value is longer
+    /// than 32 bytes or not below the curve order, and only then reads the
+    /// zero signature. So `r = 0` with a high `s` still fails LOW_S, while an
+    /// overflowing signature counts as low S. Neither verifies.
     private func checkSignatureEncoding(_ signatureWithHashType: [UInt8]) throws -> ECDSASignature? {
         guard let rawHashType = signatureWithHashType.last else { return nil }
         let requiresStrictDER = configuration.flags.contains(.strictEncoding)
@@ -1164,15 +1167,62 @@ package struct ScriptMachine {
             scriptBytes: Array(signatureWithHashType.dropLast()),
             strict: requiresStrictDER
         )
-        if configuration.flags.contains(.lowS), enforcesNonMalleability,
-           let signature, !signature.isLowS {
-            throw ScriptExecutionError.consensus(.invalidSignatureEncoding)
+        if configuration.flags.contains(.lowS), enforcesNonMalleability {
+            let isLowS = signature?.isLowS
+                ?? Self.laxParseIsLowS(Array(signatureWithHashType.dropLast()))
+            if !isLowS {
+                throw ScriptExecutionError.consensus(.invalidSignatureEncoding)
+            }
         }
         try checkHashTypeEncoding(rawHashType)
         return signature
     }
 
-    /// SV Node `IsValidSignatureEncoding` (interpreter.cpp:177-235): the
+    /// SV Node `CPubKey::CheckLowS` over a structurally valid DER signature
+    /// (without its hash type) that the strict parser rejected because a
+    /// scalar is zero or out of range (pubkey.cpp:32-175, 353-363).
+    ///
+    /// The lax parser strips leading zeros. When either value is longer than
+    /// 32 bytes or not below the curve order, it reads the zero signature,
+    /// which is low S. Otherwise it keeps the values, so the real `s` is
+    /// compared with half the curve order.
+    static func laxParseIsLowS(_ der: [UInt8]) -> Bool {
+        guard der.count >= 8 else { return true }
+        let lengthR = Int(der[3])
+        guard 6 + lengthR < der.count else { return true }
+        let r = Array(der[4..<(4 + lengthR)])
+        let lengthS = Int(der[5 + lengthR])
+        guard 6 + lengthR + lengthS <= der.count else { return true }
+        let s = Array(der[(6 + lengthR)..<(6 + lengthR + lengthS)])
+        guard let r32 = paddedScalar(r), let s32 = paddedScalar(s),
+              r32.lexicographicallyPrecedes(curveOrder),
+              s32.lexicographicallyPrecedes(curveOrder)
+        else { return true }
+        return !halfCurveOrder.lexicographicallyPrecedes(s32)
+    }
+
+    /// A big-endian integer as 32 bytes, or `nil` when it needs more.
+    private static func paddedScalar(_ bytes: [UInt8]) -> [UInt8]? {
+        let magnitude = bytes.drop { $0 == 0 }
+        guard magnitude.count <= 32 else { return nil }
+        return Array(repeating: 0, count: 32 - magnitude.count) + magnitude
+    }
+
+    private static let curveOrder: [UInt8] = [
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+        0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b,
+        0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+    ]
+
+    private static let halfCurveOrder: [UInt8] = [
+        0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0x5d, 0x57, 0x6e, 0x73, 0x57, 0xa4, 0x50, 0x1d,
+        0xdf, 0xe9, 0x2f, 0x46, 0x68, 0x1b, 0x20, 0xa0,
+    ]
+
+    /// SV Node `IsValidSignatureEncoding` (interpreter.cpp:177-245): the
     /// structural DER rules over a signature followed by its hash-type byte.
     static func isValidSignatureEncoding(_ signature: [UInt8]) -> Bool {
         let size = signature.count
