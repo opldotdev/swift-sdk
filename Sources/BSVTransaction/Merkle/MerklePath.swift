@@ -67,6 +67,7 @@ public struct MerklePath: Hashable, Sendable {
             ? 1
             : UInt64.bitWidth - maximumLevelZeroOffset.leadingZeroBitCount
         let effectiveHeight = max(sortedLevels.count, offsetHeight)
+        let legalOffsets = Self.legalOffsets(levels: sortedLevels)
 
         for (levelIndex, level) in sortedLevels.enumerated() {
             var previousOffset: UInt64?
@@ -99,6 +100,14 @@ public struct MerklePath: Hashable, Sendable {
                         level: levelIndex,
                         offset: element.offset,
                         treeHeight: effectiveHeight
+                    )
+                }
+                if levelIndex != 0,
+                   !legalOffsets[levelIndex].contains(element.offset)
+                {
+                    throw MerklePathError.illegalOffset(
+                        level: levelIndex,
+                        offset: element.offset
                     )
                 }
             }
@@ -200,8 +209,12 @@ public struct MerklePath: Hashable, Sendable {
                 ) {
                     try $0.read(count: 1)[0]
                 }
-                switch flags {
-                case 0, 2:
+                // Flags are a bitmask, as in @bsv/sdk and the Go SDK: bit 0
+                // marks a duplicate (no hash follows), and otherwise bit 1
+                // marks a transaction ID. Other bits carry no meaning.
+                if flags & 1 != 0 {
+                    level.append(.duplicate(offset: offset))
+                } else {
                     let hashBytes = try Self.read(
                         .hash(level: levelIndex, leaf: leafIndex),
                         from: &cursor
@@ -211,16 +224,8 @@ public struct MerklePath: Hashable, Sendable {
                     level.append(.hash(
                         offset: offset,
                         hash: try Hash256(hashBytes),
-                        isTransactionID: flags == 2
+                        isTransactionID: flags & 2 != 0
                     ))
-                case 1:
-                    level.append(.duplicate(offset: offset))
-                default:
-                    throw MerklePathError.invalidFlags(
-                        level: levelIndex,
-                        leaf: leafIndex,
-                        flags: flags
-                    )
                 }
             }
             parsedLevels.append(level)
@@ -341,11 +346,7 @@ public struct MerklePath: Hashable, Sendable {
         var index = MerklePathIndex(levels: levels)
         var workingHash = target
         let targetOffset = targetElement.offset
-        let maximumOffset = levels[0].map(\.offset).max() ?? 0
-        let offsetHeight = maximumOffset == 0
-            ? 1
-            : UInt64.bitWidth - maximumOffset.leadingZeroBitCount
-        let effectiveHeight = max(levels.count, offsetHeight)
+        let effectiveHeight = max(levels.count, index.offsetHeight)
 
         for level in 0..<effectiveHeight {
             let siblingOffset = (targetOffset >> level) ^ 1
@@ -354,6 +355,10 @@ public struct MerklePath: Hashable, Sendable {
                 continue
             }
             guard let siblingHash = index.hash(level: level, offset: siblingOffset) else {
+                if index.isImplicitDuplicate(level: level, offset: siblingOffset) {
+                    workingHash = MerkleTree.parent(workingHash, workingHash)
+                    continue
+                }
                 throw MerklePathError.missingSibling(
                     level: level,
                     offset: siblingOffset
@@ -463,6 +468,22 @@ public struct MerklePath: Hashable, Sendable {
         }
     }
 
+    /// The offsets a BRC-74 path may carry above level zero: at each height,
+    /// the sibling of every ancestor of a level-zero hash. Matches the
+    /// `legalOffsetsOnly` rule of @bsv/sdk `MerklePath`.
+    private static func legalOffsets(levels: [[MerklePathElement]]) -> [Set<UInt64>] {
+        var legal = Array(repeating: Set<UInt64>(), count: levels.count)
+        // Only levels that hold nodes are looked up, so only fill those.
+        let heights = levels.indices.dropFirst().filter { !levels[$0].isEmpty }
+        guard !heights.isEmpty else { return legal }
+        for element in levels[0] where !element.isDuplicate {
+            for height in heights {
+                legal[height].insert((element.offset >> height) ^ 1)
+            }
+        }
+        return legal
+    }
+
     private static func read<T>(
         _ field: MerklePathField,
         from cursor: inout ByteCursor,
@@ -490,12 +511,36 @@ private struct MerklePathNode: Hashable {
 
 private struct MerklePathIndex {
     let levels: [[UInt64: MerklePathElement]]
+    let maximumLevelZeroOffset: UInt64
     var derived: [MerklePathNode: Hash256] = [:]
 
     init(levels: [[MerklePathElement]]) {
         self.levels = levels.map { level in
             Dictionary(uniqueKeysWithValues: level.map { ($0.offset, $0) })
         }
+        maximumLevelZeroOffset = levels[0].map(\.offset).max() ?? 0
+    }
+
+    /// The tree height implied by the right-most level-zero offset.
+    var offsetHeight: Int {
+        maximumLevelZeroOffset == 0
+            ? 1
+            : UInt64.bitWidth - maximumLevelZeroOffset.leadingZeroBitCount
+    }
+
+    /// Whether a missing node is the absent right sibling of the last node
+    /// at its height in a single-level (full block) path.
+    ///
+    /// A single-level path lists every transaction of the block, so the
+    /// right-most node at each height with no right neighbour is paired with
+    /// itself, as Bitcoin's Merkle tree does. @bsv/sdk serializes such paths
+    /// without explicit duplicate markers. Multi-level paths must mark
+    /// duplicates explicitly.
+    func isImplicitDuplicate(level: Int, offset: UInt64) -> Bool {
+        guard levels.count == 1, offset & 1 == 1, level < UInt64.bitWidth else {
+            return false
+        }
+        return offset ^ 1 == maximumLevelZeroOffset >> UInt64(level)
     }
 
     func element(level: Int, offset: UInt64) -> MerklePathElement? {
@@ -519,11 +564,12 @@ private struct MerklePathIndex {
         let parent: Hash256
         if element(level: level - 1, offset: rightOffset)?.isDuplicate == true {
             parent = MerkleTree.parent(left, left)
-        } else {
-            guard let right = hash(level: level - 1, offset: rightOffset) else {
-                return nil
-            }
+        } else if let right = hash(level: level - 1, offset: rightOffset) {
             parent = MerkleTree.parent(left, right)
+        } else if isImplicitDuplicate(level: level - 1, offset: rightOffset) {
+            parent = MerkleTree.parent(left, left)
+        } else {
+            return nil
         }
         derived[node] = parent
         return parent

@@ -254,6 +254,7 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
                 limits: configuration.overlayLimits
             )
         } catch {
+            NetworkLog.error("UHRPDownloader.advertisements: lookup question not built: \(type(of: error)): \(String(reflecting: error))")
             throw UHRPDownloadError.invalidConfiguration
         }
 
@@ -282,7 +283,9 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
                 configuration: configuration
             ) {
             case .failure(let reason):
-                rejected.append(UHRPAdvertisementRejection(answerIndex: answerIndex, reason: reason))
+                let rejection = UHRPAdvertisementRejection(answerIndex: answerIndex, reason: reason)
+                NetworkLog.error("UHRPDownloader.advertisements: skipped \(rejection)")
+                rejected.append(rejection)
             case .success(let advertisement):
                 accepted.append(advertisement)
                 hosts.insert(advertisement.hostedFileLocation)
@@ -308,13 +311,21 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
         var failures: [UHRPHostFailure] = []
         for host in hosts {
             try Task.checkCancellation()
+            // Each host is one try; a failed one is logged and the next host is tried.
+            let request = HTTPRequest(method: .get, url: host)
             do {
                 let response = try await transport.send(
-                    HTTPRequest(method: .get, url: host),
+                    request,
                     maximumResponseBodyByteCount: configuration.uhrpLimits.maximumContentByteCount
                 )
                 try Task.checkCancellation()
                 guard (200...299).contains(response.statusCode) else {
+                    NetworkLog.failure(
+                        "UHRPDownloader.content",
+                        request: request,
+                        statusCode: response.statusCode,
+                        body: response.body
+                    )
                     failures.append(.init(host: host, reason: .httpStatus(response.statusCode)))
                     continue
                 }
@@ -324,6 +335,10 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
                     limits: configuration.uhrpLimits
                 )
                 guard content.matches(identifier) else {
+                    NetworkLog.error(
+                        "UHRPDownloader.content: \(NetworkLog.location(host)) sent \(response.body.count) bytes "
+                            + "that do not hash to the requested content"
+                    )
                     failures.append(.init(host: host, reason: .contentHashMismatch))
                     continue
                 }
@@ -333,10 +348,13 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
             } catch NetworkServiceError.cancelled {
                 throw CancellationError()
             } catch let error as NetworkServiceError {
+                NetworkLog.failure("UHRPDownloader.content", request: request, underlying: error)
                 failures.append(.init(host: host, reason: .transport(error)))
             } catch let error as UHRPError {
+                NetworkLog.failure("UHRPDownloader.content", request: request, underlying: error)
                 failures.append(.init(host: host, reason: .invalidContent(error)))
             } catch {
+                NetworkLog.failure("UHRPDownloader.content", request: request, underlying: error)
                 failures.append(.init(host: host, reason: .other(String(describing: error))))
             }
         }
