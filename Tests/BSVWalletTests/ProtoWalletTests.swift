@@ -449,7 +449,7 @@ final class ProtoWalletTests: XCTestCase {
 
     /// BRC-56 HMAC key vectors from `@bsv/sdk` 4.1.1
     /// (packages/sdk/src/wallet/__tests/ProtoWallet.brc56-hmac-key.test.ts:9-70).
-    /// Tags use the minimal-length X coordinate as the HMAC key (W1, COMP-064).
+    /// Tags use the minimal-length X coordinate as the HMAC key (W1, COMP-065).
     /// TypeScript rejects `rejectedTag` (made with the zero-padded 32-byte key);
     /// Swift still accepts it so tags Swift and Go peers made before the switch
     /// keep verifying.

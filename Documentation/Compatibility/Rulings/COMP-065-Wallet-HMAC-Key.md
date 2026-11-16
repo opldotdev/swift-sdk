@@ -1,4 +1,4 @@
-# COMP-064: Wallet HMAC key length
+# COMP-065: Wallet HMAC key length
 
 Status: Accepted. Replaces the HMAC part of COMP-002.
 
