@@ -1,5 +1,6 @@
 import BSVCore
 import BSVCrypto
+import BSVKeys
 import BSVTransaction
 import BSVWallet
 import Testing
@@ -50,6 +51,65 @@ struct WalletWireSubstrateTests {
             OriginatorCall(originator: "example.com", call: .getHeight),
         ])
         #expect(WalletCall.allCases.count == 28)
+    }
+
+    /// The wallet wire carries the largest payload the wallet's own
+    /// cryptography accepts, `WalletCryptoLimits.defaultPayloadByteCount`
+    /// (16 MiB plus 512 KiB, the BRC-103 general-message bound), with the
+    /// longest originator, protocol name and key ID, in a request and in an
+    /// encrypt result 48 bytes longer. Frames were capped at 16 MiB before.
+    @Test("a maximum-size payload is signed, verified, encrypted and decrypted over the wire")
+    func maximumPayloadOverWire() async throws {
+        let limits = WalletWireLimits.standard
+        #expect(
+            limits.maximumFrameByteCount
+                == WalletCryptoLimits.defaultPayloadByteCount + WalletWireLimits.frameOverheadByteCount)
+        #expect(limits.maximumPayloadByteCount == limits.maximumFrameByteCount)
+        #expect(limits.abiLimits.maximumAggregatePayloadByteCount == limits.maximumFrameByteCount)
+        let key = try PrivateKey(Array(repeating: 0, count: 31) + [9])
+        let processor = WalletWireProcessor(
+            wallet: CryptoWallet(crypto: ProtoWallet(rootKey: key)),
+            authorizer: OriginatorRecorder(),
+            failureMapper: try WalletWireRedactingFailureMapper(limits: limits),
+            beefLimits: try substrateBEEFLimits(),
+            certificateLimits: .standard,
+            wireLimits: limits
+        )
+        let client = try WalletWireTransceiver(
+            transport: processor,
+            originator: String(repeating: "o", count: WalletWireLimits.hardMaximumOriginatorUTF8ByteCount),
+            beefLimits: try substrateBEEFLimits(),
+            certificateLimits: .standard,
+            wireLimits: limits
+        )
+        let protocolID = try WalletProtocolID(
+            securityLevel: .everyAppAndCounterparty,
+            name: String(repeating: "p", count: WalletProtocolID.maximumNameUTF8ByteCount))
+        let keyID = try WalletKeyID(String(repeating: "k", count: WalletKeyID.maximumUTF8ByteCount))
+        var payload = [UInt8](repeating: 0x5A, count: WalletCryptoLimits.defaultPayloadByteCount)
+        payload[0] = 1
+        payload[payload.count - 1] = 2
+
+        let signed = try await client.createSignature(WalletCreateSignatureRequest(
+            protocolID: protocolID, keyID: keyID, counterparty: .anyone, payload: .data(payload)))
+        let verified = try await client.verifySignature(WalletVerifySignatureRequest(
+            protocolID: protocolID, keyID: keyID, counterparty: .anyone, payload: .data(payload),
+            signature: signed.signature, forSelf: true))
+        #expect(verified.valid)
+
+        let encrypted = try await client.encrypt(WalletEncryptRequest(
+            protocolID: protocolID, keyID: keyID, plaintext: payload))
+        #expect(encrypted.ciphertext.count == payload.count + 48)
+        let decrypted = try await client.decrypt(WalletDecryptRequest(
+            protocolID: protocolID, keyID: keyID, ciphertext: encrypted.ciphertext))
+        #expect(decrypted.plaintext == payload)
+
+        // One byte more is refused before anything is sent.
+        await #expect(throws: (any Error).self) {
+            try await client.createSignature(WalletCreateSignatureRequest(
+                protocolID: protocolID, keyID: keyID, counterparty: .anyone,
+                payload: .data(payload + [0])))
+        }
     }
 
     @Test("strict parameter decoding happens before originator authorization")
@@ -548,6 +608,27 @@ private actor OversizedTransport: WalletWireTransport {
     }
 
     func requestedMaximum() -> Int? { maximum }
+}
+
+/// A wallet whose key operations are a `ProtoWallet`'s.
+private struct CryptoWallet: WalletInterface {
+    let crypto: ProtoWallet
+
+    func getPublicKey(_ request: WalletGetPublicKeyRequest) async throws -> WalletGetPublicKeyResult {
+        try await crypto.getPublicKey(request)
+    }
+    func encrypt(_ request: WalletEncryptRequest) async throws -> WalletEncryptResult {
+        try await crypto.encrypt(request)
+    }
+    func decrypt(_ request: WalletDecryptRequest) async throws -> WalletDecryptResult {
+        try await crypto.decrypt(request)
+    }
+    func createSignature(_ request: WalletCreateSignatureRequest) async throws -> WalletCreateSignatureResult {
+        try await crypto.createSignature(request)
+    }
+    func verifySignature(_ request: WalletVerifySignatureRequest) async throws -> WalletVerifySignatureResult {
+        try await crypto.verifySignature(request)
+    }
 }
 
 private enum TestFailure: Error {

@@ -51,7 +51,14 @@ Encoding follows the TypeScript writers in
 
 Swift keeps these bounds: canonical CompactSize, explicit frame, payload,
 text, originator and error limits, checked UInt32 values, low-S DER
-signatures, exact SEC1 keys and full payload consumption.
+signatures, exact SEC1 keys and full payload consumption. The default frame
+bound, `WalletWireLimits.defaultFrameByteCount`, is
+`WalletCryptoLimits.defaultPayloadByteCount` (16 MiB plus 512 KiB) plus 64 KiB
+of framing (`frameOverheadByteCount`); the call parameters or result payload
+of a frame default to the same bound, and `WalletABILimits` bounds an ABI
+value's payloads in total by the same amount, so a wallet reached over the
+wire signs, verifies, HMACs, encrypts and decrypts every payload BSVAuth and
+the wallet's own cryptography accept. TypeScript sets no frame bound.
 
 ## Divergence from pinned Go v1.3.3
 
