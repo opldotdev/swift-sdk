@@ -181,6 +181,9 @@ public struct OverlayTopicBroadcaster: Sendable {
             case .failure(let error): failures.append(OverlayHostFailure(host: host, error: error))
             }
         }
+        for hostFailure in failures {
+            OverlayLog.hostFailure("OverlayTopicBroadcaster.broadcast", hostFailure)
+        }
         var failure: OverlayPolicyError?
         if !requirementsMet(acknowledged, hosts: hosts.keys) {
             failure = failures.isEmpty ? .acknowledgmentFailed : .uncertainDelivery

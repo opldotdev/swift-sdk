@@ -16,6 +16,7 @@ struct ScriptASMTests {
         )
         #expect(script.hex == "76a914000000000000000000000000000000000000000088ac")
         #expect(try script.asm(
+            style: .canonical,
             maximumPushDataByteCount: 20,
             maximumASMByteCount: 128
         ) == p2pkhASM)
@@ -44,6 +45,7 @@ struct ScriptASMTests {
         )
         #expect(script.bytes == [0x00, 0x51, 0xb6, 0xff])
         #expect(try script.asm(
+            style: .canonical,
             maximumPushDataByteCount: 0,
             maximumASMByteCount: 64
         ) == "OP_FALSE OP_TRUE OP_NOP4 OP_INVALIDOPCODE")
@@ -66,6 +68,7 @@ struct ScriptASMTests {
     func pushNormalization() throws {
         let nonMinimal = try Script(bytes: [0x4c, 0x01, 0xaa], maximumByteCount: 3)
         let text = try nonMinimal.asm(
+            style: .canonical,
             maximumPushDataByteCount: 1,
             maximumASMByteCount: 2
         )
@@ -80,9 +83,14 @@ struct ScriptASMTests {
 
         let emptyNonMinimal = try Script(bytes: [0x4c, 0x00], maximumByteCount: 2)
         #expect(try emptyNonMinimal.asm(
+            style: .canonical,
             maximumPushDataByteCount: 0,
             maximumASMByteCount: 8
         ) == "OP_FALSE")
+        #expect(try emptyNonMinimal.asm(
+            maximumPushDataByteCount: 0,
+            maximumASMByteCount: 8
+        ) == "OP_0")
     }
 
     @Test("bare 10 through 16 are data, never compact opcode names")

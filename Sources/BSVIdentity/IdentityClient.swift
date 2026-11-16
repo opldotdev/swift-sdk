@@ -60,10 +60,14 @@ public struct IdentityClient<Wallet: WalletInterface>:
         try IdentityParser.parse(identity, limits: limits)
     }
 
+    /// Publishes an identity token that anyone can verify, as TypeScript
+    /// `IdentityClient.publiclyRevealAttributes` does: the keyring is proved
+    /// to the fixed "anyone" verifier (`IdentityPublicReveal`), and the token
+    /// is locked and signed under `options.protocolID` (default
+    /// `[1, "identity"]`), key ID `"1"`, counterparty anyone, for self.
     public func publiclyRevealAttributes<BroadcasterType: Broadcaster>(
         certificate: Certificate,
         fieldsToReveal: [CertificateFieldName],
-        verifier: PublicKey,
         using broadcaster: BroadcasterType
     ) async throws -> BroadcastResult {
         try validateDisclosure(certificate: certificate, fieldsToReveal: fieldsToReveal)
@@ -84,7 +88,7 @@ public struct IdentityClient<Wallet: WalletInterface>:
         let proveRequest = try WalletProveCertificateRequest(
             certificate: certificate,
             fieldsToReveal: fieldsToReveal,
-            verifier: verifier,
+            verifier: try IdentityPublicReveal.verifierPublicKey(),
             limits: limits.walletLimits
         )
         let proof: WalletProveCertificateResult
@@ -187,13 +191,11 @@ public struct IdentityClient<Wallet: WalletInterface>:
     public func publiclyRevealAttributesSimple<BroadcasterType: Broadcaster>(
         certificate: Certificate,
         fieldsToReveal: [CertificateFieldName],
-        verifier: PublicKey,
         using broadcaster: BroadcasterType
     ) async throws -> TransactionID {
         let result = try await publiclyRevealAttributes(
             certificate: certificate,
             fieldsToReveal: fieldsToReveal,
-            verifier: verifier,
             using: broadcaster
         )
         return result.transactionID

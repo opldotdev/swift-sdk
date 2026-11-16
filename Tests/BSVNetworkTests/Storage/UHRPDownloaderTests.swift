@@ -1,4 +1,5 @@
 import BSVCore
+import BSVCrypto
 import BSVKeys
 import BSVOverlay
 import BSVScript
@@ -58,9 +59,12 @@ struct UHRPDownloaderTests {
             ])
         let question = try #require(await resolver.lastQuestion())
         #expect(question.service.rawValue == "ls_uhrp")
+        // TypeScript storage/StorageDownloader.ts:69-76 sends
+        // { uhrpUrl, limit: 100, offset: 0 }.
         #expect(
             question.query
-                == Array("{\"uhrpUrl\":\"\(identifier.encoded)\"}".utf8)
+                == Array(
+                    "{\"uhrpUrl\":\"\(identifier.encoded)\",\"limit\":100,\"offset\":0}".utf8)
         )
     }
 
@@ -68,15 +72,10 @@ struct UHRPDownloaderTests {
     func hostileAdvertisements() async throws {
         let identifier = try UHRPURL(fileBytes: [4, 5, 6])
         let other = try UHRPURL(fileBytes: [7, 8, 9])
+        // Each output below breaks one rule of
+        // storage/UHRPAdvertisementValidation.ts (TypeScript 4.1.1).
         let limits = try beefLimits()
         let outputs = try [
-            advertisement(
-                identifier: identifier,
-                advertisedIdentifier: other,
-                host: "https://wrong-id.example/file",
-                expiry: 1_001,
-                beefLimits: limits
-            ),
             advertisement(
                 identifier: identifier,
                 advertisedHash: other.hash.bytes,
@@ -118,9 +117,22 @@ struct UHRPDownloaderTests {
             ),
             advertisement(
                 identifier: identifier,
-                host: "https://extra-field.example/file",
+                host: "https://unlinked.example/file",
                 expiry: 1_001,
-                extraFields: [[1]],
+                linkedLock: false,
+                beefLimits: limits
+            ),
+            advertisement(
+                identifier: identifier,
+                host: "https://unsigned.example/file",
+                expiry: 1_001,
+                signed: false,
+                beefLimits: limits
+            ),
+            previousSwiftAdvertisement(
+                identifier: identifier,
+                host: "https://four-field.example/file",
+                expiry: 1_001,
                 beefLimits: limits
             ),
             try OutputListItem(beef: [1], outputIndex: 0),
@@ -134,7 +146,56 @@ struct UHRPDownloaderTests {
             now: { 1_000 }
         )
         #expect(try await downloader.hosts(for: identifier).isEmpty)
-        await #expect(throws: UHRPDownloadError.noAvailableHosts) {
+
+        // Each skipped output keeps its reason.
+        let lookup = try await downloader.advertisements(for: identifier)
+        #expect(lookup.accepted.isEmpty)
+        let reasons = lookup.rejected.map(\.reason)
+        #expect(lookup.rejected.map(\.answerIndex) == Array(0..<10))
+        #expect(
+            Array(reasons.prefix(9)) == [
+                .hashMismatch,
+                .invalidAdvertisement(.invalidURL),
+                .invalidAdvertisement(.invalidURL),
+                .invalidAdvertisement(.invalidURL),
+                .invalidAdvertisement(.invalidExpiryTime),
+                .invalidAdvertisement(.invalidExpiryTime),
+                .invalidAdvertisement(.lockingKeyNotLinkedToHost),
+                .invalidAdvertisement(.invalidSignature),
+                .invalidAdvertisement(.unexpectedFieldCount(actual: 4)),
+            ])
+        guard case .invalidTransaction(let detail) = reasons[9] else {
+            Issue.record("expected an invalid transaction, got \(reasons[9])")
+            return
+        }
+        #expect(!detail.isEmpty)
+
+        // The final error carries the same list, with a short description
+        // and the full list in debugDescription.
+        do {
+            _ = try await downloader.content(for: identifier)
+            Issue.record("content(for:) should have failed")
+        } catch let error as UHRPDownloadError {
+            #expect(error == .noAvailableHosts(rejected: lookup.rejected))
+            #expect(
+                error.description
+                    == "No current UHRP host advertisement is available (10 rejected; first: advertisement is for other content)"
+            )
+            #expect(error.debugDescription.split(separator: "\n").count == 11)
+            #expect(error.debugDescription.contains("output 8: UHRP advertisement must have 6 fields (found 4)"))
+        }
+    }
+
+    @Test("an empty lookup reports no advertisements")
+    func emptyLookup() async throws {
+        let identifier = try UHRPURL(fileBytes: [1])
+        let downloader = UHRPDownloader(
+            resolver: UHRPRecordingResolver(answer: try LookupAnswer(outputList: [])),
+            configuration: try configuration(beefLimits: try beefLimits()),
+            transport: UHRPRecordingTransport(responses: [:]),
+            now: { 0 }
+        )
+        await #expect(throws: UHRPDownloadError.noAvailableHosts(rejected: [])) {
             try await downloader.content(for: identifier)
         }
     }
@@ -204,6 +265,49 @@ struct UHRPDownloaderTests {
                 "https://a.example/file", "https://b.example/file", "https://c.example/file",
             ])
         #expect(await transport.responseLimits() == [4, 4, 4])
+    }
+
+    @Test("every failed host is reported with its reason")
+    func allHostsFailed() async throws {
+        let identifier = try UHRPURL(fileBytes: [10, 20, 30, 40])
+        let limits = try beefLimits()
+        let outputs = try ["a", "b", "c"].map {
+            try advertisement(
+                identifier: identifier,
+                host: "https://\($0).example/file",
+                expiry: 2_000,
+                beefLimits: limits
+            )
+        }
+        let transport = UHRPRecordingTransport(responses: [
+            "https://a.example/file": .success(HTTPResponse(statusCode: 503, body: Data())),
+            "https://b.example/file": .success(HTTPResponse(statusCode: 200, body: Data([0]))),
+        ])
+        let downloader = UHRPDownloader(
+            resolver: UHRPRecordingResolver(answer: try LookupAnswer(outputList: outputs)),
+            configuration: try configuration(beefLimits: limits),
+            transport: transport,
+            now: { 1_000 }
+        )
+        let expected: [UHRPHostFailure] = [
+            .init(host: URL(string: "https://a.example/file")!, reason: .httpStatus(503)),
+            .init(host: URL(string: "https://b.example/file")!, reason: .contentHashMismatch),
+            .init(
+                host: URL(string: "https://c.example/file")!,
+                reason: .transport(.transport(code: nil))
+            ),
+        ]
+        do {
+            _ = try await downloader.content(for: identifier)
+            Issue.record("content(for:) should have failed")
+        } catch let error as UHRPDownloadError {
+            #expect(error == .allHostsFailed(expected))
+            #expect(
+                error.description
+                    == "All 3 UHRP content hosts failed (first: https://a.example/file: HTTP status 503)"
+            )
+            #expect(error.debugDescription.contains("- https://b.example/file: content does not match its UHRP hash"))
+        }
     }
 
     @Test("lookup form, counts, and cancellation fail closed")
@@ -302,7 +406,14 @@ struct UHRPDownloaderTests {
             transport: transport,
             now: { 0 }
         )
-        await #expect(throws: UHRPDownloadError.allHostsFailed) {
+        await #expect(
+            throws: UHRPDownloadError.allHostsFailed([
+                UHRPHostFailure(
+                    host: URL(string: "https://large.example/file")!,
+                    reason: .transport(.responseBodyTooLarge(maximumByteCount: 4))
+                )
+            ])
+        ) {
             try await downloader.content(for: identifier)
         }
         #expect(await transport.responseLimits() == [4])
@@ -331,30 +442,72 @@ struct UHRPDownloaderTests {
         }
     }
 
+    /// Builds the six-field signed advertisement that TypeScript hosts
+    /// publish (storage/UHRPAdvertisementValidation.ts:37-112): host key,
+    /// hash, URL, expiry, size, then a signature over fields 0-4 by the key
+    /// linked to the host under "2-uhrp advertisement-1" and the anyone key.
     private func advertisement(
         identifier: UHRPURL,
-        advertisedIdentifier: UHRPURL? = nil,
         advertisedHash: [UInt8]? = nil,
         host: String,
         expiry: UInt64,
         expiryBytes: [UInt8]? = nil,
-        extraFields: [[UInt8]] = [],
+        linkedLock: Bool = true,
+        signed: Bool = true,
+        beefLimits: BEEFLimits
+    ) throws -> OutputListItem {
+        let hostKey = try PrivateKey([UInt8](repeating: 0, count: 31) + [7])
+        let anyone = try PrivateKey([UInt8](repeating: 0, count: 31) + [1])
+        let lockingKey = linkedLock
+            ? try hostKey.derivedChild(
+                with: anyone.publicKey,
+                invoiceNumber: "2-uhrp advertisement-1"
+            )
+            : hostKey
+        let fields = [
+            hostKey.publicKey.compressedBytes,
+            advertisedHash ?? identifier.hash.bytes,
+            Array(host.utf8),
+            expiryBytes ?? CompactSize.encode(expiry),
+            CompactSize.encode(4_096),
+        ]
+        let signedBytes = Array(fields.joined()) + (signed ? [] : [0])
+        let signature = try lockingKey.sign(digest: BSVHashing.sha256(signedBytes))
+        let script = try PushDrop.lockingScript(
+            fields: fields + [signature.derBytes],
+            publicKey: lockingKey.publicKey,
+            lockPosition: .beforeCompatibility,
+            limits: .standard
+        )
+        return try outputListItem(script, beefLimits: beefLimits)
+    }
+
+    /// The unsigned four-field shape Swift used before it matched TypeScript.
+    private func previousSwiftAdvertisement(
+        identifier: UHRPURL,
+        host: String,
+        expiry: UInt64,
         beefLimits: BEEFLimits
     ) throws -> OutputListItem {
         let key = try PrivateKey([UInt8](repeating: 0, count: 31) + [1])
-        var fields = [
-            advertisedHash ?? identifier.hash.bytes,
-            Array((advertisedIdentifier ?? identifier).encoded.utf8),
-            Array(host.utf8),
-            expiryBytes ?? CompactSize.encode(expiry),
-        ]
-        fields.append(contentsOf: extraFields)
         let script = try PushDrop.lockingScript(
-            fields: fields,
+            fields: [
+                identifier.hash.bytes,
+                Array(identifier.encoded.utf8),
+                Array(host.utf8),
+                CompactSize.encode(expiry),
+            ],
             publicKey: key.publicKey,
             lockPosition: .beforeCompatibility,
             limits: .standard
         )
+        return try outputListItem(script, beefLimits: beefLimits)
+    }
+
+    private func outputListItem(
+        _ script: Script,
+        beefLimits: BEEFLimits
+    ) throws -> OutputListItem {
         let transaction = Transaction(
             outputs: [TransactionOutput(satoshis: 1, lockingScript: script)]
         )

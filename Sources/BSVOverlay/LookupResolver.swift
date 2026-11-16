@@ -157,6 +157,8 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
             }
         }
         let (answer, rejected) = try aggregate(answers)
+        for failure in failures { OverlayLog.hostFailure("LookupResolver.resolve", failure) }
+        for rejection in rejected { OverlayLog.rejectedOutput("LookupResolver.resolve", rejection) }
         return LookupResolution(answer: answer, hostFailures: failures, rejectedOutputs: rejected)
     }
 
