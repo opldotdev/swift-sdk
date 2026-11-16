@@ -1,7 +1,13 @@
+/// Bounds on what the wallet's own cryptography reads.
+///
+/// `maximumPayloadByteCount` bounds the data signed, verified, HMACed or encrypted. The default is
+/// 16 MiB: the TypeScript `ProtoWallet` sets no bound of its own, and BRC-103 signs each general
+/// message's whole payload, which the TypeScript `AuthFetch` allows up to 16 MiB. At 1 MiB, an
+/// authenticated request or response over 1 MiB could not be signed or verified.
 public struct WalletCryptoLimits: Hashable, Sendable {
     public static let standard = WalletCryptoLimits(
-        validatedPayload: 1_048_576,
-        ciphertext: 1_048_624,
+        validatedPayload: 16_777_216,
+        ciphertext: 16_777_264,
         json: 8_388_608
     )
 
@@ -10,7 +16,7 @@ public struct WalletCryptoLimits: Hashable, Sendable {
     public let maximumJSONByteCount: Int
 
     public init(
-        maximumPayloadByteCount: Int = 1_048_576,
+        maximumPayloadByteCount: Int = 16_777_216,
         maximumJSONByteCount: Int = 8_388_608
     ) throws {
         guard maximumPayloadByteCount >= 0 else {

@@ -86,6 +86,11 @@ public struct BRC104Header: Equatable, Sendable, CustomStringConvertible,
     }
 }
 
+/// Bounds on a BRC-104 request or response payload.
+///
+/// `maximumPayloadBytes` defaults to 16 MiB, matching `AuthLimits` and the TypeScript SDK's
+/// `AuthFetch` (`MAX_AUTH_HTTP_REQUEST_FRAME_BYTES`, and `DEFAULT_SIMPLIFIED_FETCH_MAX_RESPONSE_BYTES`
+/// for a response body).
 public struct BRC104Limits: Equatable, Sendable {
     public let maximumPayloadBytes: Int
     public let maximumHeaders: Int
@@ -93,7 +98,7 @@ public struct BRC104Limits: Equatable, Sendable {
     public let maximumHeaderValueBytes: Int
     public let maximumHeaderBytes: Int
     public init(
-        maximumPayloadBytes: Int = 1 << 20, maximumHeaders: Int = 64,
+        maximumPayloadBytes: Int = 16 << 20, maximumHeaders: Int = 64,
         maximumHeaderNameBytes: Int = 256,
         maximumHeaderValueBytes: Int = 8 << 10, maximumHeaderBytes: Int = 64 << 10
     ) throws {
@@ -116,7 +121,7 @@ public struct BRC104Limits: Equatable, Sendable {
         maximumHeaderBytes = headerBytes
     }
     public static let standard = BRC104Limits(
-        validatedPayload: 1 << 20, headers: 64, headerName: 256, headerValue: 8 << 10,
+        validatedPayload: 16 << 20, headers: 64, headerName: 256, headerValue: 8 << 10,
         headerBytes: 64 << 10)
 }
 

@@ -402,9 +402,11 @@ final class BRC52CertificateBinaryTests: XCTestCase {
             limits: custom
         )
         let unsigned = try certificate.binary(includingSignature: false, limits: custom)
-        XCTAssertGreaterThan(unsigned.count, WalletCryptoLimits.standard.maximumPayloadByteCount)
+        // A wallet bounded at 1 MiB, below the expanded preimage.
+        let walletLimits = try WalletCryptoLimits(maximumPayloadByteCount: 1_048_576)
+        XCTAssertGreaterThan(unsigned.count, walletLimits.maximumPayloadByteCount)
         let signed = try await certificate.signed(
-            using: ProtoWallet(rootKey: try key(9)),
+            using: ProtoWallet(rootKey: try key(9), limits: walletLimits),
             limits: custom
         )
         let signatureValid = try await signed.verifySignature(limits: custom)
@@ -416,7 +418,7 @@ final class BRC52CertificateBinaryTests: XCTestCase {
         )
         await XCTAssertThrowsErrorAsync {
             _ = try await certificate.signed(
-                using: ProtoWallet(rootKey: try self.key(9)),
+                using: ProtoWallet(rootKey: try self.key(9), limits: walletLimits),
                 limits: exactUnsignedOnly
             )
         }
