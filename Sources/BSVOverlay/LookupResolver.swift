@@ -5,6 +5,7 @@ import BSVTransaction
 public enum OverlayPolicyError: Error, Equatable, Sendable {
     case noCompetentHosts
     case noSuccessfulResponses
+    /// No longer thrown: output lists win over freeform answers.
     case inconsistentAnswerTypes
     case invalidLookupOutput
     case discoveryResponseNotOutputList
@@ -100,18 +101,15 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
             guard case .outputList(let outputs) = response else { continue }
             for output in outputs {
                 guard
-                    let transaction = try? overlayLookupTransaction(
-                        for: output,
-                        beefLimits: beefLimits
+                    let token = verifiedAdvertisement(
+                        in: output,
+                        beefLimits: beefLimits,
+                        adminTokenLimits: adminTokenLimits
                     ),
-                    Int(output.outputIndex) < transaction.outputs.count,
-                    let token = try? OverlayAdminTokenCodec.decode(
-                        transaction.outputs[Int(output.outputIndex)].lockingScript,
-                        limits: adminTokenLimits
-                    ),
-                    token.subject == .slap(service)
+                    token.subject == .slap(service),
+                    let host = advertisedHTTPSHost(token, limits: limits)
                 else { continue }
-                discovered.insert(token.host)
+                discovered.insert(host)
                 guard discovered.count <= limits.maximumResolutionHostCount else {
                     throw OverlayError.limitExceeded(
                         name: "resolvedHosts",
@@ -167,24 +165,25 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
         return indexed.sorted { $0.0 < $1.0 }.map(\.1)
     }
 
+    /// Merges the hosts' answers.
+    ///
+    /// When any host answers with an output list, the result is the merged
+    /// output lists and freeform answers are left out, as `@bsv/sdk`
+    /// `LookupResolver.query` does (`LookupResolver.ts:1508-1528`). When every
+    /// answering host answers freeform, the first freeform answer in sorted
+    /// host order is returned.
     private func aggregate(_ responses: [LookupAnswer]) throws -> LookupAnswer {
-        let hasFreeform = responses.contains { if case .freeform = $0 { true } else { false } }
         let hasOutputs = responses.contains { if case .outputList = $0 { true } else { false } }
-        guard !(hasFreeform && hasOutputs) else {
-            throw OverlayPolicyError.inconsistentAnswerTypes
-        }
-        if hasFreeform {
-            guard case .freeform(let bytes) = responses[0] else {
-                throw OverlayPolicyError.inconsistentAnswerTypes
+        if !hasOutputs {
+            guard case .freeform(let bytes) = responses.first else {
+                throw OverlayPolicyError.noSuccessfulResponses
             }
             return try LookupAnswer(freeform: bytes, limits: limits)
         }
 
         var outputsByKey: [OverlayOutputKey: OutputListItem] = [:]
         for response in responses {
-            guard case .outputList(let outputs) = response else {
-                throw OverlayPolicyError.inconsistentAnswerTypes
-            }
+            guard case .outputList(let outputs) = response else { continue }
             for output in outputs {
                 let key = try outputKey(for: output)
                 if outputsByKey[key] == nil {
@@ -226,6 +225,12 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
     }
 }
 
+/// The transaction that holds a lookup output.
+///
+/// With a `transactionID` the output names its transaction, and that
+/// transaction is taken from the BEEF; an Atomic BEEF must have it as its
+/// subject. Without one, an Atomic BEEF gives its subject and a standard BEEF
+/// gives its last transaction once reordered parents-first.
 package func overlayLookupTransaction(
     for output: OutputListItem,
     beefLimits: BEEFLimits
@@ -240,9 +245,24 @@ package func overlayLookupTransaction(
             let atomic = try AtomicBEEF(
                 bytes: output.beef, limits: beefLimits, transactionOrder: .any
             )
+            if let named = output.transactionID, named != atomic.subjectTransactionID {
+                throw OverlayPolicyError.invalidLookupOutput
+            }
             guard
                 let transaction = try atomic.beef.transaction(
                     for: atomic.subjectTransactionID,
+                    limits: beefLimits.transactionLimits
+                )
+            else {
+                throw OverlayPolicyError.invalidLookupOutput
+            }
+            return transaction
+        }
+        let beef = try BEEF(bytes: output.beef, limits: beefLimits, transactionOrder: .any)
+        if let named = output.transactionID {
+            guard
+                let transaction = try beef.transaction(
+                    for: named,
                     limits: beefLimits.transactionLimits
                 )
             else {
@@ -257,7 +277,6 @@ package func overlayLookupTransaction(
         // instead; the two differ only when the writer put a parent last. This
         // keeps the reordered choice: a transaction nothing else in the answer
         // spends.
-        let beef = try BEEF(bytes: output.beef, limits: beefLimits, transactionOrder: .any)
         guard let transaction = beef.transactions.last?.transaction else {
             throw OverlayPolicyError.invalidLookupOutput
         }
@@ -267,6 +286,36 @@ package func overlayLookupTransaction(
     } catch {
         throw OverlayPolicyError.invalidLookupOutput
     }
+}
+
+/// The verified SHIP or SLAP advertisement a discovery output holds, or nil.
+///
+/// As in `@bsv/sdk` (`LookupResolver.ts:2210-2232`, `SHIPBroadcaster.ts:755-777`),
+/// the output must hold exactly one satoshi and a token that passes
+/// ``OverlayAdminTokenCodec/decode(_:limits:)``.
+package func verifiedAdvertisement(
+    in output: OutputListItem,
+    beefLimits: BEEFLimits,
+    adminTokenLimits: OverlayAdminTokenLimits
+) -> OverlayAdminToken? {
+    guard let transaction = try? overlayLookupTransaction(for: output, beefLimits: beefLimits),
+        Int(output.outputIndex) < transaction.outputs.count
+    else { return nil }
+    let selected = transaction.outputs[Int(output.outputIndex)]
+    guard selected.satoshis == 1 else { return nil }
+    return try? OverlayAdminTokenCodec.decode(selected.lockingScript, limits: adminTokenLimits)
+}
+
+/// The `https://` origin an advertisement names, as a host the HTTPS
+/// facilitators accept, or nil when it names another transport.
+package func advertisedHTTPSHost(
+    _ token: OverlayAdminToken,
+    limits: OverlayLimits
+) -> OverlayHost? {
+    guard let origin = OverlayAdvertisementURI.httpsOrigin(token.host.rawValue) else {
+        return nil
+    }
+    return try? OverlayHost(rawValue: origin, limits: limits)
 }
 
 private struct OverlayOutputKey: Hashable, Comparable, Sendable {

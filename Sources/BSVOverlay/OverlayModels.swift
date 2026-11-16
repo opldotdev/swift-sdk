@@ -21,6 +21,8 @@ public struct OverlayLimits: Hashable, Sendable {
     public let maximumSteakTopicCount: Int
     public let maximumResolutionHostCount: Int
     public let maximumConcurrentRequestCount: Int
+    /// The largest `context` one lookup output may carry. `@bsv/sdk` caps it at 1 MiB.
+    public let maximumLookupContextByteCount: Int
 
     public init(
         maximumTaggedBEEFByteCount: Int,
@@ -40,7 +42,8 @@ public struct OverlayLimits: Hashable, Sendable {
         maximumAncillaryTransactionCount: Int = 10_000,
         maximumSteakTopicCount: Int = 256,
         maximumResolutionHostCount: Int = 64,
-        maximumConcurrentRequestCount: Int = 8
+        maximumConcurrentRequestCount: Int = 8,
+        maximumLookupContextByteCount: Int = 1 * 1_024 * 1_024
     ) throws {
         let values = [
             ("maximumTaggedBEEFByteCount", maximumTaggedBEEFByteCount),
@@ -61,6 +64,7 @@ public struct OverlayLimits: Hashable, Sendable {
             ("maximumSteakTopicCount", maximumSteakTopicCount),
             ("maximumResolutionHostCount", maximumResolutionHostCount),
             ("maximumConcurrentRequestCount", maximumConcurrentRequestCount),
+            ("maximumLookupContextByteCount", maximumLookupContextByteCount),
         ]
         if let invalid = values.first(where: { $0.1 <= 0 }) {
             throw OverlayError.nonPositiveLimit(name: invalid.0, value: invalid.1)
@@ -83,6 +87,7 @@ public struct OverlayLimits: Hashable, Sendable {
         self.maximumSteakTopicCount = maximumSteakTopicCount
         self.maximumResolutionHostCount = maximumResolutionHostCount
         self.maximumConcurrentRequestCount = maximumConcurrentRequestCount
+        self.maximumLookupContextByteCount = maximumLookupContextByteCount
     }
 
     private init(standard: Void) {
@@ -104,6 +109,7 @@ public struct OverlayLimits: Hashable, Sendable {
         maximumSteakTopicCount = 256
         maximumResolutionHostCount = 64
         maximumConcurrentRequestCount = 8
+        maximumLookupContextByteCount = 1 * 1_024 * 1_024
     }
 
     public static let standard = Self(standard: ())
@@ -145,13 +151,18 @@ public enum OverlayNetwork: String, CaseIterable, Hashable, Sendable {
 }
 
 /// A BRC-87 topic-manager name.
+///
+/// The grammar is the one `@bsv/sdk` and the overlay engine enforce
+/// (`overlay-tools/OverlayNames.ts`): `tm_`, then one or more segments of
+/// lowercase ASCII letters and digits joined by single underscores, at most
+/// 256 bytes in all.
 public struct OverlayTopic: Hashable, Sendable, Comparable {
     public let rawValue: String
 
     public init(rawValue: String, limits: OverlayLimits = .standard) throws {
         try enforceOverlayUTF8Limit(
             rawValue, name: "topic", maximum: limits.maximumTopicUTF8ByteCount)
-        guard rawValue.hasPrefix("tm_"), validOverlayIdentifier(rawValue) else {
+        guard validOverlayName(rawValue, prefix: "tm_") else {
             throw OverlayError.invalidTopic
         }
         self.rawValue = rawValue
@@ -160,14 +171,15 @@ public struct OverlayTopic: Hashable, Sendable, Comparable {
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
-/// A BRC-87 lookup-service name.
+/// A BRC-87 lookup-service name, with the same grammar as ``OverlayTopic``
+/// under the `ls_` prefix.
 public struct OverlayService: Hashable, Sendable, Comparable {
     public let rawValue: String
 
     public init(rawValue: String, limits: OverlayLimits = .standard) throws {
         try enforceOverlayUTF8Limit(
             rawValue, name: "service", maximum: limits.maximumServiceUTF8ByteCount)
-        guard rawValue.hasPrefix("ls_"), validOverlayIdentifier(rawValue) else {
+        guard validOverlayName(rawValue, prefix: "ls_") else {
             throw OverlayError.invalidService
         }
         self.rawValue = rawValue
@@ -376,13 +388,31 @@ public struct OverlayMetadata: Hashable, Sendable {
     }
 }
 
-package func validOverlayIdentifier(_ value: String) -> Bool {
-    value.utf8.count > 3
-        && value.utf8.allSatisfy { byte in
-            (0x30...0x39).contains(byte) || (0x41...0x5a).contains(byte)
-                || (0x61...0x7a).contains(byte) || byte == 0x5f || byte == 0x2d
+/// The `@bsv/sdk` topic and service name pattern
+/// `^(?=.{1,256}$)<prefix>[a-z0-9]+(?:_[a-z0-9]+)*$`.
+package func validOverlayName(_ value: String, prefix: String) -> Bool {
+    let bytes = Array(value.utf8)
+    let prefixBytes = Array(prefix.utf8)
+    guard bytes.count <= maximumOverlayNameByteCount,
+        bytes.count > prefixBytes.count,
+        bytes.starts(with: prefixBytes)
+    else { return false }
+    var previousWasSeparator = true
+    for byte in bytes[prefixBytes.count...] {
+        if byte == 0x5f {
+            guard !previousWasSeparator else { return false }
+            previousWasSeparator = true
+        } else if (0x30...0x39).contains(byte) || (0x61...0x7a).contains(byte) {
+            previousWasSeparator = false
+        } else {
+            return false
         }
+    }
+    return !previousWasSeparator
 }
+
+/// `MAX_OVERLAY_NAME_BYTES` in `@bsv/sdk`, which matches the overlay engine's topic limit.
+package let maximumOverlayNameByteCount = 256
 
 package func enforceOverlayUTF8Limit(_ value: String, name: String, maximum: Int) throws {
     try enforceOverlayByteLimit(Array(value.utf8), name: name, maximum: maximum)

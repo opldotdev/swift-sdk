@@ -5,7 +5,9 @@ import BSVTransaction
 ///
 /// This broadcaster has no default resolver, tracker, transport, or retry. It
 /// discovers signed SHIP advertisements through the injected resolver and
-/// submits to each interested host at most once.
+/// submits to each interested host at most once, naming only the topics that
+/// host advertised. Acknowledgment requirements are checked against all of
+/// the broadcast's topics, as in `@bsv/sdk`.
 public struct OverlayTopicBroadcaster: Sendable {
     private let topics: [OverlayTopic]
     private let facilitator: any TopicFacilitator
@@ -56,8 +58,18 @@ public struct OverlayTopicBroadcaster: Sendable {
             ?? AckFrom(requirement: .all, limits: limits)
         try Self.validate(every, against: orderedTopics)
         try Self.validate(any, against: orderedTopics)
-        for requirement in acknowledgmentByHost.values {
+        // Discovered hosts are `https://` origins, so a requirement keyed by
+        // `https://host/` names the same host as `https://host`, as in
+        // `@bsv/sdk` (`snapshotSpecificHostRequirements`).
+        var requirementsByHost: [OverlayHost: AckFrom] = [:]
+        for (host, requirement) in acknowledgmentByHost {
             try Self.validate(requirement, against: orderedTopics)
+            let key =
+                OverlayAdvertisementURI.httpsOrigin(host.rawValue)
+                .flatMap { try? OverlayHost(rawValue: $0, limits: limits) } ?? host
+            guard requirementsByHost.updateValue(requirement, forKey: key) == nil else {
+                throw OverlayError.duplicateValue(name: "acknowledgmentHosts")
+            }
         }
 
         self.topics = orderedTopics
@@ -65,7 +77,7 @@ public struct OverlayTopicBroadcaster: Sendable {
         self.resolver = resolver
         self.acknowledgmentFromEveryHost = every
         self.acknowledgmentFromAnyHost = any
-        self.acknowledgmentByHost = acknowledgmentByHost
+        self.acknowledgmentByHost = requirementsByHost
         self.beefLimits = beefLimits
         self.adminTokenLimits = adminTokenLimits
         self.limits = limits
@@ -82,7 +94,8 @@ public struct OverlayTopicBroadcaster: Sendable {
         } catch {
             throw OverlayPolicyError.invalidAtomicBEEF
         }
-        let tagged = try TaggedBEEF(
+        // Check the payload against the limits before any network request.
+        _ = try TaggedBEEF(
             beef: bytes,
             topics: topics,
             offChainValues: offChainValues,
@@ -90,7 +103,22 @@ public struct OverlayTopicBroadcaster: Sendable {
         )
         let hosts = try await interestedHosts()
         guard !hosts.isEmpty else { throw OverlayPolicyError.noInterestedHosts }
-        let results = try await submit(tagged, to: hosts)
+        var submissions: [(OverlayHost, TaggedBEEF)] = []
+        submissions.reserveCapacity(hosts.count)
+        for (host, hostTopics) in hosts.sorted(by: { $0.key < $1.key }) {
+            submissions.append(
+                (
+                    host,
+                    try TaggedBEEF(
+                        beef: bytes,
+                        topics: hostTopics.sorted(),
+                        offChainValues: offChainValues,
+                        limits: limits
+                    )
+                )
+            )
+        }
+        let results = try await submit(submissions)
         try validateAcknowledgments(results)
         return BroadcastResult(
             transactionID: atomicBEEF.subjectTransactionID,
@@ -98,7 +126,12 @@ public struct OverlayTopicBroadcaster: Sendable {
         )
     }
 
-    private func interestedHosts() async throws -> [OverlayHost] {
+    /// Each interested host and the broadcast topics it advertised.
+    ///
+    /// Like `@bsv/sdk` `SHIPBroadcaster` (`SHIPBroadcaster.ts:476-482,738-783`),
+    /// each host is later sent only the topics it advertised, because the
+    /// overlay engine refuses a submission that names a topic it does not host.
+    private func interestedHosts() async throws -> [OverlayHost: Set<OverlayTopic>] {
         let service: OverlayService
         do {
             service = try OverlayService(rawValue: "ls_ship", limits: limits)
@@ -117,22 +150,19 @@ public struct OverlayTopicBroadcaster: Sendable {
         }
 
         let requested = Set(topics)
-        var hosts: Set<OverlayHost> = []
+        var hosts: [OverlayHost: Set<OverlayTopic>] = [:]
         for output in outputs {
             guard
-                let transaction = try? overlayLookupTransaction(
-                    for: output,
-                    beefLimits: beefLimits
-                ),
-                Int(output.outputIndex) < transaction.outputs.count,
-                let token = try? OverlayAdminTokenCodec.decode(
-                    transaction.outputs[Int(output.outputIndex)].lockingScript,
-                    limits: adminTokenLimits
+                let token = verifiedAdvertisement(
+                    in: output,
+                    beefLimits: beefLimits,
+                    adminTokenLimits: adminTokenLimits
                 ),
                 case .ship(let topic) = token.subject,
-                requested.contains(topic)
+                requested.contains(topic),
+                let host = advertisedHTTPSHost(token, limits: limits)
             else { continue }
-            hosts.insert(token.host)
+            hosts[host, default: []].insert(topic)
             guard hosts.count <= limits.maximumResolutionHostCount else {
                 throw OverlayError.limitExceeded(
                     name: "interestedHosts",
@@ -141,28 +171,31 @@ public struct OverlayTopicBroadcaster: Sendable {
                 )
             }
         }
-        return hosts.sorted()
+        return hosts
     }
 
     private func submit(
-        _ taggedBEEF: TaggedBEEF,
-        to hosts: [OverlayHost]
+        _ submissions: [(OverlayHost, TaggedBEEF)]
     ) async throws -> [OverlayHost: Steak] {
         var indexed: [(Int, OverlayHost, Steak)] = []
         var uncertain = false
         let width = limits.maximumConcurrentRequestCount
         var start = 0
-        while start < hosts.count {
+        while start < submissions.count {
             try Task.checkCancellation()
-            let end = min(hosts.count, start + width)
+            let end = min(submissions.count, start + width)
             await withTaskGroup(of: OverlaySubmissionOutcome.self) { group in
                 for index in start..<end {
-                    let host = hosts[index]
+                    let (host, taggedBEEF) = submissions[index]
                     group.addTask {
                         do {
                             try Task.checkCancellation()
                             let steak = try await facilitator.submit(taggedBEEF, to: host)
                             try Task.checkCancellation()
+                            // `validateSTEAK` in `@bsv/sdk` fails a host that
+                            // acknowledges a topic it was not sent.
+                            guard Set(steak.instructions.keys).isSubset(of: taggedBEEF.topics)
+                            else { return .uncertain }
                             return .success(index, host, steak)
                         } catch {
                             return .uncertain
@@ -183,7 +216,7 @@ public struct OverlayTopicBroadcaster: Sendable {
         if uncertain || Task.isCancelled {
             throw OverlayPolicyError.uncertainDelivery
         }
-        guard indexed.count == hosts.count else {
+        guard indexed.count == submissions.count else {
             throw OverlayPolicyError.uncertainDelivery
         }
         return Dictionary(

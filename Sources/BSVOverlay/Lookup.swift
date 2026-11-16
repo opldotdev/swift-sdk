@@ -1,3 +1,5 @@
+import BSVCore
+
 /// A transport-neutral lookup request with an opaque, caller-defined bounded query payload.
 public struct LookupQuestion: Hashable, Sendable, CustomStringConvertible,
     CustomDebugStringConvertible, CustomReflectable
@@ -21,22 +23,39 @@ public struct LookupQuestion: Hashable, Sendable, CustomStringConvertible,
     public var customMirror: Mirror { Mirror(reflecting: description) }
 }
 
+/// One output in a lookup answer, in the `@bsv/sdk` `LookupAnswer` output shape.
+///
+/// `beef` holds the output's transaction, normally as Atomic BEEF. When
+/// `transactionID` is present it names the transaction that holds the output,
+/// which matters when `beef` is a standard BEEF carrying several transactions.
+/// `context` is the lookup service's optional per-output data.
 public struct OutputListItem: Hashable, Sendable, CustomStringConvertible,
     CustomDebugStringConvertible, CustomReflectable
 {
     public let beef: [UInt8]
     public let outputIndex: UInt32
+    public let context: [UInt8]?
+    public let transactionID: TransactionID?
 
     public init(
         beef: [UInt8],
         outputIndex: UInt32,
+        context: [UInt8]? = nil,
+        transactionID: TransactionID? = nil,
         limits: OverlayLimits = .standard
     ) throws {
         guard !beef.isEmpty else { throw OverlayError.emptyValue(name: "beef") }
         try enforceOverlayByteLimit(
             beef, name: "lookupOutputBEEF", maximum: limits.maximumLookupOutputBEEFByteCount)
+        if let context {
+            try enforceOverlayByteLimit(
+                context, name: "lookupOutputContext",
+                maximum: limits.maximumLookupContextByteCount)
+        }
         self.beef = beef
         self.outputIndex = outputIndex
+        self.context = context
+        self.transactionID = transactionID
     }
 
     public var description: String { "<redacted overlay output item>" }
@@ -61,7 +80,11 @@ public enum LookupAnswer: Hashable, Sendable, CustomStringConvertible,
         }
         var totalByteCount = 0
         for output in outputList {
-            let (next, overflow) = totalByteCount.addingReportingOverflow(output.beef.count)
+            let (withBEEF, beefOverflow) = totalByteCount.addingReportingOverflow(
+                output.beef.count)
+            let (next, contextOverflow) = withBEEF.addingReportingOverflow(
+                output.context?.count ?? 0)
+            let overflow = beefOverflow || contextOverflow
             guard !overflow, next <= limits.maximumLookupAnswerByteCount else {
                 throw OverlayError.limitExceeded(
                     name: "lookupAnswer",

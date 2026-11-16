@@ -334,3 +334,79 @@ private struct BEEFReadyHeap {
         rank[left, default: .max] < rank[right, default: .max]
     }
 }
+
+extension BEEF {
+    /// The subject transaction and the records it depends on, as one BRC-95
+    /// envelope: the selection `Beef.toBinaryAtomic` makes in `@bsv/sdk`.
+    ///
+    /// Ancestors are followed through inputs until a record is proven by a
+    /// Merkle path or is transaction-ID-only. Only the Merkle paths that prove
+    /// a selected record are kept. Throws when the subject is absent or an
+    /// unproven selected record spends a transaction this envelope lacks.
+    package func atomicBEEF(
+        for subject: TransactionID,
+        limits: BEEFLimits
+    ) throws -> AtomicBEEF {
+        let identifiers = try transactions.map {
+            try $0.transactionID(limits: limits.transactionLimits)
+        }
+        var entries: [TransactionID: BEEFTransaction] = [:]
+        for (transactionID, entry) in zip(identifiers, transactions) {
+            entries[transactionID] = entry
+        }
+        guard entries[subject] != nil else {
+            throw BEEFError.missingSubjectTransaction(subject)
+        }
+
+        var included: Set<TransactionID> = []
+        var pending = [subject]
+        while let transactionID = pending.popLast() {
+            guard !included.contains(transactionID), let entry = entries[transactionID] else {
+                continue
+            }
+            included.insert(transactionID)
+            guard entry.format != .transactionIDOnly,
+                !isProven(transactionID, entry: entry),
+                let transaction = entry.transaction
+            else { continue }
+            for input in transaction.inputs {
+                pending.append(input.previousOutput.transactionID)
+            }
+        }
+
+        var pathMap: [Int: Int] = [:]
+        var paths: [MerklePath] = []
+        for (oldIndex, path) in merklePaths.enumerated()
+        where included.contains(where: { Self.path(path, contains: $0) }) {
+            pathMap[oldIndex] = paths.count
+            paths.append(path)
+        }
+
+        var selected: [BEEFTransaction] = []
+        for (transactionID, entry) in zip(identifiers, transactions)
+        where included.contains(transactionID) {
+            if case .rawWithMerklePath(let transaction, let oldIndex) = entry {
+                guard let newIndex = pathMap[oldIndex] else {
+                    throw BEEFError.merklePathIndexOutOfRange(
+                        transaction: selected.count,
+                        index: UInt64(oldIndex),
+                        count: paths.count
+                    )
+                }
+                selected.append(
+                    .rawWithMerklePath(transaction: transaction, merklePathIndex: newIndex)
+                )
+            } else {
+                selected.append(entry)
+            }
+        }
+
+        let beef = try BEEF(
+            version: version,
+            merklePaths: paths,
+            transactions: selected,
+            limits: limits
+        )
+        return try AtomicBEEF(subjectTransactionID: subject, beef: beef, limits: limits)
+    }
+}

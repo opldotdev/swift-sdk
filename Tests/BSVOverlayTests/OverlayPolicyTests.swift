@@ -62,8 +62,8 @@ struct OverlayPolicyTests {
         )
     }
 
-    @Test("resolver rejects mixed answer representations")
-    func rejectsMixedAnswers() async throws {
+    @Test("resolver returns output lists over freeform answers")
+    func outputListsWinOverFreeform() async throws {
         let service = try OverlayService(rawValue: "ls_records")
         let a = try OverlayHost(rawValue: "https://a.example")
         let b = try OverlayHost(rawValue: "https://b.example")
@@ -77,9 +77,10 @@ struct OverlayPolicyTests {
             hostOverrides: [service: [a, b]],
             beefLimits: try beefLimits()
         )
-        await #expect(throws: OverlayPolicyError.inconsistentAnswerTypes) {
-            _ = try await resolver.resolve(LookupQuestion(service: service, query: []))
-        }
+        #expect(
+            try await resolver.resolve(LookupQuestion(service: service, query: []))
+                == .outputList([])
+        )
     }
 
     @Test("resolver deduplicates and sorts output-list answers")
@@ -239,7 +240,13 @@ struct OverlayPolicyTests {
         keyByte: UInt8
     ) throws -> OutputListItem {
         let identityKey = try PrivateKey(Array(repeating: 0, count: 31) + [keyByte])
-        let lockingKey = try PrivateKey(Array(repeating: 0, count: 31) + [keyByte + 20])
+        // The locking key is the BRC-42 child `@bsv/sdk` derives for the
+        // identity (`OverlayAdminTokenTemplate.ts:200-222`).
+        let lockingKey = try identityKey.derivedChild(
+            with: try PrivateKey(Array(repeating: 0, count: 31) + [1]).publicKey,
+            invoiceNumber: protocolText == "SLAP"
+                ? "2-service lookup availability-1" : "2-service host interconnect-1"
+        )
         let fields = [
             Array(protocolText.utf8),
             identityKey.publicKey.compressedBytes,
