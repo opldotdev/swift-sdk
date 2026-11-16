@@ -6,8 +6,13 @@ public typealias AuthenticationWallet = WalletPublicKeyProviding & WalletSignatu
 
 /// The certificate types, certifiers, and disclosed fields that a peer requests.
 ///
-/// An instance is always nonempty. Use `nil` on `AuthMessage` when no
-/// certificates are requested.
+/// An instance always names at least one certifier. Use `nil` on `AuthMessage`
+/// when no certificates are requested.
+///
+/// As in `@bsv/sdk` 4.1.1 (`AuthMessageValidation.ts:122-180`), the type map
+/// and each field list may be empty. The set is an allowlist: a response may
+/// carry any subset of the listed types and a nonempty subset of each type's
+/// fields. `AuthCertificateExchange.validate` checks completeness.
 public struct AuthRequestedCertificateSet:
     Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible,
     CustomReflectable
@@ -20,7 +25,7 @@ public struct AuthRequestedCertificateSet:
         certificateTypes: [CertificateTypeID: [CertificateFieldName]],
         limits: AuthLimits = .standard
     ) throws {
-        guard !certifiers.isEmpty, !certificateTypes.isEmpty,
+        guard !certifiers.isEmpty,
             certifiers.count <= limits.maximumCertificateCertifierCount,
             certificateTypes.count <= limits.maximumCertificateTypeCount,
             Set(certifiers).count == certifiers.count
@@ -33,8 +38,7 @@ public struct AuthRequestedCertificateSet:
         else { throw AuthError.resourceLimit }
         var aggregate = certifierBytes
         for fields in certificateTypes.values {
-            guard !fields.isEmpty,
-                fields.count <= limits.maximumCertificateFieldCount,
+            guard fields.count <= limits.maximumCertificateFieldCount,
                 Set(fields).count == fields.count
             else { throw AuthError.invalidCertificateRequest }
             let (fieldBytes, overflow) = fields.reduce(into: (0, false)) { result, field in
@@ -115,6 +119,11 @@ public struct AuthReceivedMessage: Equatable, Sendable, CustomStringConvertible,
         Mirror(self, children: EmptyCollection<(label: String?, value: Any)>())
     }
 }
+/// A certificate request from a peer.
+///
+/// A request carried in `initialRequest` arrives before the peer has signed
+/// anything, so `peer` is only the identity it claims. Answer it only with
+/// wallet-proved keyrings, which are encrypted to that identity.
 public struct AuthReceivedCertificateRequest:
     Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible,
     CustomReflectable
@@ -175,12 +184,29 @@ public struct AuthMessage: Equatable, Sendable, CustomStringConvertible,
     public let signature: [UInt8]?
     public let certificates: [VerifiableCertificate]?
     public let requestedCertificates: AuthRequestedCertificateSet?
+    /// The certificate JSON text a decoded certificate message signs, rebuilt
+    /// from the received member order. `nil` for messages built in memory.
+    let receivedSigningBytes: [UInt8]?
     public init(
         version: String = "0.1", messageType: AuthMessageType, identityKey: PublicKey,
         nonce: String? = nil, initialNonce: String? = nil, yourNonce: String? = nil,
         payload: [UInt8]? = nil, signature: [UInt8]? = nil,
         certificates: [VerifiableCertificate]? = nil,
         requestedCertificates: AuthRequestedCertificateSet? = nil
+    ) {
+        self.init(
+            version: version, messageType: messageType, identityKey: identityKey, nonce: nonce,
+            initialNonce: initialNonce, yourNonce: yourNonce, payload: payload,
+            signature: signature, certificates: certificates,
+            requestedCertificates: requestedCertificates, receivedSigningBytes: nil)
+    }
+    init(
+        version: String, messageType: AuthMessageType, identityKey: PublicKey,
+        nonce: String?, initialNonce: String?, yourNonce: String?,
+        payload: [UInt8]?, signature: [UInt8]?,
+        certificates: [VerifiableCertificate]?,
+        requestedCertificates: AuthRequestedCertificateSet?,
+        receivedSigningBytes: [UInt8]?
     ) {
         self.version = version
         self.messageType = messageType
@@ -192,6 +218,17 @@ public struct AuthMessage: Equatable, Sendable, CustomStringConvertible,
         self.signature = signature
         self.certificates = certificates
         self.requestedCertificates = requestedCertificates
+        self.receivedSigningBytes = receivedSigningBytes
+    }
+    /// Compares the message content. The received member order is transport
+    /// detail and is not part of equality.
+    public static func == (lhs: AuthMessage, rhs: AuthMessage) -> Bool {
+        lhs.version == rhs.version && lhs.messageType == rhs.messageType
+            && lhs.identityKey == rhs.identityKey && lhs.nonce == rhs.nonce
+            && lhs.initialNonce == rhs.initialNonce && lhs.yourNonce == rhs.yourNonce
+            && lhs.payload == rhs.payload && lhs.signature == rhs.signature
+            && lhs.certificates == rhs.certificates
+            && lhs.requestedCertificates == rhs.requestedCertificates
     }
     public var description: String { "<redacted auth message>" }
     public var debugDescription: String { description }
@@ -200,9 +237,16 @@ public struct AuthMessage: Equatable, Sendable, CustomStringConvertible,
     }
 }
 
+/// Resource limits for BRC-103 messages and sessions.
+///
+/// The defaults accept everything `@bsv/sdk` 4.1.1 sends: a 16 MiB message
+/// (`AuthMessageValidation.ts:8`), an authenticated response frame of 16 MiB
+/// plus 512 KiB of framing (`clients/AuthFetch.ts:147`, `:571`), and 100
+/// certificates, certifiers and types (`AuthMessageValidation.ts:12-14`).
 public struct AuthLimits: Equatable, Sendable {
     public static let maximumAllowedJSONBytes = 64 << 20
-    public static let maximumAllowedPayloadBytes = 16 << 20
+    public static let maximumAllowedPayloadBytes = 32 << 20
+    public static let defaultPayloadBytes = (16 << 20) + (512 << 10)
     public static let maximumAllowedSessions = 65_536
     public static let maximumAllowedSessionsPerIdentity = 4_096
     public static let maximumAllowedPendingSessions = 65_536
@@ -227,11 +271,12 @@ public struct AuthLimits: Equatable, Sendable {
     public let certificateLimits: CertificateLimits
     public let handshakeTimeout: Duration
     public init(
-        maximumJSONBytes: Int = 8 << 20, maximumPayloadBytes: Int = 1 << 20,
+        maximumJSONBytes: Int = 16 << 20,
+        maximumPayloadBytes: Int = AuthLimits.defaultPayloadBytes,
         maximumSessions: Int = 1024, maximumSessionsPerIdentity: Int = 8,
         maximumPendingSessions: Int = 128, maximumMessages: Int = 4096,
-        maximumCertificateCount: Int = 64, maximumCertificateCertifierCount: Int = 64,
-        maximumCertificateTypeCount: Int = 64, maximumCertificateFieldCount: Int = 256,
+        maximumCertificateCount: Int = 100, maximumCertificateCertifierCount: Int = 100,
+        maximumCertificateTypeCount: Int = 100, maximumCertificateFieldCount: Int = 256,
         maximumCertificateAggregateBytes: Int = 8 << 20,
         certificateLimits: CertificateLimits = .standard,
         handshakeTimeout: Duration = .seconds(30)
@@ -270,15 +315,15 @@ public struct AuthLimits: Equatable, Sendable {
         self.handshakeTimeout = handshakeTimeout
     }
     private init(standard: Void) {
-        maximumJSONBytes = 8 << 20
-        maximumPayloadBytes = 1 << 20
+        maximumJSONBytes = 16 << 20
+        maximumPayloadBytes = Self.defaultPayloadBytes
         maximumSessions = 1024
         maximumSessionsPerIdentity = 8
         maximumPendingSessions = 128
         maximumMessages = 4096
-        maximumCertificateCount = 64
-        maximumCertificateCertifierCount = 64
-        maximumCertificateTypeCount = 64
+        maximumCertificateCount = 100
+        maximumCertificateCertifierCount = 100
+        maximumCertificateTypeCount = 100
         maximumCertificateFieldCount = 256
         maximumCertificateAggregateBytes = 8 << 20
         certificateLimits = .standard

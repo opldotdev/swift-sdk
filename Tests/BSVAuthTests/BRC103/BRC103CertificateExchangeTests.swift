@@ -21,12 +21,14 @@ struct BRC103CertificateExchangeTests {
             certificateTypes: [type: [field]]
         )
         let nonce = Base64Encoding.encode([UInt8](repeating: 4, count: 32))
+        let sessionNonce = Base64Encoding.encode([UInt8](repeating: 5, count: 48))
         let signature = try fixtureSignature().derBytes
 
         let requestMessage = AuthMessage(
             messageType: .certificateRequest,
             identityKey: requester.publicKey,
             nonce: nonce,
+            initialNonce: sessionNonce,
             yourNonce: nonce,
             signature: signature,
             requestedCertificates: request
@@ -51,6 +53,7 @@ struct BRC103CertificateExchangeTests {
             messageType: .certificateResponse,
             identityKey: peer.publicKey,
             nonce: nonce,
+            initialNonce: sessionNonce,
             yourNonce: nonce,
             signature: signature,
             certificates: [certificate]
@@ -64,6 +67,14 @@ struct BRC103CertificateExchangeTests {
             )
         #expect(throws: AuthError.certificateValidationFailed) {
             try AuthMessageCodec.decode(Array(extraCertificateMember.utf8))
+        }
+
+        // Certificate messages carry the sender's session nonce
+        // (`AuthMessageValidation.ts:404`, `:415`).
+        let withoutInitialNonce = String(decoding: requestJSON, as: UTF8.self)
+            .replacingOccurrences(of: #""initialNonce":"\#(sessionNonce)","#, with: "")
+        #expect(throws: AuthError.self) {
+            try AuthMessageCodec.decode(Array(withoutInitialNonce.utf8))
         }
     }
 
@@ -157,6 +168,7 @@ struct BRC103CertificateExchangeTests {
             messageType: responseMessage.messageType,
             identityKey: responseMessage.identityKey,
             nonce: responseMessage.nonce,
+            initialNonce: responseMessage.initialNonce,
             yourNonce: responseMessage.yourNonce,
             signature: requestSignature,
             certificates: responseMessage.certificates

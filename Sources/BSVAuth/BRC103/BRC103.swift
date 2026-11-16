@@ -7,63 +7,71 @@ import Foundation
 
 /// Strict JSON codec for the bounded BRC-103 envelope.
 public enum AuthMessageCodec {
+    /// Writes the envelope by hand. Certificate members are written from the
+    /// exact bytes their signatures cover, because a TypeScript verifier signs
+    /// `JSON.stringify` of the parsed members in wire order (`Peer.ts:1070`,
+    /// `Peer.ts:1205`). Foundation's `.sortedKeys` order is not byte order, so
+    /// it cannot be used for these members.
     public static func encode(_ message: AuthMessage, limits: AuthLimits = .standard) throws
         -> [UInt8]
     {
         try validate(message, limits: limits)
-        var object: [String: Any] = [
-            "version": message.version, "messageType": message.messageType.rawValue,
-            "identityKey": Hex.encode(message.identityKey.compressedBytes),
-        ]
-        if let nonce = message.nonce { object["nonce"] = nonce }
-        if let initial = message.initialNonce { object["initialNonce"] = initial }
-        if let yours = message.yourNonce { object["yourNonce"] = yours }
-        if let certificates = message.certificates {
-            _ = try AuthCertificateJSON.response(certificates, limits: limits)
-            object["certificates"] = try certificateObjects(certificates, limits: limits)
-        }
-        if let requested = message.requestedCertificates {
-            _ = try AuthCertificateJSON.request(requested, limits: limits)
-            object["requestedCertificates"] = try requestedCertificateObject(
-                requested,
-                limits: limits
-            )
-        }
-        let baseData = try JSONSerialization.data(
-            withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
-        var estimatedByteCount = baseData.count
+        var estimatedByteCount = 0
         if let payload = message.payload {
             estimatedByteCount = try checkedJSONByteCount(
-                estimatedByteCount,
-                #","payload":"#.utf8.count,
-                byteArrayJSONByteCount(payload),
-                maximum: limits.maximumJSONBytes
-            )
+                estimatedByteCount, #","payload":"#.utf8.count, byteArrayJSONByteCount(payload),
+                maximum: limits.maximumJSONBytes)
         }
         if let signature = message.signature {
             estimatedByteCount = try checkedJSONByteCount(
-                estimatedByteCount,
-                #","signature":"#.utf8.count,
-                byteArrayJSONByteCount(signature),
-                maximum: limits.maximumJSONBytes
-            )
+                estimatedByteCount, #","signature":"#.utf8.count,
+                byteArrayJSONByteCount(signature), maximum: limits.maximumJSONBytes)
         }
-        guard estimatedByteCount <= limits.maximumJSONBytes else {
-            throw AuthError.resourceLimit
+        var writer = AuthJSONWriter(maximumByteCount: limits.maximumJSONBytes)
+        try writer.append(#"{"version":"#)
+        try writer.appendString(message.version)
+        try writer.append(#","messageType":"#)
+        try writer.appendString(message.messageType.rawValue)
+        try writer.append(#","identityKey":"#)
+        try writer.appendString(Hex.encode(message.identityKey.compressedBytes))
+        for (name, value) in [
+            ("nonce", message.nonce), ("initialNonce", message.initialNonce),
+            ("yourNonce", message.yourNonce),
+        ] {
+            guard let value else { continue }
+            try writer.append(",")
+            try writer.appendString(name)
+            try writer.append(":")
+            try writer.appendString(value)
         }
-        if let payload = message.payload { object["payload"] = payload.map(Int.init) }
-        if let signature = message.signature { object["signature"] = signature.map(Int.init) }
-        let data = try JSONSerialization.data(
-            withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
-        guard data.count <= limits.maximumJSONBytes else { throw AuthError.resourceLimit }
-        return [UInt8](data)
+        if let certificates = message.certificates {
+            try writer.append(#","certificates":"#)
+            try writer.append(AuthCertificateJSON.response(certificates, limits: limits))
+        }
+        if let requested = message.requestedCertificates {
+            try writer.append(#","requestedCertificates":"#)
+            try writer.append(AuthCertificateJSON.request(requested, limits: limits))
+        }
+        _ = try checkedJSONByteCount(
+            writer.bytes.count, estimatedByteCount, 1, maximum: limits.maximumJSONBytes)
+        if let payload = message.payload {
+            try writer.append(#","payload":"#)
+            try writer.append(byteArrayJSON(payload))
+        }
+        if let signature = message.signature {
+            try writer.append(#","signature":"#)
+            try writer.append(byteArrayJSON(signature))
+        }
+        try writer.append("}")
+        return writer.bytes
     }
     public static func decode(_ bytes: [UInt8], limits: AuthLimits = .standard) throws
         -> AuthMessage
     {
         guard bytes.count <= limits.maximumJSONBytes else { throw AuthError.resourceLimit }
-        guard StrictAuthJSONPreflight.accepts(bytes),
-            let object = try JSONSerialization.jsonObject(with: Data(bytes)) as? [String: Any]
+        let retained = try AuthJSONParser.parseEnvelope(
+            bytes, retaining: ["certificates", "requestedCertificates"])
+        guard let object = try JSONSerialization.jsonObject(with: Data(bytes)) as? [String: Any]
         else { throw AuthError.invalidMessage }
         let permitted: Set<String> = [
             "version", "messageType", "identityKey", "nonce", "initialNonce", "yourNonce",
@@ -100,11 +108,24 @@ public enum AuthMessageCodec {
             }
             return bytes
         }
-        let certificates = try decodeCertificates(object["certificates"], limits: limits)
+        let certificates = try decodeCertificates(retained["certificates"], limits: limits)
         let requested = try decodeRequestedCertificates(
-            object["requestedCertificates"],
+            retained["requestedCertificates"],
             limits: limits
         )
+        var signingBytes: [UInt8]?
+        switch type {
+        case .certificateRequest:
+            if let value = retained["requestedCertificates"], requested != nil {
+                signingBytes = try AuthCertificateJSON.receivedRequest(value, limits: limits)
+            }
+        case .certificateResponse:
+            if let value = retained["certificates"], certificates != nil {
+                signingBytes = try AuthCertificateJSON.receivedResponse(value, limits: limits)
+            }
+        default:
+            break
+        }
         let result = AuthMessage(
             version: version, messageType: type, identityKey: identity,
             nonce: try optionalString("nonce"), initialNonce: try optionalString("initialNonce"),
@@ -112,7 +133,8 @@ public enum AuthMessageCodec {
             payload: try optionalBytes("payload", maximum: limits.maximumPayloadBytes),
             signature: try optionalBytes("signature", maximum: 72),
             certificates: certificates,
-            requestedCertificates: requested)
+            requestedCertificates: requested,
+            receivedSigningBytes: signingBytes)
         try validate(result, limits: limits)
         return result
     }
@@ -128,11 +150,15 @@ public enum AuthMessageCodec {
                 lowS(signature)
             else { throw AuthError.invalidSignature }
         }
+        let noCertificates = message.certificates?.isEmpty ?? true
         switch message.messageType {
         case .initialRequest:
+            // `@bsv/sdk` sends its handshake certificate policy here
+            // (`Peer.ts:635-641`). It is unsigned; it is surfaced to the caller
+            // as a request and never trusted.
             guard message.initialNonce.map(validSessionNonce) == true, message.signature == nil,
                 message.nonce == nil, message.yourNonce == nil, message.payload == nil,
-                message.certificates == nil, message.requestedCertificates == nil
+                noCertificates
             else { throw AuthError.invalidMessage }
         case .initialResponse:
             // The responder's own nonce travels as `initialNonce`; `nonce` is not sent. The
@@ -149,19 +175,26 @@ public enum AuthMessageCodec {
             guard message.nonce.map(validMessageNonce) == true,
                 message.yourNonce.map(validSessionNonce) == true, message.payload != nil,
                 message.signature != nil, message.initialNonce == nil,
-                message.certificates == nil, message.requestedCertificates == nil
+                noCertificates, message.requestedCertificates == nil
             else { throw AuthError.invalidMessage }
         case .certificateRequest:
+            // `initialNonce` is the sender's own session nonce and is required
+            // (`AuthMessageValidation.ts:404`, sent at `Peer.ts:467`).
             guard message.nonce.map(validMessageNonce) == true,
+                message.initialNonce.map(validSessionNonce) == true,
                 message.yourNonce.map(validSessionNonce) == true,
-                message.requestedCertificates != nil, message.certificates == nil,
-                message.initialNonce == nil, message.payload == nil, message.signature != nil
+                message.requestedCertificates != nil, noCertificates,
+                message.payload == nil, message.signature != nil
             else { throw AuthError.invalidMessage }
         case .certificateResponse:
+            // An empty list is a valid answer (`AuthMessageValidation.ts:417`,
+            // sent at `Peer.ts:1117`). `initialNonce` is required
+            // (`AuthMessageValidation.ts:415`, sent at `Peer.ts:1156`).
             guard message.nonce.map(validMessageNonce) == true,
+                message.initialNonce.map(validSessionNonce) == true,
                 message.yourNonce.map(validSessionNonce) == true,
-                message.certificates?.isEmpty == false, message.requestedCertificates == nil,
-                message.initialNonce == nil, message.payload == nil, message.signature != nil
+                message.certificates != nil, message.requestedCertificates == nil,
+                message.payload == nil, message.signature != nil
             else { throw AuthError.invalidMessage }
         }
     }
@@ -180,51 +213,35 @@ public enum AuthMessageCodec {
         try AuthCertificateJSON.response(certificates, limits: limits)
     }
 
-    static func requestedCertificateObject(
-        _ request: AuthRequestedCertificateSet,
-        limits: AuthLimits
-    ) throws -> [String: Any] {
-        _ = try AuthRequestedCertificateSet(
-            certifiers: request.certifiers,
-            certificateTypes: request.certificateTypes,
-            limits: limits
-        )
-        var types: [String: [String]] = [:]
-        for (type, fields) in request.certificateTypes {
-            types[type.base64] = fields.map(\.value)
-        }
-        return [
-            "certifiers": request.certifiers.map { Hex.encode($0.compressedBytes) },
-            "types": types,
-        ]
-    }
-
     static func decodeRequestedCertificates(
-        _ value: Any?,
+        _ value: AuthJSONValue?,
         limits: AuthLimits
     ) throws -> AuthRequestedCertificateSet? {
         guard let value else { return nil }
-        guard let object = value as? [String: Any],
-            Set(object.keys) == ["certifiers", "types"]
+        guard case .object(let members) = value,
+            Set(members.map(\.key)) == ["certifiers", "types"],
+            let rawCertifiers = value["certifiers"], let rawTypes = value["types"]
         else { throw AuthError.invalidCertificateRequest }
-        let rawCertifiers = object["certifiers"]
-        let rawTypes = object["types"]
 
-        if rawCertifiers is NSNull || (rawCertifiers as? [Any])?.isEmpty == true,
-            rawTypes is NSNull || (rawTypes as? [String: Any])?.isEmpty == true
-        {
-            return nil
+        func isEmptyOrNull(_ value: AuthJSONValue) -> Bool {
+            switch value {
+            case .null: return true
+            case .array(let items): return items.isEmpty
+            case .object(let items): return items.isEmpty
+            default: return false
+            }
         }
-        guard let certifierValues = rawCertifiers as? [Any],
+        if isEmptyOrNull(rawCertifiers), isEmptyOrNull(rawTypes) { return nil }
+        guard case .array(let certifierValues) = rawCertifiers,
             certifierValues.count <= limits.maximumCertificateCertifierCount,
-            let typeValues = rawTypes as? [String: Any],
+            case .object(let typeValues) = rawTypes,
             typeValues.count <= limits.maximumCertificateTypeCount
         else { throw AuthError.invalidCertificateRequest }
 
         var certifiers: [PublicKey] = []
         certifiers.reserveCapacity(certifierValues.count)
         for value in certifierValues {
-            guard let text = value as? String,
+            guard case .string(let text) = value,
                 let bytes = try? Hex.decode(text, maximumDecodedByteCount: 33),
                 bytes.count == 33, Hex.encode(bytes) == text,
                 let key = try? PublicKey(bytes)
@@ -233,15 +250,15 @@ public enum AuthMessageCodec {
         }
 
         var types: [CertificateTypeID: [CertificateFieldName]] = [:]
-        for (typeText, rawFields) in typeValues {
-            guard let type = try? CertificateTypeID(base64: typeText),
-                let fieldValues = rawFields as? [Any],
+        for member in typeValues {
+            guard let type = try? CertificateTypeID(base64: member.key),
+                case .array(let fieldValues) = member.value,
                 fieldValues.count <= limits.maximumCertificateFieldCount
             else { throw AuthError.invalidCertificateRequest }
             var fields: [CertificateFieldName] = []
             fields.reserveCapacity(fieldValues.count)
             for rawField in fieldValues {
-                guard let text = rawField as? String,
+                guard case .string(let text) = rawField,
                     let field = try? CertificateFieldName(
                         text,
                         limits: limits.certificateLimits
@@ -259,75 +276,30 @@ public enum AuthMessageCodec {
         )
     }
 
-    private static func certificateObjects(
-        _ certificates: [VerifiableCertificate],
-        limits: AuthLimits
-    ) throws -> [[String: Any]] {
-        guard !certificates.isEmpty,
-            certificates.count <= limits.maximumCertificateCount
-        else { throw AuthError.certificateValidationFailed }
-        var result: [[String: Any]] = []
-        result.reserveCapacity(certificates.count)
-        var aggregate = 0
-        for verifiable in certificates {
-            let certificate = verifiable.certificate
-            guard let signature = certificate.signature else {
-                throw AuthError.certificateValidationFailed
-            }
-            let binary = try verifiable.binary(limits: limits.certificateLimits)
-            let (next, overflow) = aggregate.addingReportingOverflow(binary.count)
-            guard !overflow, next <= limits.maximumCertificateAggregateBytes else {
-                throw AuthError.resourceLimit
-            }
-            aggregate = next
-            var fields: [String: String] = [:]
-            for (name, value) in certificate.fields { fields[name.value] = value.base64 }
-            var keyring: [String: String] = [:]
-            for (name, value) in verifiable.keyring.entries { keyring[name.value] = value.base64 }
-            result.append([
-                "type": certificate.type.base64,
-                "serialNumber": certificate.serialNumber.base64,
-                "subject": Hex.encode(certificate.subject.compressedBytes),
-                "certifier": Hex.encode(certificate.certifier.compressedBytes),
-                "revocationOutpoint": certificate.revocationOutpoint.description,
-                "fields": fields,
-                "signature": Hex.encode(signature.derBytes),
-                "keyring": keyring,
-            ])
-        }
-        return result
-    }
-
     private static func decodeCertificates(
-        _ value: Any?,
+        _ value: AuthJSONValue?,
         limits: AuthLimits
     ) throws -> [VerifiableCertificate]? {
         guard let value else { return nil }
-        guard let values = value as? [Any],
+        guard case .array(let values) = value,
             values.count <= limits.maximumCertificateCount
         else { throw AuthError.certificateValidationFailed }
-        if values.isEmpty { return nil }
 
         var result: [VerifiableCertificate] = []
         result.reserveCapacity(values.count)
         var aggregate = 0
         for rawValue in values {
-            guard var object = rawValue as? [String: Any],
-                Set(object.keys) == [
-                    "type", "serialNumber", "subject", "certifier", "revocationOutpoint",
-                    "fields", "signature", "keyring",
-                ],
-                let rawKeyring = object.removeValue(forKey: "keyring") as? [String: Any]
+            guard case .object(let members) = rawValue,
+                Set(members.map(\.key)) == Set(AuthCertificateJSON.certificateMemberOrder),
+                case .object(let rawKeyring)? = rawValue["keyring"]
             else { throw AuthError.certificateValidationFailed }
 
-            let certificateData = try JSONSerialization.data(
-                withJSONObject: object,
-                options: [.sortedKeys, .withoutEscapingSlashes]
-            )
             let certificate: Certificate
             do {
+                var writer = AuthJSONWriter(maximumByteCount: limits.maximumJSONBytes)
+                try writer.appendValue(.object(members.filter { $0.key != "keyring" }))
                 certificate = try Certificate(
-                    json: certificateData,
+                    json: writer.bytes,
                     limits: limits.certificateLimits
                 )
             } catch {
@@ -337,10 +309,10 @@ public enum AuthMessageCodec {
                 rawKeyring.count <= limits.maximumCertificateFieldCount
             else { throw AuthError.certificateValidationFailed }
             var entries: [CertificateFieldName: CertificateCiphertext] = [:]
-            for (nameText, rawCiphertext) in rawKeyring {
-                guard let ciphertextText = rawCiphertext as? String,
+            for member in rawKeyring {
+                guard case .string(let ciphertextText) = member.value,
                     let name = try? CertificateFieldName(
-                        nameText,
+                        member.key,
                         limits: limits.certificateLimits
                     ),
                     let ciphertext = try? CertificateCiphertext(
@@ -389,6 +361,21 @@ public enum AuthMessageCodec {
         ]
         for index in s.indices { if s[index] != half[index] { return s[index] < half[index] } }
         return true
+    }
+
+    private static func byteArrayJSON(_ bytes: [UInt8]) -> [UInt8] {
+        var output: [UInt8] = []
+        output.reserveCapacity(byteArrayJSONByteCount(bytes))
+        output.append(0x5b)
+        for index in bytes.indices {
+            if index > 0 { output.append(0x2c) }
+            let byte = bytes[index]
+            if byte >= 100 { output.append(0x30 + byte / 100) }
+            if byte >= 10 { output.append(0x30 + (byte / 10) % 10) }
+            output.append(0x30 + byte % 10)
+        }
+        output.append(0x5d)
+        return output
     }
 
     private static func byteArrayJSONByteCount(_ bytes: [UInt8]) -> Int {
@@ -521,6 +508,7 @@ public actor PeerAuthenticator {
             throw AuthError.resourceLimit
         }
         let data = try AuthMessageCodec.certificateRequestSigningBytes(request, limits: limits)
+        let ownNonce = session.ownNonce
         let nonce = try reserveUniqueNonce()
         defer { inFlightNonces.remove(nonce) }
         let own = try await identity()
@@ -544,6 +532,7 @@ public actor PeerAuthenticator {
                 messageType: .certificateRequest,
                 identityKey: own,
                 nonce: nonce,
+                initialNonce: ownNonce,
                 yourNonce: peerNonce,
                 signature: signature,
                 requestedCertificates: request
@@ -551,16 +540,24 @@ public actor PeerAuthenticator {
         )
     }
 
+    /// Answers the peer's pending certificate request.
+    ///
+    /// The certificates may be any subset of the requested types, each
+    /// revealing a nonempty subset of its requested fields, and may be empty,
+    /// as `@bsv/sdk` 4.1.1 allows (`Peer.ts:359-389`, `Peer.ts:1117`). A
+    /// request that arrived in `initialRequest` can be answered before the
+    /// peer has sent its first signed message.
     public func makeCertificateResponse(
         _ certificates: [VerifiableCertificate],
         using sessionID: AuthSessionID
     ) async throws -> AuthPeerAction {
         try Task.checkCancellation()
         purgeExpired()
-        guard let session = sessions[sessionID], session.state == .authenticated,
+        guard let session = sessions[sessionID], Self.canExchangeCertificates(session),
             let peer = session.peer, let peerNonce = session.peerNonce,
             let request = session.receivedCertificateRequest
         else { throw AuthError.notAuthenticated }
+        let ownNonce = session.ownNonce
         guard session.messageCount < limits.maximumMessages else {
             sessions.removeValue(forKey: sessionID)
             throw AuthError.resourceLimit
@@ -576,7 +573,7 @@ public actor PeerAuthenticator {
         try requireCertificateMatch(certificates, request: request, peer: own)
         let signature = try await sign(data, keyID: nonce + " " + peerNonce, peer: peer)
         try Task.checkCancellation()
-        guard var current = sessions[sessionID], current.state == .authenticated,
+        guard var current = sessions[sessionID], Self.canExchangeCertificates(current),
             current.peer == peer, current.peerNonce == peerNonce,
             current.receivedCertificateRequest == request
         else { throw AuthError.sessionNotFound }
@@ -593,6 +590,7 @@ public actor PeerAuthenticator {
                 messageType: .certificateResponse,
                 identityKey: own,
                 nonce: nonce,
+                initialNonce: ownNonce,
                 yourNonce: peerNonce,
                 signature: signature,
                 certificates: certificates
@@ -614,12 +612,15 @@ public actor PeerAuthenticator {
         purgeExpired()
         try reserve(new: incoming, peer: message.identityKey)
         try requireSessionCapacity(for: message.identityKey)
-        let ownNonce = try makeUniqueNonce(excluding: [incoming])
+        // `@bsv/sdk` 4.1.1 requires a 48-byte responder session nonce
+        // (`AuthMessageValidation.ts:394`).
+        let ownNonce = try makeUniqueSessionNonce(excluding: [incoming])
         let id = AuthSessionID()
         sessions[id] = .init(
             id: id, state: .responseSentAwaitingPeerProof, peer: message.identityKey,
             ownNonce: ownNonce,
-            peerNonce: incoming, deadline: clock.now + limits.handshakeTimeout, seen: [incoming])
+            peerNonce: incoming, deadline: clock.now + limits.handshakeTimeout, seen: [incoming],
+            receivedCertificateRequest: message.requestedCertificates)
         let signature: [UInt8]
         do {
             signature = try await sign(
@@ -631,13 +632,19 @@ public actor PeerAuthenticator {
             sessions.removeValue(forKey: id)
             throw error
         }
-        return [
+        var actions: [AuthPeerAction] = [
             .send(
                 .init(
                     messageType: .initialResponse, identityKey: own, nonce: ownNonce,
                     initialNonce: ownNonce,
                     yourNonce: incoming, signature: signature))
         ]
+        if let request = message.requestedCertificates {
+            actions.append(
+                .certificateRequest(
+                    .init(sessionID: id, peer: message.identityKey, request: request)))
+        }
+        return actions
     }
     private func receiveResponse(_ message: AuthMessage) async throws -> [AuthPeerAction] {
         try Task.checkCancellation()
@@ -666,8 +673,16 @@ public actor PeerAuthenticator {
         session.state = .authenticated
         session.deadline = nil
         session.seen.insert(peerNonce)
+        // A responder with a certificate policy puts it here and then holds
+        // general messages until it receives a matching certificateResponse
+        // (`Peer.ts:840-850`, `Peer.ts:1326-1328`).
+        session.receivedCertificateRequest = message.requestedCertificates
         sessions[index] = session
-        return []
+        guard let request = message.requestedCertificates else { return [] }
+        return [
+            .certificateRequest(
+                .init(sessionID: index, peer: message.identityKey, request: request))
+        ]
     }
     private func receiveGeneral(_ message: AuthMessage) async throws -> [AuthPeerAction] {
         try Task.checkCancellation()
@@ -713,13 +728,16 @@ public actor PeerAuthenticator {
         try Task.checkCancellation()
         guard let target = message.yourNonce, let nonce = message.nonce,
             let request = message.requestedCertificates, let signature = message.signature,
-            let index = authenticatedSessionIndex(target: target, peer: message.identityKey),
+            let index = certificateSessionIndex(target: target, peer: message.identityKey),
             let session = sessions[index]
         else { throw AuthError.sessionNotFound }
+        guard message.initialNonce == session.peerNonce else { throw AuthError.invalidNonce }
         guard !session.seen.contains(nonce) else { throw AuthError.replay }
         guard inFlightNonces.insert(nonce).inserted else { throw AuthError.replay }
         defer { inFlightNonces.remove(nonce) }
-        let data = try AuthMessageCodec.certificateRequestSigningBytes(request, limits: limits)
+        let data =
+            try message.receivedSigningBytes
+            ?? AuthMessageCodec.certificateRequestSigningBytes(request, limits: limits)
         guard
             try await verify(
                 signature,
@@ -729,7 +747,7 @@ public actor PeerAuthenticator {
             )
         else { throw AuthError.invalidSignature }
         try Task.checkCancellation()
-        guard var current = sessions[index], current.state == .authenticated,
+        guard var current = sessions[index], Self.canExchangeCertificates(current),
             current.ownNonce == target, current.peer == message.identityKey,
             !current.seen.contains(nonce)
         else { throw AuthError.replay }
@@ -739,6 +757,7 @@ public actor PeerAuthenticator {
         try consumeMessage(on: index, session: &current)
         current.seen.insert(nonce)
         current.receivedCertificateRequest = request
+        markAuthenticated(&current)
         sessions[index] = current
         return [
             .certificateRequest(
@@ -753,9 +772,10 @@ public actor PeerAuthenticator {
         try Task.checkCancellation()
         guard let target = message.yourNonce, let nonce = message.nonce,
             let certificates = message.certificates, let signature = message.signature,
-            let index = authenticatedSessionIndex(target: target, peer: message.identityKey),
+            let index = certificateSessionIndex(target: target, peer: message.identityKey),
             let session = sessions[index]
         else { throw AuthError.sessionNotFound }
+        guard message.initialNonce == session.peerNonce else { throw AuthError.invalidNonce }
         guard !session.seen.contains(nonce) else { throw AuthError.replay }
         guard let request = session.pendingCertificateRequest else {
             throw AuthError.unexpectedMessage
@@ -763,10 +783,9 @@ public actor PeerAuthenticator {
         try requireCertificateMatch(certificates, request: request, peer: message.identityKey)
         guard inFlightNonces.insert(nonce).inserted else { throw AuthError.replay }
         defer { inFlightNonces.remove(nonce) }
-        let data = try AuthMessageCodec.certificateResponseSigningBytes(
-            certificates,
-            limits: limits
-        )
+        let data =
+            try message.receivedSigningBytes
+            ?? AuthMessageCodec.certificateResponseSigningBytes(certificates, limits: limits)
         guard
             try await verify(
                 signature,
@@ -776,13 +795,14 @@ public actor PeerAuthenticator {
             )
         else { throw AuthError.invalidSignature }
         try Task.checkCancellation()
-        guard var current = sessions[index], current.state == .authenticated,
+        guard var current = sessions[index], Self.canExchangeCertificates(current),
             current.ownNonce == target, current.peer == message.identityKey,
             !current.seen.contains(nonce), current.pendingCertificateRequest == request
         else { throw AuthError.replay }
         try consumeMessage(on: index, session: &current)
         current.seen.insert(nonce)
         current.pendingCertificateRequest = nil
+        markAuthenticated(&current)
         sessions[index] = current
         return [
             .certificateResponse(
@@ -796,11 +816,29 @@ public actor PeerAuthenticator {
         ]
     }
 
-    private func authenticatedSessionIndex(target: String, peer: PublicKey) -> AuthSessionID? {
+    /// A session that can send or receive signed certificate messages.
+    ///
+    /// `@bsv/sdk` 4.1.1 authenticates a responder session on a verified
+    /// certificateRequest or certificateResponse as well as on a general
+    /// message (`Peer.ts:1092`, `Peer.ts:1227`, `Peer.ts:1317`).
+    private static func canExchangeCertificates(_ session: Session) -> Bool {
+        session.peerNonce != nil
+            && (session.state == .authenticated
+                || session.state == .responseSentAwaitingPeerProof)
+    }
+
+    private func certificateSessionIndex(target: String, peer: PublicKey) -> AuthSessionID? {
         sessions.first {
             $0.value.ownNonce == target && $0.value.peer == peer
-                && $0.value.state == .authenticated
+                && Self.canExchangeCertificates($0.value)
         }?.key
+    }
+
+    private func markAuthenticated(_ session: inout Session) {
+        if session.state == .responseSentAwaitingPeerProof {
+            session.state = .authenticated
+            session.deadline = nil
+        }
     }
 
     private func consumeMessage(on id: AuthSessionID, session: inout Session) throws {
@@ -816,21 +854,21 @@ public actor PeerAuthenticator {
         request: AuthRequestedCertificateSet,
         peer: PublicKey
     ) throws {
-        guard !certificates.isEmpty,
-            certificates.count <= limits.maximumCertificateCount
-        else { throw AuthError.certificateValidationFailed }
-        var foundTypes = Set<CertificateTypeID>()
+        // The request is an allowlist (`Peer.ts:359-389`): every certificate
+        // must be a requested certifier and type and reveal a nonempty subset
+        // of the requested fields. Completeness is caller policy, checked by
+        // `AuthCertificateExchange.validate`.
+        guard certificates.count <= limits.maximumCertificateCount else {
+            throw AuthError.certificateValidationFailed
+        }
         for verifiable in certificates {
             let certificate = verifiable.certificate
             guard certificate.subject == peer,
                 request.certifiers.contains(certificate.certifier),
                 let fields = request.certificateTypes[certificate.type],
-                Set(verifiable.keyring.entries.keys) == Set(fields)
+                !verifiable.keyring.entries.isEmpty,
+                Set(verifiable.keyring.entries.keys).isSubset(of: Set(fields))
             else { throw AuthError.certificateValidationFailed }
-            foundTypes.insert(certificate.type)
-        }
-        guard foundTypes == Set(request.certificateTypes.keys) else {
-            throw AuthError.certificateValidationFailed
         }
     }
     private func reserve(new nonce: String, peer: PublicKey) throws {
@@ -890,10 +928,10 @@ public actor PeerAuthenticator {
             throw AuthError.randomGenerationFailed
         }
     }
-    private func makeUniqueSessionNonce() throws -> String {
+    private func makeUniqueSessionNonce(excluding: Set<String> = []) throws -> String {
         for _ in 0..<4 {
             let nonce = try makeSessionNonce()
-            if !nonceIsInUse(nonce) { return nonce }
+            if !excluding.contains(nonce), !nonceIsInUse(nonce) { return nonce }
         }
         throw AuthError.randomGenerationFailed
     }

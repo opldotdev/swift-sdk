@@ -1,0 +1,61 @@
+// Vectors produced by running the `@bsv/sdk` 4.1.1 source (ts-stack origin/main
+// 3b1abc569) with the generator in Documentation/Compatibility/TypeScriptAuthVectors.md.
+// Keys are the scalars 3 (TypeScript peer), 7 (Swift peer) and 11 (certifier). Strings are
+// the exact `JSON.stringify` wire text the TypeScript transports send. Do not edit by hand.
+enum TypeScriptAuthVectors {
+    static let typeScriptIdentity = "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+    static let swiftIdentity = "025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc"
+    static let certifier = "03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb"
+
+    /// `Peer.processInitialRequest` answering a Swift initialRequest whose nonce is 48 bytes of
+    /// 0x41, with a handshake certificate policy (`Peer.ts:866-875`).
+    static let initialResponse =
+        #"{"version":"0.1","messageType":"initialResponse","identityKey":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","initialNonce":"t2GehKKRKfHzFdmJoYaoJHdwFmckHJj79NcYY8vQsfsfp6GwDYCAOyvKa005uh1k","yourNonce":"QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB","requestedCertificates":{"certifiers":["03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb"],"types":{"UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=":["email"]}},"signature":[48,69,2,33,0,249,37,249,204,111,204,41,161,15,17,26,177,57,50,91,87,70,166,39,144,236,230,139,126,25,222,249,62,217,33,145,244,2,32,12,205,11,122,207,186,76,248,57,86,141,216,232,181,83,93,227,180,64,79,121,122,100,234,169,190,147,172,19,48,253,106]}"#
+
+    /// `Peer.sendCertificateResponse` (`Peer.ts:1129-1171`) answering the Swift request for
+    /// `certificateFields`. Fields are in issue order, the keyring in reveal order.
+    static let certificateResponse =
+        #"{"version":"0.1","messageType":"certificateResponse","identityKey":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","nonce":"EL06aQMDYM9nyBPqYX7SvtFjabdPl03qT+AbEoK7dtw=","initialNonce":"t2GehKKRKfHzFdmJoYaoJHdwFmckHJj79NcYY8vQsfsfp6GwDYCAOyvKa005uh1k","yourNonce":"QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB","certificates":[{"type":"YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=","serialNumber":"YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=","subject":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","certifier":"03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb","revocationOutpoint":"0000000000000000000000000000000000000000000000000000000000000000.0","fields":{"userName":"nijMv898VDwVehKVHQOZTVPJoVawruML2G6x1us7pXgkpOAFQFzzC7zNvU3mzgSyUnuLJ68=","profilePhoto":"4x/Mk889OSNCpSolyILlx8uJSTxX/HbFvxEUa4nZXr2CAfBfGO5NF1/LOmGvV80wJquXX/NotyQO8j5DdniEHRp9m+FZEZokFcM=","a&b<c>":"couccQyLN80AJRt7zqZdL3y2bCadjY4GsIJxPgglhs4Tp8Ii8Ua1Ez9qyltVCFcZgmvx"},"signature":"30450221009daf6400fc86107ffbe6fc2d8388dbeedb767dc132e056436aba726e082fbde0022077a5297f6467f561db2b65dbfdb8f017790737cc35d5c550c7d2a2cc26d44634","keyring":{"profilePhoto":"2z9rOKSCx+SOFgeepLUmpeBhnmACoCe/PtdgFsgJ0qhS5c5xndVjqecQ+jv8sVTR6PHrf/m7sRkX56qw0GL8NAqaIZlHRWs+OKHz64q4SXA=","a&b<c>":"MyhofFrHB5hfmE3Bt8GqY7ZWGcSE/9+MrdgRougNhP3TFYMjrYDOgoHc91Tb0GrNSEh59K3dP81q6oCSN5dzgkkX5OQ9HIIoyMXwtTr2yqY=","userName":"I1oxXmBESB0B5vLsJuJKEmg/bcxq4e20cX8z5TO5969eAnWaLokfA5yEpNJrq2HiJ9B/24O0C+ePpm3+X31z6XtYGIfbPCRG8Mqia7+BhBE="}}],"signature":[48,69,2,33,0,130,119,51,11,102,215,45,215,57,101,146,91,129,90,26,142,181,164,42,198,189,98,2,232,6,170,181,111,69,180,117,133,2,32,104,132,101,212,78,204,10,137,96,167,12,68,98,248,44,234,39,213,42,12,155,238,159,76,219,208,88,51,64,242,66,246]}"#
+
+    /// `Peer.requestCertificates` (`Peer.ts:430-490`) with types inserted 0x02… then 0x01….
+    static let certificateRequest =
+        #"{"version":"0.1","messageType":"certificateRequest","identityKey":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","nonce":"uOSuu7zNANSHpD6jzPoQOJCR8dgalxH0ugqzNm7YtBM=","initialNonce":"t2GehKKRKfHzFdmJoYaoJHdwFmckHJj79NcYY8vQsfsfp6GwDYCAOyvKa005uh1k","yourNonce":"QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB","requestedCertificates":{"certifiers":["03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb"],"types":{"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=":["name","email"],"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=":["x"]}},"signature":[48,68,2,32,102,15,10,147,50,62,188,241,129,225,6,25,39,199,62,61,209,242,141,252,151,78,76,118,117,218,221,85,135,95,242,215,2,32,97,102,217,124,194,79,89,42,87,226,162,166,193,205,133,54,7,147,126,130,109,108,127,234,11,35,144,77,175,159,107,48]}"#
+
+    /// The certificate type the Swift peer requested and its plaintext fields.
+    static let certificateType = [UInt8](repeating: 0x61, count: 32)
+    static let certificateFields: [(name: String, value: String)] = [
+        ("userName", "Alice"),
+        ("profilePhoto", "https://example.test/p.png"),
+        ("a&b<c>", "x>y"),
+    ]
+
+    /// `SimplifiedFetchTransport` handshake body sent by `AuthFetch` to a server whose session
+    /// nonce is 48 bytes of 0x61.
+    static let authFetchInitialRequest =
+        #"{"version":"0.1","messageType":"initialRequest","identityKey":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","initialNonce":"21Uw2kMrt/9UZz+7VUm1pYsiyy1jTRm5UaQdCyXemqfMdCyYSU+rYAi/F1UGZFIr","requestedCertificates":{"certifiers":[],"types":{}}}"#
+
+    /// The HTTP request `AuthFetch.fetch(url, { method: "GET" })` then sends for
+    /// `https://swift.example/a` (`SimplifiedFetchTransport.ts:189-194`).
+    static let authFetchMethod = "GET"
+    static let authFetchPath = "/a"
+    static let authFetchHeaders: [(name: String, value: String)] = [
+        ("x-bsv-auth-identity-key", "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"),
+        ("x-bsv-auth-nonce", "34BBeQmZbcIjiX9sCjViz9CMe2DMiHthnyW6GK8wnlU="),
+        ("x-bsv-auth-request-id", "rjJeyo4LMVSfdwJ2KVdfUTFtE0ziXiwECF+FMiTTNRg="),
+        ("x-bsv-auth-signature", "3045022100ab14f827b68fbf3b46bf42fdb919a28a2d55560039403c7a015f94005c70024202202cd89cc0eac92e7e66d8ce9ddcd0d7d18e6b0f84f41df2f2935f8df33a0bc628"),
+        ("x-bsv-auth-version", "0.1"),
+        ("x-bsv-auth-your-nonce", "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFh"),
+    ]
+
+    /// `AuthFetch.serializeRequest` (`clients/AuthFetch.ts:784-818`) with request ID 32×0x07.
+    static let serializedGetNoBody =
+        "070707070707070707070707070707070707070707070707070707070707070703474554022f61ffffffffffffffffff00ffffffffffffffffff"
+    static let serializedPostJsonDefault =
+        "070707070707070707070707070707070707070707070707070707070707070704504f5354092f76312f6974656d73ffffffffffffffffff010c636f6e74656e742d74797065106170706c69636174696f6e2f6a736f6e027b7d"
+    static let serializedPostEmptyString =
+        "070707070707070707070707070707070707070707070707070707070707070704504f5354092f76312f6974656d73ffffffffffffffffff010c636f6e74656e742d74797065106170706c69636174696f6e2f6a736f6effffffffffffffffff"
+    static let serializedContentTypeSpaces =
+        "070707070707070707070707070707070707070707070707070707070707070704504f5354092f76312f6974656d73043f783d31010c636f6e74656e742d74797065106170706c69636174696f6e2f6a736f6e077b2261223a317d"
+    static let serializedMultipart =
+        "070707070707070707070707070707070707070707070707070707070707070704504f5354072f75706c6f6164ffffffffffffffffff010c636f6e74656e742d74797065246d756c7469706172742f666f726d2d646174613b20626f756e646172793d6162633132330470617274"
+}

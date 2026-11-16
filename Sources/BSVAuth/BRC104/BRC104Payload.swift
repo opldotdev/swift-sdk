@@ -86,38 +86,61 @@ public struct BRC104Header: Equatable, Sendable, CustomStringConvertible,
     }
 }
 
+/// Limits for BRC-104 payloads.
+///
+/// The defaults are the `@bsv/sdk` 4.1.1 limits: 512 signed headers, 1024-byte
+/// names, 32 KiB values, 256 KiB of signed headers in total
+/// (`transports/SimplifiedFetchTransport.ts:25-28`), a 256 KiB `x-bsv-payment`
+/// request header (`:655-661`), and a 16 MiB body plus 512 KiB of framing
+/// (`clients/AuthFetch.ts:147`, `:571`).
 public struct BRC104Limits: Equatable, Sendable {
     public let maximumPayloadBytes: Int
     public let maximumHeaders: Int
     public let maximumHeaderNameBytes: Int
     public let maximumHeaderValueBytes: Int
+    /// The value limit for the `x-bsv-payment` request header, which carries a
+    /// BRC-105 Atomic BEEF.
+    public let maximumPaymentHeaderValueBytes: Int
     public let maximumHeaderBytes: Int
     public init(
-        maximumPayloadBytes: Int = 1 << 20, maximumHeaders: Int = 64,
-        maximumHeaderNameBytes: Int = 256,
-        maximumHeaderValueBytes: Int = 8 << 10, maximumHeaderBytes: Int = 64 << 10
+        maximumPayloadBytes: Int = AuthLimits.defaultPayloadBytes, maximumHeaders: Int = 512,
+        maximumHeaderNameBytes: Int = 1 << 10,
+        maximumHeaderValueBytes: Int = 32 << 10, maximumHeaderBytes: Int = 256 << 10,
+        maximumPaymentHeaderValueBytes: Int = 256 << 10
     ) throws {
         guard maximumPayloadBytes >= 0, maximumHeaders >= 0, maximumHeaderNameBytes >= 0,
-            maximumHeaderValueBytes >= 0, maximumHeaderBytes >= 0
+            maximumHeaderValueBytes >= 0, maximumHeaderBytes >= 0,
+            maximumPaymentHeaderValueBytes >= 0
         else { throw BRC104Error.resourceLimit }
         self.maximumPayloadBytes = maximumPayloadBytes
         self.maximumHeaders = maximumHeaders
         self.maximumHeaderNameBytes = maximumHeaderNameBytes
         self.maximumHeaderValueBytes = maximumHeaderValueBytes
+        self.maximumPaymentHeaderValueBytes = maximumPaymentHeaderValueBytes
         self.maximumHeaderBytes = maximumHeaderBytes
     }
     private init(
-        validatedPayload: Int, headers: Int, headerName: Int, headerValue: Int, headerBytes: Int
+        validatedPayload: Int, headers: Int, headerName: Int, headerValue: Int,
+        paymentHeaderValue: Int, headerBytes: Int
     ) {
         maximumPayloadBytes = validatedPayload
         maximumHeaders = headers
         maximumHeaderNameBytes = headerName
         maximumHeaderValueBytes = headerValue
+        maximumPaymentHeaderValueBytes = paymentHeaderValue
         maximumHeaderBytes = headerBytes
     }
     public static let standard = BRC104Limits(
-        validatedPayload: 1 << 20, headers: 64, headerName: 256, headerValue: 8 << 10,
-        headerBytes: 64 << 10)
+        validatedPayload: AuthLimits.defaultPayloadBytes, headers: 512, headerName: 1 << 10,
+        headerValue: 32 << 10, paymentHeaderValue: 256 << 10, headerBytes: 256 << 10)
+
+    static let paymentHeaderName = "x-bsv-payment"
+
+    func maximumValueBytes(forHeader name: String, kind: BRC104Codec.HeaderKind) -> Int {
+        kind == .request && name == Self.paymentHeaderName
+            ? max(maximumHeaderValueBytes, maximumPaymentHeaderValueBytes)
+            : maximumHeaderValueBytes
+    }
 }
 
 public enum BRC104Error: Error, Equatable, Sendable {
@@ -132,17 +155,35 @@ public enum BRC104Codec {
             throw BRC104Error.invalidRequestID
         }
     }
+    /// Encodes a request a client is about to sign.
+    ///
+    /// Like `AuthFetch` (`clients/AuthFetch.ts:755-760`), a POST, PUT, PATCH
+    /// or DELETE with a JSON content type and a `nil` body signs and sends
+    /// `{}`: `BRC104HTTPFrameCodec.encodeRequest` takes the body from this
+    /// payload. An empty body stays empty and is written as -1, never 0
+    /// (`clients/AuthFetch.ts:762-770`).
     public static func encode(_ request: BRC104Request, limits: BRC104Limits = .standard) throws
         -> [UInt8]
     {
+        try encode(request, applyingClientBodyDefault: true, limits: limits)
+    }
+
+    /// Encodes a request. A server rebuilding the payload of a received
+    /// request passes `false`: the TypeScript server signs -1 for a bodyless
+    /// JSON request (`authMiddlewareHelpers.ts:155-185`).
+    static func encode(
+        _ request: BRC104Request, applyingClientBodyDefault: Bool, limits: BRC104Limits
+    ) throws -> [UInt8] {
         var writer = Writer(limits: limits)
         try writer.bytes(request.requestID)
         try writer.string(request.method)
         try writer.string(request.path)
         try writer.optionalString(request.query)
         try writer.headers(request.headers, kind: .request)
-        try writer.optionalBytes(
-            normalizedBody(request.body, method: request.method, headers: request.headers))
+        try writer.body(
+            applyingClientBodyDefault
+                ? normalizedBody(request.body, method: request.method, headers: request.headers)
+                : request.body)
         return writer.output
     }
     public static func decodeRequest(_ bytes: [UInt8], limits: BRC104Limits = .standard) throws
@@ -168,7 +209,9 @@ public enum BRC104Codec {
         try writer.bytes(response.requestID)
         try writer.compact(UInt64(response.status))
         try writer.headers(response.headers, kind: .response)
-        try writer.optionalBytes(response.body)
+        // An empty body is written as -1, never 0 (`SimplifiedFetchTransport.ts:314-321`,
+        // `auth-express-middleware/src/index.ts:2112-2117`).
+        try writer.body(response.body)
         return writer.output
     }
     public static func decodeResponse(_ bytes: [UInt8], limits: BRC104Limits = .standard) throws
@@ -197,7 +240,7 @@ public enum BRC104Codec {
         for header in headers {
             let name = header.name.lowercased()
             guard validToken(name), name.utf8.count <= limits.maximumHeaderNameBytes,
-                header.value.utf8.count <= limits.maximumHeaderValueBytes,
+                header.value.utf8.count <= limits.maximumValueBytes(forHeader: name, kind: kind),
                 safeText(header.value), permitted(name, kind: kind)
             else { throw BRC104Error.invalidHeader }
             guard names.insert(name).inserted else { throw BRC104Error.duplicateHeader }
@@ -208,19 +251,37 @@ public enum BRC104Codec {
                 throw BRC104Error.resourceLimit
             }
             total = newTotal
-            let value =
-                name == "content-type"
-                ? String(
-                    header.value.split(
-                        separator: ";", maxSplits: 1, omittingEmptySubsequences: false
-                    )[0]
-                )
-                : header.value
+            let value = name == "content-type" ? signedContentType(header.value) : header.value
             guard name != "content-type" || !value.isEmpty else { throw BRC104Error.invalidHeader }
             result.append(.init(name: name, value: value))
         }
         return result.sorted { Array($0.name.utf8).lexicographicallyPrecedes(Array($1.name.utf8)) }
     }
+    /// The signed form of a `content-type` value, as `authenticatedContentType`
+    /// in `utils/paymentTransport.ts:84-90` computes it: a `multipart/form-data`
+    /// value is kept whole so its boundary is signed; any other value is cut at
+    /// the first `;` and trimmed.
+    static func signedContentType(_ value: String) -> String {
+        let mediaType = ecmaScriptTrim(
+            String(value.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)[0]))
+        return mediaType.lowercased() == "multipart/form-data" ? value : mediaType
+    }
+
+    /// `String.prototype.trim`: ECMAScript white space and line terminators.
+    static func ecmaScriptTrim(_ value: String) -> String {
+        func isSpace(_ scalar: Unicode.Scalar) -> Bool {
+            switch scalar.value {
+            case 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0, 0xfeff, 0x2028, 0x2029: return true
+            default: return scalar.properties.generalCategory == .spaceSeparator
+            }
+        }
+        let scalars = value.unicodeScalars
+        guard let first = scalars.firstIndex(where: { !isSpace($0) }),
+            let last = scalars.lastIndex(where: { !isSpace($0) })
+        else { return "" }
+        return String(scalars[first...last])
+    }
+
     static func permitted(_ name: String, kind: HeaderKind) -> Bool {
         if name.hasPrefix("x-bsv-auth-") { return false }
         if name.hasPrefix("x-bsv-") { return true }
@@ -242,11 +303,13 @@ public enum BRC104Codec {
     static func normalizedBody(_ body: [UInt8]?, method: String, headers: [BRC104Header])
         -> [UInt8]?
     {
-        guard body?.isEmpty != false,
+        // `#defaultRequestBody` replaces only an absent body (`body !== undefined`)
+        // and matches `application/json` case-sensitively; an empty body stays
+        // empty and is written as -1.
+        guard body == nil,
             ["POST", "PUT", "PATCH", "DELETE"].contains(method.uppercased()),
             headers.contains(where: {
-                $0.name.lowercased() == "content-type"
-                    && $0.value.lowercased().contains("application/json")
+                $0.name.lowercased() == "content-type" && $0.value.contains("application/json")
             })
         else { return body }
         return Array("{}".utf8)
@@ -272,8 +335,9 @@ public enum BRC104Codec {
         mutating func optionalString(_ value: String?) throws {
             if let value { try string(value) } else { try compact(UInt64.max) }
         }
-        mutating func optionalBytes(_ value: [UInt8]?) throws {
-            if let value { try counted(value) } else { try compact(UInt64.max) }
+        /// BRC-104 writes an absent or empty body as -1.
+        mutating func body(_ value: [UInt8]?) throws {
+            if let value, !value.isEmpty { try counted(value) } else { try compact(UInt64.max) }
         }
         mutating func headers(_ value: [BRC104Header], kind: HeaderKind) throws {
             let canonical = try BRC104Codec.normalized(value, kind: kind, limits: limits)

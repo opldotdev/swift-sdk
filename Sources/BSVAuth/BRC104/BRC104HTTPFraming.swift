@@ -16,6 +16,9 @@ public enum BRC104HTTPHeaderName {
 }
 
 /// Limits for transport-neutral BRC-104 HTTP frames.
+///
+/// A frame holds every HTTP header the transport passes, signed or not, so the
+/// defaults leave room above the signed-header limits in `BRC104Limits`.
 public struct BRC104HTTPFramingLimits: Equatable, Sendable {
     public static let maximumAllowedHeaderCount = 1_024
     public static let maximumAllowedHeaderNameByteCount = 1_024
@@ -38,10 +41,10 @@ public struct BRC104HTTPFramingLimits: Equatable, Sendable {
     public init(
         authLimits: AuthLimits = .standard,
         payloadLimits: BRC104Limits = .standard,
-        maximumHeaderCount: Int = 128,
-        maximumHeaderNameByteCount: Int = 256,
-        maximumHeaderValueByteCount: Int = 64 << 10,
-        maximumAggregateHeaderByteCount: Int = 256 << 10,
+        maximumHeaderCount: Int = 1_024,
+        maximumHeaderNameByteCount: Int = 1_024,
+        maximumHeaderValueByteCount: Int = 256 << 10,
+        maximumAggregateHeaderByteCount: Int = 1 << 20,
         maximumMethodByteCount: Int = 32,
         maximumPathByteCount: Int = 8 << 10,
         maximumQueryByteCount: Int = 64 << 10
@@ -77,10 +80,10 @@ public struct BRC104HTTPFramingLimits: Equatable, Sendable {
     private init(standard: Void) {
         authLimits = .standard
         payloadLimits = .standard
-        maximumHeaderCount = 128
-        maximumHeaderNameByteCount = 256
-        maximumHeaderValueByteCount = 64 << 10
-        maximumAggregateHeaderByteCount = 256 << 10
+        maximumHeaderCount = 1_024
+        maximumHeaderNameByteCount = 1_024
+        maximumHeaderValueByteCount = 256 << 10
+        maximumAggregateHeaderByteCount = 1 << 20
         maximumMethodByteCount = 32
         maximumPathByteCount = 8 << 10
         maximumQueryByteCount = 64 << 10
@@ -233,7 +236,8 @@ public enum BRC104HTTPFrameCodec {
         }
         let payload: [UInt8]
         do {
-            payload = try BRC104Codec.encode(request, limits: limits.payloadLimits)
+            payload = try BRC104Codec.encode(
+                request, applyingClientBodyDefault: false, limits: limits.payloadLimits)
         } catch BRC104Error.resourceLimit {
             throw BRC104HTTPFramingError.resourceLimit
         } catch {
@@ -280,9 +284,7 @@ public enum BRC104HTTPFrameCodec {
         }
         try validateFrame(headers: frame.headers, body: frame.body, limits: limits)
         let split = try split(frame.headers, kind: .response, limits: limits)
-        let authentication = try parseAuthentication(
-            split.authentication, messageTypeRequired: false
-        )
+        let authentication = try parseAuthentication(split.authentication)
         guard authentication.requestID == expectedRequestID else {
             throw BRC104HTTPFramingError.requestIDMismatch
         }
@@ -444,21 +446,16 @@ public enum BRC104HTTPFrameCodec {
 
     /// Reads the `x-bsv-auth-*` headers.
     ///
-    /// `messageType` is optional on a response because the reference middleware omits it there:
-    /// it writes that header only when the message is *not* general, and every ordinary answer is
-    /// general. Requiring it rejects every real response. When a sender does include it, it must
-    /// still say `general`.
-    private static func parseAuthentication(
-        _ headers: [String: String],
-        messageTypeRequired: Bool = true
-    ) throws
+    /// `messageType` is optional on both sides. The reference middleware writes it on a response
+    /// only when the message is *not* general, and `SimplifiedFetchTransport` never writes it on a
+    /// request (`transports/SimplifiedFetchTransport.ts:189-194`); the middleware reads the other
+    /// six headers and assumes `general`. When a sender does include it, it must say `general`.
+    private static func parseAuthentication(_ headers: [String: String]) throws
         -> ParsedAuthentication
     {
         let version = try required(BRC104HTTPHeaderName.version, in: headers)
         let messageType =
-            messageTypeRequired
-            ? try required(BRC104HTTPHeaderName.messageType, in: headers)
-            : headers[BRC104HTTPHeaderName.messageType] ?? AuthMessageType.general.rawValue
+            headers[BRC104HTTPHeaderName.messageType] ?? AuthMessageType.general.rawValue
         let keyText = try required(BRC104HTTPHeaderName.identityKey, in: headers)
         let nonce = try required(BRC104HTTPHeaderName.nonce, in: headers)
         let yourNonce = try required(BRC104HTTPHeaderName.yourNonce, in: headers)

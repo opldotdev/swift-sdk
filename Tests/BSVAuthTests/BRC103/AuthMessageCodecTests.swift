@@ -108,16 +108,15 @@ struct AuthMessageCodecTests {
             certifiers: [identity],
             certificateTypes: [type: [try CertificateFieldName("name")]]
         )
-        #expect(throws: AuthError.invalidMessage) {
-            try AuthMessageCodec.encode(
-                AuthMessage(
-                    messageType: .initialRequest,
-                    identityKey: identity,
-                    initialNonce: nonce,
-                    requestedCertificates: request
-                )
-            )
-        }
+        // `@bsv/sdk` 4.1.1 sends its certificate policy in initialRequest
+        // (`Peer.ts:644-650`), so the codec accepts it there.
+        let initial = AuthMessage(
+            messageType: .initialRequest,
+            identityKey: identity,
+            initialNonce: nonce,
+            requestedCertificates: request
+        )
+        #expect(try AuthMessageCodec.decode(AuthMessageCodec.encode(initial)) == initial)
         #expect(throws: AuthError.invalidMessage) {
             try AuthMessageCodec.encode(
                 AuthMessage(
