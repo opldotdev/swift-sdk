@@ -88,8 +88,10 @@ public extension Transaction {
     ///
     /// If the remainder cannot give every change output at least one satoshi,
     /// all change outputs are removed and the remainder becomes additional
-    /// miner fee. Division remainders likewise become additional fee. The
-    /// mutation is atomic: any failure leaves the receiver unchanged.
+    /// miner fee. Otherwise each change output gets an equal share and the
+    /// last one also gets the division remainder, as @bsv/sdk does, so no
+    /// change is paid as extra fee. The mutation is atomic: any failure
+    /// leaves the receiver unchanged.
     mutating func applyFee(
         using model: any TransactionFeeModel,
         limits: TransactionLimits
@@ -121,9 +123,13 @@ public extension Transaction {
             candidate.outputs.removeAll(where: \.isChange)
         } else {
             let satoshisPerChangeOutput = change / UInt64(changeOutputCount)
+            let remainder = change % UInt64(changeOutputCount)
+            var lastChangeIndex = candidate.outputs.startIndex
             for index in candidate.outputs.indices where candidate.outputs[index].isChange {
                 candidate.outputs[index].satoshis = satoshisPerChangeOutput
+                lastChangeIndex = index
             }
+            candidate.outputs[lastChangeIndex].satoshis += remainder
         }
         _ = try candidate.serializedByteCount(limits: limits)
         self = candidate
