@@ -1,4 +1,5 @@
 import BSVAuth
+import BSVWallet
 import Foundation
 import Testing
 
@@ -61,7 +62,8 @@ struct BRC104ErrorDescriptionTests {
             AuthError.notAuthenticated.localizedDescription
                 == "The connection has not been authenticated yet.")
         #expect(
-            CertificateFieldNameError.nonASCII.localizedDescription
-                == "Certificate field names must use only plain ASCII letters, digits, spaces and symbols.")
+            CertificateFieldNameError.unsupportedCharacter.localizedDescription
+                == "Certificate field names must use only plain ASCII letters, digits, spaces and "
+                + "symbols, and accented Latin letters.")
     }
 }

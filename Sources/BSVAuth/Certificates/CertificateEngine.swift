@@ -13,9 +13,10 @@ public enum CertificateEngine {
     /// deviation from the pinned Go helper's ambiguous fallback.
     ///
     /// The certificate is signed with its fields in `localeCompare` order, as
-    /// `@bsv/sdk` signs them (`certificates/Certificate.ts:290`). Field names
-    /// must be ASCII; another name throws `CertificateFieldNameError.nonASCII`
-    /// (COMP-041).
+    /// `@bsv/sdk` signs them (`auth/certificates/Certificate.ts:290`). Field
+    /// names must use only printable ASCII and accented Latin letters; another
+    /// name throws `CertificateFieldNameError.unsupportedCharacter` before any
+    /// field is encrypted (COMP-041).
     public static func issue(
         type: CertificateTypeID,
         serialNumber suppliedSerialNumber: CertificateSerialNumber? = nil,
@@ -27,7 +28,14 @@ public enum CertificateEngine {
         randomSource: any SecureRandomSource = SystemSecureRandomSource()
     ) async throws -> MasterCertificate {
         try validateFieldSet(plaintextFields, limits: limits)
-        try Certificate.requireASCIIFieldNames(plaintextFields.keys)
+        if let name = Certificate.fieldNameWithoutExactOrder(in: plaintextFields.keys) {
+            AuthLog.rejected(
+                "Certificate issue",
+                "a field name of \(name.utf8Bytes.count) bytes has a character whose "
+                    + "localeCompare order is not reproduced",
+                as: CertificateFieldNameError.unsupportedCharacter)
+            throw CertificateFieldNameError.unsupportedCharacter
+        }
         let serialNumber: CertificateSerialNumber
         if let suppliedSerialNumber {
             serialNumber = suppliedSerialNumber
@@ -62,7 +70,7 @@ public enum CertificateEngine {
             fields: encrypted.fields,
             limits: limits
         )
-        let signed = try await unsigned.signedInLocaleOrder(using: certifierWallet, limits: limits)
+        let signed = try await unsigned.signed(using: certifierWallet, limits: limits)
         return try MasterCertificate(certificate: signed, masterKeyring: encrypted.keyring)
     }
 
@@ -80,7 +88,7 @@ public enum CertificateEngine {
         if let certifier = requirements.certifier, certifier != certificate.certifier { throw CertificateError.requirementMismatch }
         if let outpoint = requirements.revocationOutpoint, outpoint != certificate.revocationOutpoint { throw CertificateError.requirementMismatch }
         try validateKeyringBounds(masterCertificate.masterKeyring, limits: limits)
-        guard try await certificate.verifySignatureInEitherFieldOrder(limits: limits) else {
+        guard try await certificate.verifySignature(limits: limits) else {
             throw CertificateError.signatureMismatch
         }
         let identity = try await subjectWallet.getPublicKey(.init(selection: .identity)).publicKey
@@ -122,7 +130,7 @@ public enum CertificateEngine {
             throw CertificateError.fieldNotFound
         }
         try validateKeyringBounds(masterCertificate.masterKeyring, limits: limits)
-        guard try await certificate.verifySignatureInEitherFieldOrder(limits: limits) else {
+        guard try await certificate.verifySignature(limits: limits) else {
             throw CertificateError.signatureMismatch
         }
         let identity = try await subjectWallet.getPublicKey(.init(selection: .identity)).publicKey
@@ -186,7 +194,7 @@ public enum CertificateEngine {
     ) async throws -> [CertificateFieldName: String] {
         let certificate = verifiableCertificate.certificate
         try validateKeyringBounds(verifiableCertificate.keyring, limits: limits)
-        guard try await certificate.verifySignatureInEitherFieldOrder(limits: limits) else {
+        guard try await certificate.verifySignature(limits: limits) else {
             throw CertificateError.signatureMismatch
         }
         return try await decryptAll(

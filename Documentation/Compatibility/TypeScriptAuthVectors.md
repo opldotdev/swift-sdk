@@ -20,9 +20,16 @@ generator below, under the fixture policy in
 [FixtureSources.md](FixtureSources.md#recorded-typescript-auth-vectors) and
 [VectorInventory.md](VectorInventory.md#recorded-typescript-auth-vectors).
 
-`LocaleCompareOrderTests` holds SHA-256 digests and sorted lists printed by
-`collate-vec.ts` under Bun 1.4.4 and Node 22.23.4 (ICU, locale `en-US`). Both
-runtimes printed the same output.
+`LocaleCompareOrderTests` (BSVCoreTests) holds SHA-256 digests and sorted
+lists printed by `collate-vec.ts` and `certorder-vec.ts` under Bun 1.4.4 and
+Node 22.23.4 (ICU, locale `en-US`). Both runtimes printed the same output.
+`certorder-vec.ts` also prints the table of accented Latin letters in
+`LocaleCompareOrder` and the certificates in
+`CertificateFieldOrderVectorTests` (BSVWalletTests) and
+`IdentityClientTests.revealsTypeScriptCertificate`: one signed by
+`Certificate.sign` with 30 field names that `localeCompare` and byte order
+sort differently by case, accents, underscores and digits, and one with
+ASCII names only.
 
 The vectors cover:
 
@@ -63,10 +70,13 @@ python3 toswift.py vectors.json Tests/BSVAuthTests/BRC103/TypeScriptAuthVectors.
 
 `collate-vec.ts` needs no SDK. Its output is compared by hand with the values
 in `LocaleCompareOrderTests`; under Node it runs as
-`node --experimental-strip-types` on a `.mts` copy.
+`node --experimental-strip-types` on a `.mts` copy. `certorder-vec.ts` needs
+the SDK for its last section; the sections before it ran under Node the same
+way, with the SDK import removed.
 
 ```sh
 bun run collate-vec.ts
+bun run certorder-vec.ts > certorder.json
 ```
 
 ## Checking Swift messages with TypeScript
@@ -616,4 +626,141 @@ console.log('randoms', uniq.length, 'adjacent ties', rties, hash(rs), JSON.strin
 console.log('names', JSON.stringify(['Zip', 'age', 'a_b', 'a-b', 'ab', 'a b', 'A', 'a', 'aB', 'Ab', 'a1', 'a10', 'a2', 'x-bsv-a_b', 'x-bsv-ab', 'x-bsv-a-b', 'x-bsv-Z', 'x-bsv-z', 'email', 'Email', 'first_name', 'firstName', 'first-name'].sort(cmp)))
 console.log('headers', JSON.stringify(['x-bsv-zeta', 'x-bsv-a-b', 'x-bsv-a_b', 'x-bsv-ab', 'x-bsv-a.b', 'x-bsv-a1', 'authorization', 'content-type'].sort(cmp)))
 console.log(process.versions.bun, Intl.Collator().resolvedOptions().locale)
+```
+
+## `certorder-vec.ts`
+
+```ts
+// Vectors for BRC-52 field order: ICU localeCompare over Latin letters with
+// diacritics, and certificates signed by the live @bsv/sdk 4.1.1 source.
+import { createHash } from 'node:crypto'
+const { PrivateKey, ProtoWallet, Certificate, Utils } = await import(`${process.env.TS_SDK}/mod.ts`)
+
+const cmp = (a: string, b: string) => a.localeCompare(b)
+const hash = (xs: string[]) => createHash('sha256').update(xs.join('\n'), 'utf8').digest('hex')
+const base = new Intl.Collator(undefined, { sensitivity: 'base' })
+const out: Record<string, unknown> = {}
+
+// 1. Precomposed Latin letters whose canonical decomposition is an ASCII
+//    letter followed by combining diacritics (U+0300-U+036F).
+const ranges = [[0x00c0, 0x024f], [0x1e00, 0x1eff]]
+const table: [number, string, number[]][] = []
+const marks = new Set<number>()
+for (const [lo, hi] of ranges) {
+  for (let cp = lo; cp <= hi; cp++) {
+    const ch = String.fromCodePoint(cp)
+    const nfd = ch.normalize('NFD')
+    const scalars = [...nfd].map(c => c.codePointAt(0)!)
+    if (scalars.length < 2) continue
+    const [first, ...rest] = scalars
+    if (!/^[A-Za-z]$/.test(String.fromCodePoint(first))) continue
+    if (!rest.every(m => m >= 0x300 && m <= 0x36f)) continue
+    if (cmp(ch, nfd) !== 0) throw new Error(`not equal to its NFD: ${cp.toString(16)}`)
+    if (base.compare(ch, String.fromCodePoint(first)) !== 0) throw new Error(`primary differs: ${cp.toString(16)}`)
+    rest.forEach(m => marks.add(m))
+    table.push([cp, String.fromCodePoint(first), rest])
+  }
+}
+// 2. The secondary order of those marks: each has no primary weight.
+const markList = [...marks].sort((a, b) => a - b)
+for (const m of markList) {
+  if (base.compare('x' + String.fromCodePoint(m), 'x') !== 0) throw new Error(`mark has primary: ${m.toString(16)}`)
+}
+const ranked = [...markList].sort((a, b) => cmp('x' + String.fromCodePoint(a), 'x' + String.fromCodePoint(b)))
+const ranks: [number, number][] = []
+let rank = 0
+for (let i = 0; i < ranked.length; i++) {
+  if (i > 0 && cmp('x' + String.fromCodePoint(ranked[i - 1]), 'x' + String.fromCodePoint(ranked[i])) !== 0) rank++
+  ranks.push([ranked[i], rank + 1])
+}
+out.markOrder = ranks.map(([m, r]) => [m.toString(16), r])
+out.letterCount = table.length
+out.table = table.map(([cp, b, ms]) => [cp.toString(16), b, ms.map(m => m.toString(16))])
+
+// 3. Ordering checks over ASCII and accented letters.
+const letters = table.map(([cp]) => String.fromCodePoint(cp))
+const ascii: string[] = []
+for (let c = 0x20; c <= 0x7e; c++) ascii.push(String.fromCharCode(c))
+const singles = [...ascii, ...letters]
+out.singles = hash([...singles].sort(cmp))
+const alphabet = [...'aAeEzZ_-1 .', 'á', 'Á', 'à', 'â', 'ä', 'å', 'é', 'É', 'è', 'ê', 'ë', 'ǖ', 'ü', 'ű', 'ñ', 'Ñ', 'ç', 'ș', 'ţ', 'ắ', 'ạ']
+const pairs: string[] = []
+for (const a of alphabet) for (const b of alphabet) pairs.push(a + b)
+let ties = 0
+const sp = [...pairs].sort(cmp)
+for (let i = 0; i + 1 < sp.length; i++) if (cmp(sp[i], sp[i + 1]) === 0) ties++
+out.alphabet = alphabet.join('')
+out.pairs = [pairs.length, ties, hash(sp)]
+const letterPairs: string[] = []
+const pool = [...'aAbBeEnNoOuUzZ', ...letters.filter((_, i) => i % 4 === 0)]
+for (const a of pool) for (const b of pool) letterPairs.push(a + b)
+let lties = 0
+const slp = [...letterPairs].sort(cmp)
+for (let i = 0; i + 1 < slp.length; i++) if (cmp(slp[i], slp[i + 1]) === 0) lties++
+out.letterPairs = [letterPairs.length, lties, hash(slp)]
+let x = 7
+const next = () => { x = (Math.imul(x, 1103515245) + 12345) >>> 0 & 0x7fffffff; return x }
+const randomAlphabet = [...ascii, ...letters]
+const randoms: string[] = []
+for (let i = 0; i < 6000; i++) {
+  const len = 1 + (next() % 8)
+  let s = ''
+  for (let k = 0; k < len; k++) s += randomAlphabet[next() % randomAlphabet.length]
+  randoms.push(s)
+}
+const uniq = [...new Set(randoms)]
+const rs = [...uniq].sort(cmp)
+let rties = 0
+for (let i = 0; i + 1 < rs.length; i++) if (cmp(rs[i], rs[i + 1]) === 0) rties++
+out.randoms = [randomAlphabet.length, uniq.length, rties, hash(rs), randoms.slice(0, 3)]
+
+// 4. Certificates signed by Certificate.sign with names whose localeCompare
+//    order differs from byte order: case, accents, underscores and digits.
+const certifier = new PrivateKey(11)
+const subject = new PrivateKey(7)
+const names = [
+  'Zip', 'zip_code', 'zip-code', 'zip2', 'zip10', 'Zeta', 'email', 'eMail', 'Email',
+  '_id', 'id', 'ID', 'a1', 'a_1', 'a-1', 'aB', 'ab', 'cafe', 'café', 'Café', 'cafés',
+  'émile', 'Émile', 'naïve', 'nausea', 'résumé', 'resume', 'zoë', 'Ångström', 'angle',
+]
+const sortedNames = [...names].sort(cmp)
+out.certNames = names
+out.certNamesSorted = sortedNames
+const fields: Record<string, string> = {}
+names.forEach((n, i) => { fields[n] = Utils.toBase64([i + 1]) })
+const cert = new Certificate(
+  Utils.toBase64(new Array(32).fill(0x31)),
+  Utils.toBase64(new Array(32).fill(0x32)),
+  subject.toPublicKey().toString(),
+  certifier.toPublicKey().toString(),
+  '0000000000000000000000000000000000000000000000000000000000000000.0',
+  fields
+)
+await cert.sign(new ProtoWallet(certifier))
+out.certJSON = JSON.stringify({
+  type: cert.type, serialNumber: cert.serialNumber, subject: cert.subject, certifier: cert.certifier,
+  revocationOutpoint: cert.revocationOutpoint, fields: cert.fields, signature: cert.signature
+})
+out.certBinary = Utils.toHex(cert.toBinary(true))
+out.certPreimage = Utils.toHex(cert.toBinary(false))
+out.certVerifies = await cert.verify()
+
+// An ASCII-only certificate Swift can also sign, for an exact signature match.
+const asciiNames = ['Zip', 'zip_code', 'zip-code', 'zip2', 'zip10', 'email', 'Email', '_id', 'ID', 'id', 'a_1', 'a1']
+const asciiFields: Record<string, string> = {}
+asciiNames.forEach((n, i) => { asciiFields[n] = Utils.toBase64([0x40 + i]) })
+const asciiCert = new Certificate(
+  Utils.toBase64(new Array(32).fill(0x33)),
+  Utils.toBase64(new Array(32).fill(0x34)),
+  subject.toPublicKey().toString(),
+  certifier.toPublicKey().toString(),
+  '0000000000000000000000000000000000000000000000000000000000000000.0',
+  asciiFields
+)
+await asciiCert.sign(new ProtoWallet(certifier))
+out.asciiCertBinary = Utils.toHex(asciiCert.toBinary(true))
+out.asciiCertPreimage = Utils.toHex(asciiCert.toBinary(false))
+out.asciiCertVerifies = await asciiCert.verify()
+out.runtime = [process.versions.bun ?? null, process.versions.node, Intl.Collator().resolvedOptions().locale]
+console.log(JSON.stringify(out, null, 1))
 ```

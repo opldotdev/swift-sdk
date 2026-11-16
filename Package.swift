@@ -171,7 +171,7 @@ let package = Package(
         ),
         .testTarget(
             name: "BSVCoreTests",
-            dependencies: ["BSVCore"],
+            dependencies: ["BSVCore", "BSVCrypto"],
             exclude: ["README.md"]
         ),
         .testTarget(

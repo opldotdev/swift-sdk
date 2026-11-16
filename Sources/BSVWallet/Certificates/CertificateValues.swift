@@ -210,6 +210,8 @@ public struct CertificateFieldName: Hashable, Codable, Sendable, Comparable {
     private static let maximumProtocolUTF8ByteCount =
         CertificateLimits.maximumProtocolFieldNameUTF8ByteCount
 
+    /// Raw UTF-8 byte order. This is not the order `Certificate.binary`
+    /// writes and signs fields in, which is JavaScript `localeCompare` order.
     public static func < (lhs: Self, rhs: Self) -> Bool {
         lhs.utf8Bytes.lexicographicallyPrecedes(rhs.utf8Bytes)
     }

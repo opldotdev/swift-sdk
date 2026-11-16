@@ -1,1 +1,1 @@
-// BSVCore implementations are organized under Binary, Encoding, and Values.
+// BSVCore implementations are organized under Binary, Encoding, Text, and Values.

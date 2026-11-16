@@ -79,7 +79,7 @@ manifest fragment. Their provenance:
 | Source | `ts-stack` repository, `packages/sdk`, `@bsv/sdk` 4.1.1 |
 | Revision | `3b1abc5691c0848eb00eaf5e8f018e8a7a26d5f1` |
 | License | Apache-2.0, from relicensing commit `4760b26d0` (2026-11-11), an ancestor of the revision; NOTICE "Copyright 2020-2026 BSV Association" |
-| Generator | `gen.ts`, `det.ts`, `toswift.py` and `collate-vec.ts` in [TypeScriptAuthVectors.md](TypeScriptAuthVectors.md), run with Bun 1.4.4; the collation output was also checked with Node 22.23.4 |
+| Generator | `gen.ts`, `det.ts`, `toswift.py`, `collate-vec.ts` and `certorder-vec.ts` in [TypeScriptAuthVectors.md](TypeScriptAuthVectors.md), run with Bun 1.4.4; the collation output was also checked with Node 22.23.4 |
 | Inputs | Chosen in this repository: private keys 3, 7 and 11, a SHA-256 counter random stream, certificate fields and request targets |
 | Transformation | Program output written verbatim into Swift string literals by `toswift.py`; no TypeScript source text is copied |
 
