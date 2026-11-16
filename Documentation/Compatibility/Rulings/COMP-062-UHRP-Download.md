@@ -31,3 +31,19 @@ Every real advertisement has six signed fields, so the old decoder found no
 hosts for any real file. The downloader now uses the TypeScript layout and
 rejects the old shape. `UHRPDownloadConfiguration` no longer takes
 `pushDropLimits`; the advertisement decoder applies the TypeScript bounds.
+
+## Failure detail (2026-11-16)
+
+Skipping a bad advertisement or a failed host matches TypeScript, but the
+reasons are no longer dropped:
+
+- `UHRPDownloader.advertisements(for:)` returns the accepted advertisements
+  and a `UHRPAdvertisementRejection` (answer position and reason) for each
+  skipped output. `hosts(for:)` is built on it.
+- `UHRPDownloadError.noAvailableHosts(rejected:)` carries those rejections, and
+  `allHostsFailed(_:)` carries a `UHRPHostFailure` (host and reason: HTTP
+  status, transport error, invalid content, or hash mismatch) for each host
+  tried.
+- `description` is one short line with the count and the first reason;
+  `debugDescription` lists every entry for logs. Both lists are bounded by
+  `maximumAdvertisementCount` and `maximumHostCount`.

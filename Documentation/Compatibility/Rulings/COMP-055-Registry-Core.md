@@ -44,6 +44,21 @@ format wins:
   check: TypeScript writes it with `JSON.stringify`, which yields the same
   bytes for every name Swift's protocol-ID profile accepts.
 - `RegistryLimits` now requires `pushDropLimits.maximumFieldCount >= 8`.
-
-Swift keeps its larger per-field text limits; they accept everything
-TypeScript writes.
+- Decoding and encoding apply the TypeScript token bounds whatever
+  `RegistryLimits` says: at most 16 KiB per field and 64 KiB for all fields,
+  signature included (`registryTokenValidation.ts:10-11`). A larger field
+  fails with `textTooLong` naming the field, a larger total with
+  `aggregateTooLarge`. `RegistryLimits.standard` is unchanged; its larger
+  text limits still bound unsigned values built in Swift, but no token
+  outside the TypeScript bounds is decoded or written.
+- A data field written as `OP_0` is rejected with `emptyField(name:)`.
+  TypeScript reads it as `"\u{0}"`, which its text rules reject; Swift used to
+  read it as empty text. `definition(kind:fields:)`, which takes unsigned
+  fields, still reads `[0]` as empty text.
+- An empty field on the write side fails with `emptyField(name:)` naming the
+  field (`iconURL`, `description` or `documentationURL`).
+- Like TypeScript, verification has no low-S rule: a high-S operator signature
+  verifies. The DER encoding must still be strict.
+- `RegistryError.pushDropFailure` carries the underlying `PushDropError`. A
+  token that decodes to a different definition than the one written fails
+  with `roundTripMismatch`, not `invalidSignature`.

@@ -146,7 +146,56 @@ struct UHRPDownloaderTests {
             now: { 1_000 }
         )
         #expect(try await downloader.hosts(for: identifier).isEmpty)
-        await #expect(throws: UHRPDownloadError.noAvailableHosts) {
+
+        // Each skipped output keeps its reason.
+        let lookup = try await downloader.advertisements(for: identifier)
+        #expect(lookup.accepted.isEmpty)
+        let reasons = lookup.rejected.map(\.reason)
+        #expect(lookup.rejected.map(\.answerIndex) == Array(0..<10))
+        #expect(
+            Array(reasons.prefix(9)) == [
+                .hashMismatch,
+                .invalidAdvertisement(.invalidURL),
+                .invalidAdvertisement(.invalidURL),
+                .invalidAdvertisement(.invalidURL),
+                .invalidAdvertisement(.invalidExpiryTime),
+                .invalidAdvertisement(.invalidExpiryTime),
+                .invalidAdvertisement(.lockingKeyNotLinkedToHost),
+                .invalidAdvertisement(.invalidSignature),
+                .invalidAdvertisement(.unexpectedFieldCount(actual: 4)),
+            ])
+        guard case .invalidTransaction(let detail) = reasons[9] else {
+            Issue.record("expected an invalid transaction, got \(reasons[9])")
+            return
+        }
+        #expect(!detail.isEmpty)
+
+        // The final error carries the same list, with a short description
+        // and the full list in debugDescription.
+        do {
+            _ = try await downloader.content(for: identifier)
+            Issue.record("content(for:) should have failed")
+        } catch let error as UHRPDownloadError {
+            #expect(error == .noAvailableHosts(rejected: lookup.rejected))
+            #expect(
+                error.description
+                    == "No current UHRP host advertisement is available (10 rejected; first: advertisement is for other content)"
+            )
+            #expect(error.debugDescription.split(separator: "\n").count == 11)
+            #expect(error.debugDescription.contains("output 8: UHRP advertisement must have 6 fields (found 4)"))
+        }
+    }
+
+    @Test("an empty lookup reports no advertisements")
+    func emptyLookup() async throws {
+        let identifier = try UHRPURL(fileBytes: [1])
+        let downloader = UHRPDownloader(
+            resolver: UHRPRecordingResolver(answer: try LookupAnswer(outputList: [])),
+            configuration: try configuration(beefLimits: try beefLimits()),
+            transport: UHRPRecordingTransport(responses: [:]),
+            now: { 0 }
+        )
+        await #expect(throws: UHRPDownloadError.noAvailableHosts(rejected: [])) {
             try await downloader.content(for: identifier)
         }
     }
@@ -216,6 +265,49 @@ struct UHRPDownloaderTests {
                 "https://a.example/file", "https://b.example/file", "https://c.example/file",
             ])
         #expect(await transport.responseLimits() == [4, 4, 4])
+    }
+
+    @Test("every failed host is reported with its reason")
+    func allHostsFailed() async throws {
+        let identifier = try UHRPURL(fileBytes: [10, 20, 30, 40])
+        let limits = try beefLimits()
+        let outputs = try ["a", "b", "c"].map {
+            try advertisement(
+                identifier: identifier,
+                host: "https://\($0).example/file",
+                expiry: 2_000,
+                beefLimits: limits
+            )
+        }
+        let transport = UHRPRecordingTransport(responses: [
+            "https://a.example/file": .success(HTTPResponse(statusCode: 503, body: Data())),
+            "https://b.example/file": .success(HTTPResponse(statusCode: 200, body: Data([0]))),
+        ])
+        let downloader = UHRPDownloader(
+            resolver: UHRPRecordingResolver(answer: try LookupAnswer(outputList: outputs)),
+            configuration: try configuration(beefLimits: limits),
+            transport: transport,
+            now: { 1_000 }
+        )
+        let expected: [UHRPHostFailure] = [
+            .init(host: URL(string: "https://a.example/file")!, reason: .httpStatus(503)),
+            .init(host: URL(string: "https://b.example/file")!, reason: .contentHashMismatch),
+            .init(
+                host: URL(string: "https://c.example/file")!,
+                reason: .transport(.transport(code: nil))
+            ),
+        ]
+        do {
+            _ = try await downloader.content(for: identifier)
+            Issue.record("content(for:) should have failed")
+        } catch let error as UHRPDownloadError {
+            #expect(error == .allHostsFailed(expected))
+            #expect(
+                error.description
+                    == "All 3 UHRP content hosts failed (first: https://a.example/file: HTTP status 503)"
+            )
+            #expect(error.debugDescription.contains("- https://b.example/file: content does not match its UHRP hash"))
+        }
     }
 
     @Test("lookup form, counts, and cancellation fail closed")
@@ -314,7 +406,14 @@ struct UHRPDownloaderTests {
             transport: transport,
             now: { 0 }
         )
-        await #expect(throws: UHRPDownloadError.allHostsFailed) {
+        await #expect(
+            throws: UHRPDownloadError.allHostsFailed([
+                UHRPHostFailure(
+                    host: URL(string: "https://large.example/file")!,
+                    reason: .transport(.responseBodyTooLarge(maximumByteCount: 4))
+                )
+            ])
+        ) {
             try await downloader.content(for: identifier)
         }
         #expect(await transport.responseLimits() == [4])

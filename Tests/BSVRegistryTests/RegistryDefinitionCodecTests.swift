@@ -119,7 +119,8 @@ final class RegistryDefinitionCodecTests: XCTestCase {
                 using: wallet)
             XCTFail("expected an empty-field error")
         } catch {
-            XCTAssertEqual(error as? RegistryError, .emptyField(name: "definitionField"))
+            // The error names the empty field.
+            XCTAssertEqual(error as? RegistryError, .emptyField(name: "iconURL"))
         }
 
         let other = ProtoWallet(rootKey: try PrivateKey(Array(repeating: 0, count: 31) + [0x44]))
@@ -133,10 +134,7 @@ final class RegistryDefinitionCodecTests: XCTestCase {
 
     func testRejectsTokensTypeScriptRejects() throws {
         let operatorKey = try operatorPrivateKey()
-        let definition = RegistryDefinition.basket(
-            try basketDefinition(
-                registryOperator: RegistryOperator(publicKey: operatorKey.publicKey)))
-        let fields = try RegistryDefinitionCodec.fields(for: definition)
+        let fields = try publishableBasketFields(operatorKey)
         let linked = try linkedPrivateKey(operatorKey, invoice: "1-basketmap-1")
 
         // The previous Swift shape: six unsigned fields.
@@ -177,6 +175,119 @@ final class RegistryDefinitionCodecTests: XCTestCase {
         XCTAssertThrowsError(
             try RegistryDefinitionCodec.decode(
                 try signedScript(fields: fields, key: linked), kind: .protocol))
+    }
+
+    /// TypeScript reads an OP_0 field as "\u{0}" (PushDropValidation.ts) and
+    /// RegistryClient.ts:66-75 rejects that text, so an operator-signed token
+    /// with an OP_0 field is refused rather than read as empty text.
+    func testRejectsOperatorSignedOPZeroField() throws {
+        let operatorKey = try operatorPrivateKey()
+        let linked = try linkedPrivateKey(operatorKey, invoice: "1-basketmap-1")
+        var fields = try publishableBasketFields(operatorKey)
+        fields[3] = [0]
+        let script = try signedScript(fields: fields, key: linked)
+        // The script really carries OP_0 for that field.
+        XCTAssertEqual(
+            try PushDrop.decode(script, lockPosition: .beforeCompatibility).fields[3], [0])
+        XCTAssertThrowsError(try RegistryDefinitionCodec.decode(script, kind: .basket)) { error in
+            XCTAssertEqual(error as? RegistryError, .emptyField(name: "description"))
+        }
+    }
+
+    /// registryTokenValidation.ts:10-11, 28-32: at most 16 KiB per field and
+    /// 64 KiB for all fields, signature included.
+    func testEnforcesTypeScriptTokenSizeBounds() async throws {
+        XCTAssertEqual(RegistryDefinitionCodec.maximumTokenFieldByteCount, 16_384)
+        XCTAssertEqual(RegistryDefinitionCodec.maximumTokenPayloadByteCount, 65_536)
+        let operatorKey = try operatorPrivateKey()
+        let linked = try linkedPrivateKey(operatorKey, invoice: "1-basketmap-1")
+        let base = try publishableBasketFields(operatorKey)
+
+        var largest = base
+        largest[3] = [UInt8](repeating: 0x61, count: 16_384)
+        XCTAssertNoThrow(
+            try RegistryDefinitionCodec.decode(
+                try signedScript(fields: largest, key: linked), kind: .basket))
+
+        var tooLarge = base
+        tooLarge[3] = [UInt8](repeating: 0x61, count: 16_385)
+        XCTAssertThrowsError(
+            try RegistryDefinitionCodec.decode(
+                try signedScript(fields: tooLarge, key: linked), kind: .basket)
+        ) { error in
+            XCTAssertEqual(
+                error as? RegistryError,
+                .textTooLong(field: "description", actual: 16_385, maximum: 16_384))
+        }
+
+        var tooMuch = base
+        for index in 0..<4 { tooMuch[index] = [UInt8](repeating: 0x61, count: 16_384) }
+        let signature = try linked.sign(digest: BSVHashing.sha256(Array(tooMuch.joined())))
+        let total = tooMuch.reduce(0) { $0 + $1.count } + signature.derBytes.count
+        XCTAssertGreaterThan(total, 65_536)
+        let script = try PushDrop.lockingScript(
+            fields: tooMuch + [signature.derBytes],
+            publicKey: linked.publicKey,
+            lockPosition: .beforeCompatibility)
+        XCTAssertThrowsError(try RegistryDefinitionCodec.decode(script, kind: .basket)) { error in
+            XCTAssertEqual(
+                error as? RegistryError, .aggregateTooLarge(actual: total, maximum: 65_536))
+        }
+
+        // The writer refuses before asking the wallet to sign.
+        let wallet = ProtoWallet(rootKey: operatorKey)
+        let definition = try RegistryDefinitionCodec.definition(kind: .basket, fields: tooLarge)
+        do {
+            _ = try await RegistryDefinitionCodec.lockingScript(for: definition, using: wallet)
+            XCTFail("expected a field size error")
+        } catch {
+            XCTAssertEqual(
+                error as? RegistryError,
+                .textTooLong(field: "description", actual: 16_385, maximum: 16_384))
+        }
+    }
+
+    /// TypeScript verifies without a low-S rule (only its signer forces
+    /// low-S), so a high-S operator signature is accepted.
+    func testAcceptsHighSSignature() throws {
+        let operatorKey = try operatorPrivateKey()
+        let linked = try linkedPrivateKey(operatorKey, invoice: "1-basketmap-1")
+        let fields = try publishableBasketFields(operatorKey)
+        let digest = BSVHashing.sha256(Array(fields.joined()))
+        let high = try highS(try linked.sign(digest: digest))
+        XCTAssertFalse(linked.publicKey.verify(high, digest: digest))
+        let script = try PushDrop.lockingScript(
+            fields: fields + [high.derBytes],
+            publicKey: linked.publicKey,
+            lockPosition: .beforeCompatibility)
+        XCTAssertNoThrow(try RegistryDefinitionCodec.decode(script, kind: .basket))
+    }
+
+    func testRejectsNonCanonicalDERSignature() throws {
+        let operatorKey = try operatorPrivateKey()
+        let linked = try linkedPrivateKey(operatorKey, invoice: "1-basketmap-1")
+        let fields = try publishableBasketFields(operatorKey)
+        let der = try linked.sign(digest: BSVHashing.sha256(Array(fields.joined()))).derBytes
+        // Long-form length byte (0x81) where the short form is required.
+        let nonCanonical = [der[0], 0x81] + der[1...]
+        let script = try PushDrop.lockingScript(
+            fields: fields + [Array(nonCanonical)],
+            publicKey: linked.publicKey,
+            lockPosition: .beforeCompatibility)
+        XCTAssertThrowsError(try RegistryDefinitionCodec.decode(script, kind: .basket)) { error in
+            XCTAssertEqual(error as? RegistryError, .invalidSignatureEncoding)
+        }
+    }
+
+    func testPushDropFailureKeepsItsCause() throws {
+        let script = try Script(bytes: [0x51], maximumByteCount: 16)
+        XCTAssertThrowsError(try RegistryDefinitionCodec.decode(script, kind: .basket)) { error in
+            guard case .pushDropFailure(let cause) = error as? RegistryError else {
+                return XCTFail("unexpected error \(error)")
+            }
+            XCTAssertTrue(
+                (error as? RegistryError)?.description.contains("\(cause)") ?? false)
+        }
     }
 
     func testProtocolCanonicalJSONRoundTrip() throws {
@@ -411,6 +522,33 @@ final class RegistryDefinitionCodecTests: XCTestCase {
             metadata: try fixtureMetadata(),
             fields: ["a": try descriptor("aye"), "z": try descriptor("zee")],
             registryOperator: try registryOperator ?? fixtureOperator())
+    }
+
+    /// Basket data fields with every field non-empty, so a token can verify.
+    private func publishableBasketFields(_ operatorKey: PrivateKey) throws -> [[UInt8]] {
+        [
+            "basket.id", "Example", "https://icon.example/i.png", "description",
+            "https://docs.example/", Hex.encode(operatorKey.publicKey.compressedBytes),
+        ].map { Array($0.utf8) }
+    }
+
+    /// The same signature with S replaced by n - S.
+    private func highS(_ signature: ECDSASignature) throws -> ECDSASignature {
+        let order: [UInt8] = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c,
+            0xd0, 0x36, 0x41, 0x41,
+        ]
+        let s = Array(signature.compactBytes[32...])
+        var negated = [UInt8](repeating: 0, count: 32)
+        var borrow = 0
+        for index in (0..<32).reversed() {
+            var digit = Int(order[index]) - Int(s[index]) - borrow
+            borrow = digit < 0 ? 1 : 0
+            if digit < 0 { digit += 256 }
+            negated[index] = UInt8(digit)
+        }
+        return try ECDSASignature(compactBytes: Array(signature.compactBytes[..<32]) + negated)
     }
 
     private func operatorPrivateKey() throws -> PrivateKey {

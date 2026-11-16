@@ -192,6 +192,30 @@ struct KVStoreTokenCodecTests {
         }
     }
 
+    /// TypeScript verifies without a low-S rule (only its signer forces
+    /// low-S), so a high-S owner signature is accepted.
+    @Test("a high-S signature verifies as in TypeScript")
+    func acceptsHighSSignature() throws {
+        let key = try PrivateKey(ownerKeyBytes)
+        let value: [UInt8] = [1, 2, 3]
+        let digest = BSVHashing.sha256(value)
+        let high = try highS(try key.sign(digest: digest))
+        #expect(!key.publicKey.verify(high, digest: digest))
+        let token = try KVStoreToken(value: value, lockingPublicKey: key.publicKey, signature: high)
+        let script = try KVStoreTokenCodec.lockingScript(for: token)
+        #expect(try KVStoreTokenCodec.decode(script).signature == high)
+    }
+
+    @Test("a locator the wallet grammar refuses fails with a KVStore error")
+    func walletLocatorErrors() throws {
+        let locator = try KVStoreLocator(context: "ctx", key: "greeting")
+        #expect(throws: KVStoreError.invalidWalletLocator(
+            .protocolNameTooShort(actualUTF8ByteCount: 3, minimum: 5)
+        )) {
+            try locator.walletProtocolID()
+        }
+    }
+
     @Test("locator validates empty and exact UTF-8 bounds")
     func locatorBounds() throws {
         let limits = try KVStoreLimits(
@@ -224,6 +248,12 @@ struct KVStoreTokenCodecTests {
         )
         let script = try KVStoreTokenCodec.lockingScript(for: token)
         #expect(try KVStoreTokenCodec.decode(script) == token)
+        #expect(throws: KVStoreError.valueByteCountExceedsLimit(
+            actual: 2 * 1_024 * 1_024 + 1,
+            maximum: 2 * 1_024 * 1_024
+        )) {
+            try signedToken([UInt8](repeating: 0x5a, count: 2 * 1_024 * 1_024 + 1))
+        }
     }
 
     @Test("value and script limits accept their exact maximum and reject plus one")
@@ -322,6 +352,25 @@ struct KVStoreTokenCodecTests {
         #expect(token.description == "<redacted key-value token>")
         #expect(Array(Mirror(reflecting: locator).children).isEmpty)
         #expect(Array(Mirror(reflecting: token).children).isEmpty)
+    }
+
+    /// The same signature with S replaced by n - S.
+    private func highS(_ signature: ECDSASignature) throws -> ECDSASignature {
+        let order: [UInt8] = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c,
+            0xd0, 0x36, 0x41, 0x41,
+        ]
+        let s = Array(signature.compactBytes[32...])
+        var negated = [UInt8](repeating: 0, count: 32)
+        var borrow = 0
+        for index in (0..<32).reversed() {
+            var digit = Int(order[index]) - Int(s[index]) - borrow
+            borrow = digit < 0 ? 1 : 0
+            if digit < 0 { digit += 256 }
+            negated[index] = UInt8(digit)
+        }
+        return try ECDSASignature(compactBytes: Array(signature.compactBytes[..<32]) + negated)
     }
 
     private func signedToken(

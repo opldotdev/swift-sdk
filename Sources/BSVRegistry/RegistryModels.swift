@@ -94,11 +94,13 @@ public enum RegistryError: Error, Equatable, Sendable, CustomStringConvertible,
     case malformedEmbeddedJSON(field: String)
     case nonCanonicalEmbeddedJSON(field: String)
     case invalidCertificateFieldType
-    case pushDropFailure
+    case pushDropFailure(PushDropError)
     case invalidSignatureEncoding
     case lockingKeyNotLinkedToOperator
     case invalidSignature
     case walletIdentityIsNotRegistryOperator
+    /// A token this codec just wrote decoded to a different definition.
+    case roundTripMismatch
 
     public var description: String {
         switch self {
@@ -120,13 +122,15 @@ public enum RegistryError: Error, Equatable, Sendable, CustomStringConvertible,
         case .malformedEmbeddedJSON(let field): "registry \(field) JSON is malformed"
         case .nonCanonicalEmbeddedJSON(let field): "registry \(field) JSON is not canonical"
         case .invalidCertificateFieldType: "registry certificate field type is invalid"
-        case .pushDropFailure: "registry PushDrop script is invalid"
+        case .pushDropFailure(let error): "registry PushDrop script is invalid (\(error))"
         case .invalidSignatureEncoding: "registry token signature is not canonical DER"
         case .lockingKeyNotLinkedToOperator:
             "registry token locking key is not linked to its operator"
         case .invalidSignature: "registry token signature is invalid"
         case .walletIdentityIsNotRegistryOperator:
             "wallet identity key is not the definition's registry operator"
+        case .roundTripMismatch:
+            "registry token did not decode to the definition it was written from"
         }
     }
 
@@ -216,6 +220,13 @@ public struct RegistryOperator: Hashable, Sendable, CustomStringConvertible,
 }
 
 /// Human-readable metadata carried by every registry definition.
+///
+/// `iconURL`, `description` and `documentationURL` may be empty here, but a
+/// definition with an empty field cannot be published:
+/// `RegistryDefinitionCodec.lockingScript(for:using:limits:)` throws
+/// `RegistryError.emptyField(name:)` naming the field. PushDrop writes an empty
+/// field as `OP_0`, which reads back as one zero byte, so its signature could
+/// never verify. TypeScript has the same limit.
 public struct RegistryMetadata: Hashable, Sendable {
     public let name: String
     public let iconURL: String

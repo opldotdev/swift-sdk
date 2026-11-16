@@ -138,13 +138,27 @@ public struct KVStoreLocator: Hashable, Sendable, CustomStringConvertible,
 
     /// The wallet protocol that locks and signs this locator's token:
     /// `[2, context]`, as TypeScript `LocalKVStore.getProtocol` uses.
+    ///
+    /// Throws `KVStoreError.invalidWalletLocator` when the context is not a
+    /// valid wallet protocol name (for example shorter than 5 characters).
     public func walletProtocolID() throws -> WalletProtocolID {
-        try WalletProtocolID(securityLevel: .everyAppAndCounterparty, name: context)
+        do {
+            return try WalletProtocolID(securityLevel: .everyAppAndCounterparty, name: context)
+        } catch let error as WalletValidationError {
+            throw KVStoreError.invalidWalletLocator(error)
+        }
     }
 
     /// The wallet key ID for this locator's token: the key itself.
+    ///
+    /// Throws `KVStoreError.invalidWalletLocator` when the key is not a valid
+    /// wallet key ID.
     public func walletKeyID() throws -> WalletKeyID {
-        try WalletKeyID(key)
+        do {
+            return try WalletKeyID(key)
+        } catch let error as WalletValidationError {
+            throw KVStoreError.invalidWalletLocator(error)
+        }
     }
 
     public var description: String { "<redacted key-value locator>" }
@@ -197,7 +211,12 @@ public struct KVStoreToken: Hashable, Sendable, CustomStringConvertible,
                 maximum: limits.maximumValueByteCount
             )
         }
-        guard lockingPublicKey.verify(signature, digest: BSVHashing.sha256(value)) else {
+        // TypeScript verification has no low-S rule, so a high-S signature
+        // from another wallet is accepted here too.
+        guard signature.verifiesInScript(
+            publicKey: lockingPublicKey,
+            digest: BSVHashing.sha256(value)
+        ) else {
             throw KVStoreError.invalidSignature
         }
         self.value = value
@@ -226,4 +245,7 @@ public enum KVStoreError: Error, Equatable, Sendable {
     case invalidSignatureEncoding
     case invalidSignature
     case lockingKeyMismatch
+    /// The locator's context or key is not valid in the wallet's protocol
+    /// or key ID grammar.
+    case invalidWalletLocator(WalletValidationError)
 }

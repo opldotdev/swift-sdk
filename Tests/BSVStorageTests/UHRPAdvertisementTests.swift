@@ -84,6 +84,44 @@ final class UHRPAdvertisementTests: XCTestCase {
         }
     }
 
+    func testRejectsSevenFields() throws {
+        let host = try PrivateKey(hostScalar)
+        let lockingKey = try linkedPrivateKey(host)
+        let fields = [
+            host.publicKey.compressedBytes, hash, Array(url.utf8),
+            CompactSize.encode(1_700_000_000), CompactSize.encode(1_024),
+        ]
+        let signature = try lockingKey.sign(digest: BSVHashing.sha256(Array(fields.joined())))
+        let script = try PushDrop.lockingScript(
+            fields: fields + [signature.derBytes, [1, 2]],
+            publicKey: lockingKey.publicKey,
+            lockPosition: .beforeCompatibility
+        )
+        XCTAssertThrowsError(try UHRPAdvertisement.decode(script)) { error in
+            XCTAssertEqual(error as? UHRPAdvertisementError, .unexpectedFieldCount(actual: 7))
+        }
+    }
+
+    /// TypeScript verifies without a low-S rule (only its signer forces
+    /// low-S), so a high-S host signature is accepted.
+    func testAcceptsHighSSignature() throws {
+        let host = try PrivateKey(hostScalar)
+        let lockingKey = try linkedPrivateKey(host)
+        let fields = [
+            host.publicKey.compressedBytes, hash, Array(url.utf8),
+            CompactSize.encode(1_700_000_000), CompactSize.encode(1_024),
+        ]
+        let digest = BSVHashing.sha256(Array(fields.joined()))
+        let high = try highS(try lockingKey.sign(digest: digest))
+        XCTAssertFalse(lockingKey.publicKey.verify(high, digest: digest))
+        let script = try PushDrop.lockingScript(
+            fields: fields + [high.derBytes],
+            publicKey: lockingKey.publicKey,
+            lockPosition: .beforeCompatibility
+        )
+        XCTAssertEqual(try UHRPAdvertisement.decode(script).signature, high)
+    }
+
     func testRejectsLockingKeyNotLinkedToHost() throws {
         let host = try PrivateKey(hostScalar)
         let script = try advertisementScript(host: host, lockingKey: host)
@@ -146,6 +184,25 @@ final class UHRPAdvertisementTests: XCTestCase {
         XCTAssertThrowsError(
             try UHRPAdvertisement.decode(try advertisementScript(host: host, url: longURL + "a"))
         )
+    }
+
+    /// The same signature with S replaced by n - S.
+    private func highS(_ signature: ECDSASignature) throws -> ECDSASignature {
+        let order: [UInt8] = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c,
+            0xd0, 0x36, 0x41, 0x41,
+        ]
+        let s = Array(signature.compactBytes[32...])
+        var negated = [UInt8](repeating: 0, count: 32)
+        var borrow = 0
+        for index in (0..<32).reversed() {
+            var digit = Int(order[index]) - Int(s[index]) - borrow
+            borrow = digit < 0 ? 1 : 0
+            if digit < 0 { digit += 256 }
+            negated[index] = UInt8(digit)
+        }
+        return try ECDSASignature(compactBytes: Array(signature.compactBytes[..<32]) + negated)
     }
 
     private func linkedPrivateKey(_ host: PrivateKey) throws -> PrivateKey {

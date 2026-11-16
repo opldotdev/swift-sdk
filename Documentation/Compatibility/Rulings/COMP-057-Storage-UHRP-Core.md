@@ -27,3 +27,11 @@ with hosts and is not provided.
 
 `UHRPURL` also accepts `uhrp:<id>` without slashes, as TypeScript
 `normalizeURL` does.
+
+Like TypeScript, signature verification has no low-S rule: a high-S host
+signature verifies. The DER encoding must still be strict.
+
+The URL check uses `URLComponents`, which is stricter than the WHATWG `new URL`
+parser TypeScript uses for odd inputs such as `https:host`, backslashes, or
+`https:///x`. Swift skips such an advertisement where TypeScript keeps it. No
+host is known to publish one.

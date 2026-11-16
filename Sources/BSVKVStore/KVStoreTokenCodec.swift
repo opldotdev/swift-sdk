@@ -62,8 +62,14 @@ public enum KVStoreTokenCodec {
     }
 
     /// Decodes a two-field token and verifies its signature under the
-    /// locking key. It does not check who owns the locking key; use
-    /// `decode(_:locator:using:limits:)` for that.
+    /// locking key.
+    ///
+    /// - Important: This does not check who owns the locking key, and anyone
+    ///   can make a token whose signature matches its own locking key. Do not
+    ///   trust the value from this overload alone. Use
+    ///   `decode(_:locator:using:limits:)`, which also checks that the locking
+    ///   key is the wallet's key for the locator, as TypeScript `LocalKVStore`
+    ///   always does.
     public static func decode(
         _ lockingScript: Script,
         limits: KVStoreLimits = .standard

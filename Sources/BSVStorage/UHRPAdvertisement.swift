@@ -151,7 +151,12 @@ public struct UHRPAdvertisement: Hashable, Sendable {
             throw UHRPAdvertisementError.lockingKeyNotLinkedToHost
         }
         let signed = Array(fields[0..<5].joined())
-        guard expectedLockingKey.verify(signature, digest: BSVHashing.sha256(signed)) else {
+        // TypeScript verification has no low-S rule, so a high-S signature
+        // from another wallet is accepted here too.
+        guard signature.verifiesInScript(
+            publicKey: expectedLockingKey,
+            digest: BSVHashing.sha256(signed)
+        ) else {
             throw UHRPAdvertisementError.invalidSignature
         }
 
