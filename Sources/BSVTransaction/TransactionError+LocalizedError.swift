@@ -49,7 +49,7 @@ extension MerklePathError: LocalizedError {
             "The Merkle proof is larger than the wallet can handle."
         case .blockHeightOutOfRange, .invalidTreeHeight, .invalidFlags, .duplicateLeafOffset,
             .duplicateMarkerRequiresOddOffset, .transactionIDMarkerOutsideLevelZero,
-            .offsetOutOfRange, .missingLevelZeroHash, .malformed, .invalidHex, .invalidJSON,
+            .offsetOutOfRange, .illegalOffset, .missingLevelZeroHash, .malformed, .invalidHex, .invalidJSON,
             .missingSibling, .conflictingElement:
             "The Merkle proof could not be read."
         case .transactionNotInPath:
