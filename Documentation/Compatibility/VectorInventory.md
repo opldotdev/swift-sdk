@@ -45,6 +45,16 @@ Wycheproof provenance recorded by the selected dependencies identifies Apache
 2.0 and upstream commits. Copy source JSON, not generated headers, and preserve
 the dependency NOTICE information.
 
+## Recorded TypeScript auth vectors
+
+| Family | Committed source | License | Notes |
+| --- | --- | --- | --- |
+| BRC-103/104 wire messages and BRC-104 payloads | Output of `@bsv/sdk` 4.1.1 at `ts-stack` `3b1abc5691c0848eb00eaf5e8f018e8a7a26d5f1`, recorded by the generator in [TypeScriptAuthVectors.md](TypeScriptAuthVectors.md) | Apache-2.0 (relicensed in `4760b26d0`, 2026-11-11) | `TypeScriptAuthVectors.swift`: handshake, certificate request and response, handshake certificates in initialResponse, empty-certifier request, mixed-case certificate signature and preimage, `AuthFetch` headers and serialized payloads. Live checks of Swift output in TypeScript run from the same scripts and are not committed. |
+| `localeCompare` order | Output of `collate-vec.ts` under Bun 1.4.4 and Node 22.23.4 (ICU `en-US`) | Independently authored script; runtime output only | `LocaleCompareOrderTests.swift`: printable ASCII order, SHA-256 of all 9025 two-character strings, 1331 three-character strings and 4000 pseudo-random strings, and named examples. |
+
+See [FixtureSources.md](FixtureSources.md#recorded-typescript-auth-vectors) for
+the provenance record.
+
 ## Go-only behavior sources
 
 These are queried through the pinned oracle and are never copied:

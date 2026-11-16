@@ -2,11 +2,27 @@
 
 `Tests/BSVAuthTests/BRC103/TypeScriptAuthVectors.swift` holds BRC-103 and
 BRC-104 messages produced by executing `@bsv/sdk` 4.1.1 (`packages/sdk` in the
-`ts-stack` repository at `3b1abc569`). The inputs (keys 3, 7 and 11,
-certificate fields, nonces from a fixed random stream) are chosen here. The file
-contains program output only: no TypeScript source text or upstream fixture is
-copied. `TypeScriptInteropTests` replays the messages against this SDK. COMP-052,
-COMP-059 and COMP-060 record the rulings they check.
+`ts-stack` repository at `3b1abc5691c0848eb00eaf5e8f018e8a7a26d5f1`). The
+inputs (keys 3, 7 and 11, certificate fields, nonces from a fixed random
+stream) are chosen here. The file contains program output only: no TypeScript
+source text or upstream fixture is copied. `TypeScriptInteropTests` replays the
+messages against this SDK. COMP-041, COMP-052, COMP-059 and COMP-060 record the
+rulings they check.
+
+## Provenance and license
+
+`ts-stack` was relicensed under the Apache License 2.0 in commit `4760b26d0`
+("Relicense under Apache License 2.0 (#1560)", 2026-11-11), an ancestor of the
+pinned commit. `packages/sdk/package.json` at that commit declares version
+4.1.1 and license `Apache-2.0`; its NOTICE reads "Copyright 2020-2026 BSV
+Association". The vectors are recorded from running that source with the
+generator below, under the fixture policy in
+[FixtureSources.md](FixtureSources.md#recorded-typescript-auth-vectors) and
+[VectorInventory.md](VectorInventory.md#recorded-typescript-auth-vectors).
+
+`LocaleCompareOrderTests` holds SHA-256 digests and sorted lists printed by
+`collate-vec.ts` under Bun 1.4.4 and Node 22.23.4 (ICU, locale `en-US`). Both
+runtimes printed the same output.
 
 The vectors cover:
 
@@ -17,7 +33,15 @@ The vectors cover:
 - a `Peer` certificateRequest whose types are not in byte order;
 - the `AuthFetch` handshake body and the six headers of its bodyless GET;
 - `AuthFetch.serializeRequest` payloads for the JSON `{}` default, an empty
-  body, a `content-type` with spaces and parameters, and `multipart/form-data`.
+  body, a `content-type` with spaces and parameters, `multipart/form-data`, and
+  signed headers whose `localeCompare` order differs from byte order;
+- a `Peer` with no listener answering a Swift initialRequest that carries a
+  certificate policy, with its wallet's certificate inside initialResponse;
+  the certificate has the fields `Zip`, `age`, `a-b` and `a_b`;
+- a `Peer` initiator's initialRequest and a certificateRequest with no
+  certifiers;
+- a certificate signed by `Certificate.sign` with mixed-case and punctuated
+  field names, and its unsigned binary.
 
 ## Regenerating
 
@@ -32,10 +56,18 @@ bun run gen.ts > vectors.json
 python3 toswift.py vectors.json Tests/BSVAuthTests/BRC103/TypeScriptAuthVectors.swift
 ```
 
+`collate-vec.ts` needs no SDK. Its output is compared by hand with the values
+in `LocaleCompareOrderTests`; under Node it runs as
+`node --experimental-strip-types` on a `.mts` copy.
+
+```sh
+bun run collate-vec.ts
+```
+
 ## Checking Swift messages with TypeScript
 
 `TypeScriptInteropTests.swiftMessagesForTypeScript` writes the messages this SDK
-sends in the same two sessions when `BSV_TS_INTEROP_DUMP` names an output file.
+sends in the first two sessions when `BSV_TS_INTEROP_DUMP` names an output file.
 `verify.ts` reproduces each TypeScript session from the fixed random stream and
 feeds those messages to a live `Peer` and `AuthFetch`. It checks that `Peer`
 verifies the Swift certificate response, validates its certificate, verifies the
@@ -47,11 +79,10 @@ BSV_TS_INTEROP_DUMP=$PWD/swift-dump.json swift test --filter TypeScriptInterop
 bun run verify.ts swift-dump.json vectors.json
 ```
 
-The certificate in that session uses lowercase field names only. `@bsv/sdk`
-signs certificate fields in `localeCompare` order (`Certificate.ts:290`), and
-this SDK signs them in byte order, so a certificate with mixed-case field names
-fails `Certificate.verify` in TypeScript. That difference is outside this
-ruling.
+The Swift certificate in that session has the field names `Zip`, `age`, `email`
+and `a&b<c>`, which `localeCompare` and byte order sort differently.
+`Certificate.verify` in TypeScript accepts it because this SDK signs certificate
+fields in `localeCompare` order (COMP-041).
 
 ## `det.ts`
 
@@ -80,7 +111,7 @@ Object.defineProperty(globalThis.crypto, 'getRandomValues', { value: fill, confi
 // Generates BRC-103/104 interop vectors from the live @bsv/sdk 4.1.1 source.
 import { resetRandom } from './det.ts'
 const {
-  PrivateKey, ProtoWallet, Peer, AuthFetch, MasterCertificate, VerifiableCertificate, Utils
+  PrivateKey, ProtoWallet, Peer, AuthFetch, MasterCertificate, VerifiableCertificate, Certificate, Utils
 } = await import(`${process.env.TS_SDK}/mod.ts`)
 
 const b64 = (bytes: number[]) => Utils.toBase64(bytes)
@@ -199,6 +230,103 @@ const out: Record<string, unknown> = { tsIdentity: T, swiftIdentity: S, certifie
     contentTypeSpaces: await ser('POST', { 'content-type': 'application/json ; charset=utf-8' }, '{"a":1}', 'https://h.example/v1/items?x=1'),
     multipart: await ser('POST', { 'content-type': 'multipart/form-data; boundary=abc123' }, 'part', 'https://h.example/upload'),
   }
+}
+
+// ---------------- Scenario 3: certificate policy in the handshake, empty requests, ordering ----------------
+{
+  resetRandom(3)
+  // 3a. Swift initiator sends its policy in initialRequest; a TS Peer with no listener answers
+  // with certificates from its wallet inside initialResponse (Peer.ts:836-849, 872).
+  const certType = b64(fill(0x71, 32))
+  const serial = b64(fill(0x72, 32))
+  const plaintext: Record<string, string> = { Zip: '90210', age: '30', 'a-b': 'dash', a_b: 'underscore' }
+  const master = await MasterCertificate.issueCertificateForSubject(
+    certifierWallet, T, plaintext, certType, async () => '00'.repeat(32) + '.0', serial)
+  out.handshakeCertificateFieldOrder = Object.keys(master.fields)
+  class CertWallet extends ProtoWallet {
+    async listCertificates () {
+      return {
+        totalCertificates: 1,
+        certificates: [{
+          type: master.type, serialNumber: master.serialNumber, subject: master.subject,
+          certifier: master.certifier, revocationOutpoint: master.revocationOutpoint,
+          fields: master.fields, signature: master.signature
+        }]
+      }
+    }
+    async proveCertificate (args: any) {
+      return {
+        keyringForVerifier: await MasterCertificate.createKeyringForVerifier(
+          tsWallet, C, args.verifier, master.fields, args.fieldsToReveal, master.masterKeyring, serial)
+      }
+    }
+  }
+  const sent: any[] = []
+  let onData: (m: any) => Promise<void> = async () => {}
+  const transport = {
+    send: async (m: any) => { sent.push(JSON.stringify(m)) },
+    onData: async (cb: any) => { onData = cb }
+  }
+  const responder = new Peer(new CertWallet(tsKey), transport)
+  await responder.ready
+  const swiftPolicy = { certifiers: [C], types: { [certType]: ['Zip', 'age', 'a_b'] } }
+  out.handshakePolicy = swiftPolicy
+  out.handshakePlaintext = plaintext
+  await onData({
+    version: '0.1', messageType: 'initialRequest', identityKey: S,
+    initialNonce: b64(fill(0x41, 48)), requestedCertificates: swiftPolicy
+  })
+  out.initialResponseWithCertificates = sent.shift()
+  out.leftover3a = sent.length
+
+  // 3b. TS initiator; Swift responder nonce is 48 bytes of 0x61. After the handshake the TS
+  // peer sends a certificateRequest with no certifiers (Peer.ts:430-490).
+  const sent2: any[] = []
+  let onData2: (m: any) => Promise<void> = async () => {}
+  const serverNonce = b64(fill(0x61, 48))
+  const transport2 = {
+    send: async (m: any) => {
+      sent2.push(JSON.stringify(m))
+      if (m.messageType === 'initialRequest') {
+        const { signature } = await swiftWallet.createSignature({
+          data: [...Utils.toArray(m.initialNonce, 'base64'), ...Utils.toArray(serverNonce, 'base64')],
+          protocolID: [2, 'auth message signature'],
+          keyID: `${m.initialNonce} ${serverNonce}`,
+          counterparty: T
+        })
+        void onData2({
+          version: '0.1', messageType: 'initialResponse', identityKey: S,
+          initialNonce: serverNonce, yourNonce: m.initialNonce, signature
+        })
+      }
+    },
+    onData: async (cb: any) => { onData2 = cb }
+  }
+  const initiator = new Peer(tsWallet, transport2)
+  await initiator.ready
+  await initiator.requestCertificates({ certifiers: [], types: {} }, S)
+  out.emptyRequestInitialRequest = sent2.shift()
+  out.emptyCertificateRequest = sent2.shift()
+  out.leftover3b = sent2.length
+
+  // 3c. A certificate signed by Certificate.sign with mixed-case and punctuated field names.
+  const cert = new Certificate(
+    b64(fill(0x81, 32)), b64(fill(0x82, 32)), T, C, '00'.repeat(32) + '.0',
+    { Zip: b64([1]), age: b64([2]), 'a-b': b64([3]), a_b: b64([4]), Email: b64([5]), email: b64([6]) })
+  await cert.sign(certifierWallet)
+  out.mixedCaseCertificate = JSON.stringify({
+    type: cert.type, serialNumber: cert.serialNumber, subject: cert.subject, certifier: cert.certifier,
+    revocationOutpoint: cert.revocationOutpoint, fields: cert.fields, signature: cert.signature
+  })
+  out.mixedCaseCertificatePreimage = Utils.toHex(cert.toBinary(false))
+  out.mixedCaseCertificateVerifies = await cert.verify()
+
+  // 3d. Signed header order in AuthFetch.serializeRequest (AuthFetch.ts:740).
+  const client = new AuthFetch(tsWallet)
+  out.serializedHeaderOrder = Utils.toHex((await (client as any).serializeRequest('POST', {
+    'x-bsv-zeta': '1', 'x-bsv-ab': '2', 'x-bsv-a-b': '3', 'x-bsv-a_b': '4', 'x-bsv-a.b': '5',
+    'X-BSV-Upper': '6', 'content-type': 'application/json'
+  }, '{}', new URL('https://h.example/h'), fill(0x07, 32))).toArray())
 }
 
 console.log(JSON.stringify(out, null, 1))
@@ -331,6 +459,71 @@ L.append('')
 L.append('    /// `AuthFetch.serializeRequest` (`clients/AuthFetch.ts:784-818`) with request ID 32×0x07.')
 for k,val in v['serialized'].items():
     L.append(f'    static let serialized{k[0].upper()+k[1:]} =\n        "{val}"')
+
+L.append('')
+L.append('    /// `Peer.processInitialRequest` with no listener answering a Swift initialRequest (nonce')
+L.append('    /// 48 bytes of 0x41) that carries `handshakePolicy`: the wallet\'s certificate is included')
+L.append('    /// in initialResponse (`Peer.ts:836-849`, `Peer.ts:872`). The certificate was issued by')
+L.append('    /// `MasterCertificate.issueCertificateForSubject` with `handshakeFields` in this order.')
+L.append(f'    static let initialResponseWithCertificates =\n        {raw(v["initialResponseWithCertificates"])}')
+L.append('    static let handshakeCertificateType = [UInt8](repeating: 0x71, count: 32)')
+L.append('    static let handshakeRequestedFields = [' + ', '.join(json.dumps(f) for f in list(v['handshakePolicy']['types'].values())[0]) + ']')
+L.append('    static let handshakeFields: [(name: String, value: String)] = [')
+for k,val in v['handshakePlaintext'].items():
+    L.append(f'        ({json.dumps(k)}, {json.dumps(val)}),')
+L.append('    ]')
+L.append('')
+L.append('    /// A TS `Peer` initiator\'s initialRequest to a Swift responder whose nonce is 48 bytes of')
+L.append('    /// 0x61, then `Peer.requestCertificates({ certifiers: [], types: {} })`.')
+L.append(f'    static let emptyRequestInitialRequest =\n        {raw(v["emptyRequestInitialRequest"])}')
+L.append(f'    static let emptyCertificateRequest =\n        {raw(v["emptyCertificateRequest"])}')
+L.append('')
+L.append('    /// A certificate signed by `Certificate.sign` (`Certificate.ts:464-485`) with field names')
+L.append('    /// that `localeCompare` and byte order sort differently, and its unsigned binary')
+L.append('    /// (`Certificate.ts:290`).')
+L.append(f'    static let mixedCaseCertificate =\n        {raw(v["mixedCaseCertificate"])}')
+L.append(f'    static let mixedCaseCertificatePreimage =\n        "{v["mixedCaseCertificatePreimage"]}"')
+L.append('')
+L.append('    /// `AuthFetch.serializeRequest` with headers sorted by `localeCompare` (`AuthFetch.ts:740`).')
+L.append(f'    static let serializedHeaderOrder =\n        "{v["serializedHeaderOrder"]}"')
 L.append('}')
 open(sys.argv[2],'w').write('\n'.join(L)+'\n')
+```
+
+## `collate-vec.ts`
+
+```ts
+import { createHash } from 'node:crypto'
+const cmp = (a: string, b: string) => a.localeCompare(b)
+const hash = (xs: string[]) => createHash('sha256').update(xs.join('\n'), 'utf8').digest('hex')
+const printable: string[] = []
+for (let c = 0x20; c <= 0x7e; c++) printable.push(String.fromCharCode(c))
+console.log('ascii', JSON.stringify([...printable].sort(cmp).join('')))
+const pairs: string[] = []
+let ties = 0
+for (const a of printable) for (const b of printable) pairs.push(a + b)
+for (let i = 0; i < pairs.length; i++) for (let j = i + 1; j < pairs.length; j++) if (cmp(pairs[i], pairs[j]) === 0) ties++
+console.log('pairs', pairs.length, 'ties', ties, hash([...pairs].sort(cmp)))
+const alpha = ' !-._09aAzZ'
+const triples: string[] = []
+for (const a of alpha) for (const b of alpha) for (const c of alpha) triples.push(a + b + c)
+console.log('triples', triples.length, hash([...triples].sort(cmp)))
+// LCG strings, length 1..8 over printable ASCII
+let x = 1
+const next = () => { x = (Math.imul(x, 1103515245) + 12345) >>> 0 & 0x7fffffff; return x }
+const randoms: string[] = []
+for (let i = 0; i < 4000; i++) {
+  const len = 1 + (next() % 8)
+  let s = ''
+  for (let k = 0; k < len; k++) s += printable[next() % 95]
+  randoms.push(s)
+}
+const uniq = [...new Set(randoms)]
+let rties = 0
+const rs = [...uniq].sort(cmp)
+for (let i = 0; i + 1 < rs.length; i++) if (cmp(rs[i], rs[i + 1]) === 0) rties++
+console.log('randoms', uniq.length, 'adjacent ties', rties, hash(rs), JSON.stringify(randoms.slice(0, 3)))
+console.log('names', JSON.stringify(['Zip', 'age', 'a_b', 'a-b', 'ab', 'a b', 'A', 'a', 'aB', 'Ab', 'a1', 'a10', 'a2', 'x-bsv-a_b', 'x-bsv-ab', 'x-bsv-a-b', 'x-bsv-Z', 'x-bsv-z', 'email', 'Email', 'first_name', 'firstName', 'first-name'].sort(cmp)))
+console.log('headers', JSON.stringify(['x-bsv-zeta', 'x-bsv-a-b', 'x-bsv-a_b', 'x-bsv-ab', 'x-bsv-a.b', 'x-bsv-a1', 'authorization', 'content-type'].sort(cmp)))
+console.log(process.versions.bun, Intl.Collator().resolvedOptions().locale)
 ```

@@ -1092,7 +1092,10 @@ Suggested correction: include a canonical hash of the requested-certificate
 set in the signed payload, or send a signed BRC-103 certificate-request
 message.
 
-Swift handling: the HTTP frame codec rejects this header. Callers use the
+Swift handling: `@bsv/sdk` 4.1.1 sends and reads the same unsigned header, so
+the HTTP frame codec reads and writes it for interoperability (COMP-059).
+`PeerAuthenticator` does not act on a requested set in a general message, as
+`Peer.processGeneralMessage` does not. Callers that need a request use the
 signed BRC-103 certificate-request message.
 
 ### GO-064: Storage resolution does not bind advertisements to the requested UHRP identifier
