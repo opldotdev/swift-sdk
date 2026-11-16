@@ -22,11 +22,16 @@ public enum MerklePathError: Error, Equatable, Sendable {
     case leafCountExceedsLimit(level: Int, actual: UInt64, maximum: UInt64)
     case totalLeafCountExceedsLimit(actual: UInt64, maximum: UInt64)
     case countNotRepresentable(UInt64)
+    /// Not produced by the parser, which reads flags as a bitmask like
+    /// @bsv/sdk and the Go SDK. Retained for source compatibility.
     case invalidFlags(level: Int, leaf: Int, flags: UInt8)
     case duplicateLeafOffset(level: Int, offset: UInt64)
     case duplicateMarkerRequiresOddOffset(level: Int, offset: UInt64)
     case transactionIDMarkerOutsideLevelZero(level: Int, offset: UInt64)
     case offsetOutOfRange(level: Int, offset: UInt64, treeHeight: Int)
+    /// A node above level zero that no level-zero hash needs: it is not the
+    /// sibling of any level-zero hash's ancestor at that height.
+    case illegalOffset(level: Int, offset: UInt64)
     case missingLevelZeroHash
     case malformed(field: MerklePathField, offset: Int, cause: BinaryDecodingError)
     case invalidHex(TextEncodingError)

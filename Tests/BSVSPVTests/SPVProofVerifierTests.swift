@@ -442,6 +442,7 @@ private struct FixedChainTracker: ChainTracker {
     }
 
     func currentHeight() async throws -> UInt32 {
-        blockHeight
+        // Deep enough that a coinbase proof (offset 0) is mature.
+        blockHeight + 100
     }
 }
