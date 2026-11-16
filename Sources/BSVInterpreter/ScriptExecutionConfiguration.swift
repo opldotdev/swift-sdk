@@ -28,6 +28,17 @@ public struct ScriptVerificationFlags: OptionSet, Hashable, Sendable {
     public static let signaturePushOnly = Self(rawValue: 1 << 10)
     public static let enableForkID = Self(rawValue: 1 << 11)
     public static let strictEncoding = Self(rawValue: 1 << 12)
+    /// Under ``strictEncoding``, requires every non-empty signature's hash
+    /// type to carry the ForkID bit; one without it fails with
+    /// ``ScriptConsensusFailure/invalidSignatureHashType(_:)``.
+    ///
+    /// The flag does not select the digest. As in SV Node, the ForkID (BIP143)
+    /// digest is used only when ``enableForkID`` is set, and without
+    /// ``enableForkID`` a ForkID signature fails with
+    /// ``ScriptConsensusFailure/illegalForkID(_:)`` under strict encoding. Use
+    /// the flag together with ``enableForkID``; ``enableForkID`` alone already
+    /// rejects a signature without the ForkID bit, so the flag changes only
+    /// which failure is reported.
     public static let bip143SignatureHash = Self(rawValue: 1 << 13)
     public static let minimalIf = Self(rawValue: 1 << 14)
 
@@ -44,6 +55,13 @@ public struct ScriptVerificationFlags: OptionSet, Hashable, Sendable {
     /// spending transaction's version, read as a signed 32-bit value, is
     /// greater than one. ``ScriptExecutionEra/afterChronicle`` always implies
     /// this flag.
+    ///
+    /// For an output from ``ScriptExecutionEra/beforeGenesis`` or
+    /// ``ScriptExecutionEra/afterGenesis``, the caller must set this flag when
+    /// the spending transaction is in a block at or after Chronicle activation
+    /// (mainnet height 943,816). Without it the interpreter is stricter than
+    /// the node for such a spend: it rejects `SIGHASH_CHRONICLE` signatures
+    /// and keeps the malleability rules for transaction versions above one.
     public static let chronicle = Self(rawValue: 1 << 15)
 }
 

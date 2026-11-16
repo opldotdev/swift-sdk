@@ -813,6 +813,15 @@ package struct ScriptMachine {
         } catch let error as ScriptNumberError {
             throw ScriptExecutionError.scriptNumber(error)
         }
+        // After Genesis the node's big-number operators reject a result
+        // longer than the number limit (script_num.cpp:166, 196, 216). Only
+        // ADD, SUB, MUL and the one-operand forms built on them can grow a
+        // value; every other result is no longer than an operand that was
+        // already checked. Before Genesis the node computes in int64 and
+        // allows five-byte results.
+        if configuration.era != .beforeGenesis {
+            try checkNumberSize(encoded.count)
+        }
         try checkElementResultSize(encoded.count)
         mainStack.push(encoded)
     }
@@ -1136,30 +1145,55 @@ package struct ScriptMachine {
 
     /// SV Node `CheckSignatureEncoding`: DER, then low S, then the hash type.
     /// Returns the parsed signature, or `nil` for an empty signature or one
-    /// that does not parse when no DER rule applies.
+    /// whose scalars cannot be used, so that the check fails without an error.
+    ///
+    /// The DER rule is the node's structural `IsValidSignatureEncoding`. It
+    /// does not check the scalar range: a structurally valid signature with
+    /// `r` or `s` zero or at least the curve order passes it, and the node's
+    /// lax parser then reads it as the zero signature, which is low S and
+    /// never verifies.
     private func checkSignatureEncoding(_ signatureWithHashType: [UInt8]) throws -> ECDSASignature? {
         guard let rawHashType = signatureWithHashType.last else { return nil }
         let requiresStrictDER = configuration.flags.contains(.strictEncoding)
             || configuration.flags.contains(.derSignatures)
             || configuration.flags.contains(.lowS)
-        var signature: ECDSASignature?
-        do {
-            signature = try ECDSASignature(
-                scriptBytes: Array(signatureWithHashType.dropLast()),
-                strict: requiresStrictDER
-            )
-        } catch {
-            if requiresStrictDER {
-                throw ScriptExecutionError.consensus(.invalidSignatureEncoding)
-            }
-            signature = nil
+        if requiresStrictDER, !Self.isValidSignatureEncoding(signatureWithHashType) {
+            throw ScriptExecutionError.consensus(.invalidSignatureEncoding)
         }
+        let signature = try? ECDSASignature(
+            scriptBytes: Array(signatureWithHashType.dropLast()),
+            strict: requiresStrictDER
+        )
         if configuration.flags.contains(.lowS), enforcesNonMalleability,
            let signature, !signature.isLowS {
             throw ScriptExecutionError.consensus(.invalidSignatureEncoding)
         }
         try checkHashTypeEncoding(rawHashType)
         return signature
+    }
+
+    /// SV Node `IsValidSignatureEncoding` (interpreter.cpp:177-235): the
+    /// structural DER rules over a signature followed by its hash-type byte.
+    static func isValidSignatureEncoding(_ signature: [UInt8]) -> Bool {
+        let size = signature.count
+        guard (9...73).contains(size),
+              signature[0] == 0x30,
+              Int(signature[1]) == size - 3
+        else { return false }
+        let lengthR = Int(signature[3])
+        guard 5 + lengthR < size else { return false }
+        let lengthS = Int(signature[5 + lengthR])
+        guard lengthR + lengthS + 7 == size,
+              signature[2] == 0x02,
+              lengthR != 0,
+              signature[4] & 0x80 == 0,
+              !(lengthR > 1 && signature[4] == 0x00 && signature[5] & 0x80 == 0),
+              signature[lengthR + 4] == 0x02,
+              lengthS != 0,
+              signature[lengthR + 6] & 0x80 == 0,
+              !(lengthS > 1 && signature[lengthR + 6] == 0x00 && signature[lengthR + 7] & 0x80 == 0)
+        else { return false }
+        return true
     }
 
     /// SV Node `CheckSignatureEncoding` hash-type rules under STRICTENC.
@@ -1222,10 +1256,7 @@ package struct ScriptMachine {
                 return try transaction.forkIDSignatureHash(
                     inputIndex: context.inputIndex,
                     rawHashType: rawHashType,
-                    scriptCode: try Script(
-                        bytes: scriptCode,
-                        maximumByteCount: configuration.resourceLimits.maximumScriptByteCount
-                    ),
+                    scriptCodeBytes: scriptCode,
                     limits: context.transactionLimits
                 )
             }

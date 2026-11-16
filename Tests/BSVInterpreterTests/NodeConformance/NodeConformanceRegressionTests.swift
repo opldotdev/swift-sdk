@@ -862,3 +862,272 @@ private func subtract(_ value: [UInt8], from minuend: [UInt8]) -> [UInt8] {
     }
     return result
 }
+
+// MARK: - Review follow-ups
+
+extension NodeConformanceRegressionTests {
+    private static let generatorPublicKeyHex =
+        "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+
+    @Test("a structurally valid DER signature with unusable scalars fails CHECKSIG without an error")
+    func outOfRangeScalarsFailWithoutError() throws {
+        // node:177-235 IsValidSignatureEncoding is structural only; the lax
+        // parser reads r or s outside 1..<n as the zero signature, which is
+        // low S and does not verify.
+        let zeroS = "09" + "300602010102010001"
+        let maximalR = "29" + "3026022100" + String(repeating: "ff", count: 32) + "02010101"
+        let checkSigNot = "21" + Self.generatorPublicKeyHex + "ac91"
+        for signature in [zeroS, maximalR] {
+            for flags: ScriptVerificationFlags in [[.derSignatures], [.strictEncoding], [.lowS]] {
+                #expect(try run(
+                    lock: signature + checkSigNot, era: .afterGenesis, flags: flags, context: true
+                ).stack == [[1]], "\(signature.prefix(8)) \(flags)")
+            }
+            // The failed non-empty signature still triggers NULLFAIL.
+            #expect(throws: ScriptExecutionError.consensus(.nullFail)) {
+                try run(
+                    lock: signature + checkSigNot, era: .afterGenesis,
+                    flags: [.derSignatures, .nullFail], context: true
+                )
+            }
+        }
+        // A structural violation (negative r) is still an encoding error.
+        #expect(throws: ScriptExecutionError.consensus(.invalidSignatureEncoding)) {
+            try run(
+                lock: "09" + "300602018102010101" + checkSigNot, era: .afterGenesis,
+                flags: [.derSignatures], context: true
+            )
+        }
+        #expect(ScriptMachine.isValidSignatureEncoding(hex("300602010102010001")))
+        #expect(!ScriptMachine.isValidSignatureEncoding(hex("3006020101020101")))
+        #expect(!ScriptMachine.isValidSignatureEncoding(hex("300602010002010101") + [0]))
+    }
+
+    @Test("ADD, SUB, MUL and 1ADD results are bounded by the number limit after Genesis")
+    func arithmeticResultBound() throws {
+        // node script_num.cpp:166, 196, 216: bint results longer than the
+        // number limit throw scriptnum_overflow_error.
+        let limit = 750_000
+        // 2^(8 * limit - 1) - 1: the largest positive number of `limit` bytes.
+        let largest = Array(repeating: UInt8(0xff), count: limit - 1) + [0x7f]
+        let push = [Opcode.pushData4.rawValue] + le32(limit) + largest
+        let drop1 = [Opcode.drop.rawValue, Opcode.one.rawValue]
+        let cases: [(String, [UInt8])] = [
+            ("1ADD", push + [Opcode.oneAdd.rawValue]),
+            ("ADD", push + [Opcode.dup.rawValue, Opcode.add.rawValue]),
+            ("SUB", push + [Opcode.dup.rawValue, Opcode.negate.rawValue, Opcode.sub.rawValue]),
+            ("MUL", push + [0x02, 0x00, 0x01, Opcode.mul.rawValue]),
+        ]
+        for (name, script) in cases {
+            #expect(throws: ScriptExecutionError.consensus(
+                .numberTooLarge(actual: limit + 1, maximum: limit)
+            ), "\(name)") {
+                try runBytes(lock: script + drop1, era: .afterGenesis)
+            }
+        }
+        // A result that stays within the limit is accepted.
+        #expect(try runBytes(
+            lock: push + [Opcode.oneSub.rawValue] + drop1, era: .afterGenesis
+        ).stack == [[1]])
+        // Before Genesis the node computes in int64: 0x7fffffff + 1 is five bytes.
+        #expect(try run(lock: "04ffffff7f8b05000000800087", era: .beforeGenesis).stack == [[1]])
+    }
+
+    @Test("an over-long Chronicle signature script code fails with a typed error")
+    func chronicleScriptCodeSizeIsTyped() throws {
+        // node:1472-1481 appends the locking script to the unlocking script
+        // code. Each script fits the limits; their sum does not.
+        let key = try PrivateKey(Array(repeating: 0, count: 31) + [11])
+        let lock = try Script(bytes: [Opcode.one.rawValue], maximumByteCount: 1)
+        var transaction = try simpleTransaction(version: 2, unlocking: [], lock: lock)
+        let digest = try transaction.forkIDSignatureHash(
+            inputIndex: 0,
+            scriptCode: lock,
+            limits: Self.limits
+        )
+        let element = try key.sign(digest: digest).derBytes + [0x41]
+        let publicKey = key.publicKey.compressedBytes
+        let unlockingBytes = [UInt8(element.count)] + element + [UInt8(publicKey.count)] + publicKey
+            + [Opcode.checkSig.rawValue]
+        transaction.inputs[0].unlockingScript = try Script(bytes: unlockingBytes, maximumByteCount: 200)
+        let size = unlockingBytes.count
+        func execute(scriptLimit: Int, transactionScriptLimit: UInt64) throws -> ScriptExecutionResult {
+            let standard = ScriptResourceLimits.standard
+            return try ScriptInterpreter.execute(
+                unlockingScript: transaction.inputs[0].unlockingScript,
+                lockingScript: lock,
+                configuration: ScriptExecutionConfiguration(
+                    era: .afterChronicle,
+                    flags: [.enableForkID],
+                    resourceLimits: ScriptResourceLimits(
+                        maximumScriptByteCount: scriptLimit,
+                        maximumPushDataByteCount: standard.maximumPushDataByteCount,
+                        maximumStackItemCount: standard.maximumStackItemCount,
+                        maximumStackMemoryByteCount: standard.maximumStackMemoryByteCount,
+                        maximumOperationCountPerScript: standard.maximumOperationCountPerScript,
+                        maximumConditionalDepth: standard.maximumConditionalDepth,
+                        maximumScriptNumberByteCount: standard.maximumScriptNumberByteCount
+                    )
+                ),
+                context: ScriptExecutionContext(
+                    transaction: transaction,
+                    inputIndex: 0,
+                    spentOutput: TransactionOutput(satoshis: 1_000, lockingScript: lock),
+                    transactionLimits: try TransactionLimits(
+                        maximumTransactionByteCount: 100_000,
+                        maximumInputCount: 10,
+                        maximumOutputCount: 10,
+                        maximumScriptByteCount: transactionScriptLimit
+                    )
+                )
+            )
+        }
+        // The script resource limit bounds each script, not the combined
+        // script code, so this no longer escapes as a raw ScriptError.
+        #expect(try execute(scriptLimit: size, transactionScriptLimit: 100_000).stack == [[], [1]])
+        // The transaction limit bounds the digest's script code.
+        #expect(throws: ScriptExecutionError.transaction(
+            .scriptTooLarge(actual: UInt64(size + 1), maximum: UInt64(size))
+        )) {
+            try execute(scriptLimit: 100_000, transactionScriptLimit: UInt64(size))
+        }
+    }
+
+    @Test("bip143SignatureHash only requires the ForkID bit and does not select the digest")
+    func bip143SignatureHashFlag() throws {
+        let key = try PrivateKey(Array(repeating: 0, count: 31) + [13])
+        let lock = try Script.payToPublicKey(key.publicKey, maximumByteCount: 100)
+        let base = try simpleTransaction(version: 2, unlocking: [], lock: lock)
+        func spend(hashType: UInt8, flags: ScriptVerificationFlags) throws -> ScriptExecutionResult {
+            var transaction = base
+            let digest = hashType & 0x40 != 0
+                ? try transaction.forkIDSignatureHash(inputIndex: 0, scriptCode: lock, limits: Self.limits)
+                : try transaction.legacySignatureHash(inputIndex: 0, scriptCode: lock, limits: Self.limits)
+            let element = try key.sign(digest: digest).derBytes + [hashType]
+            transaction.inputs[0].unlockingScript = try Script(
+                bytes: [UInt8(element.count)] + element,
+                maximumByteCount: 100
+            )
+            return try ScriptInterpreter.execute(
+                unlockingScript: transaction.inputs[0].unlockingScript,
+                lockingScript: lock,
+                configuration: ScriptExecutionConfiguration(
+                    era: .afterGenesis,
+                    flags: flags,
+                    resourceLimits: .standard
+                ),
+                context: ScriptExecutionContext(
+                    transaction: transaction,
+                    inputIndex: 0,
+                    spentOutput: TransactionOutput(satoshis: 1_000, lockingScript: lock),
+                    transactionLimits: Self.limits
+                )
+            )
+        }
+        #expect(try spend(hashType: 0x41, flags: [.enableForkID, .bip143SignatureHash]).stack == [[1]])
+        // Without enableForkID a ForkID signature is illegal (node:296-300),
+        // whatever this flag says.
+        #expect(throws: ScriptExecutionError.consensus(.illegalForkID(0x41))) {
+            try spend(hashType: 0x41, flags: [.strictEncoding, .bip143SignatureHash])
+        }
+        // With enableForkID a legacy signature fails either way; the flag only
+        // changes which failure is reported.
+        #expect(throws: ScriptExecutionError.consensus(.invalidSignatureHashType(0x01))) {
+            try spend(hashType: 0x01, flags: [.enableForkID, .bip143SignatureHash])
+        }
+        #expect(throws: ScriptExecutionError.consensus(.illegalForkID(0x01))) {
+            try spend(hashType: 0x01, flags: [.enableForkID])
+        }
+        #expect(try spend(hashType: 0x01, flags: []).stack == [[1]])
+    }
+
+    @Test("Chronicle relaxes CHECKMULTISIG NULLFAIL for version two")
+    func multiSignatureNullFailRelaxation() throws {
+        // node:1640-1649: dummy, a failing one-byte signature, 1-of-1, NOT.
+        let lock = "00" + "0101" + "51" + "21" + Self.generatorPublicKeyHex + "51" + "ae91"
+        #expect(throws: ScriptExecutionError.consensus(.nullFail)) {
+            try run(lock: lock, era: .afterChronicle, flags: [.nullFail], context: true, version: 1)
+        }
+        #expect(try run(
+            lock: lock, era: .afterChronicle, flags: [.nullFail], context: true, version: 2
+        ).stack == [[1]])
+    }
+
+    @Test("a CHECKMULTISIG in the unlocking script also commits to the locking script under Chronicle")
+    func chronicleUnlockingMultiSignatureScriptCode() throws {
+        // node:1568-1576: scriptCode += scriptPubKey when CHRONICLE is set.
+        let key = try PrivateKey(Array(repeating: 0, count: 31) + [15])
+        let lock = try Script(bytes: [Opcode.one.rawValue], maximumByteCount: 1)
+        let scriptCode = try Script(
+            bytes: [Opcode.checkMultiSigVerify.rawValue, Opcode.one.rawValue],
+            maximumByteCount: 2
+        )
+        var transaction = try simpleTransaction(version: 2, unlocking: [], lock: lock)
+        let digest = try transaction.forkIDSignatureHash(
+            inputIndex: 0,
+            scriptCode: scriptCode,
+            limits: Self.limits
+        )
+        let element = try key.sign(digest: digest).derBytes + [0x41]
+        let publicKey = key.publicKey.compressedBytes
+        transaction.inputs[0].unlockingScript = try Script(
+            bytes: [Opcode.zero.rawValue, UInt8(element.count)] + element + [Opcode.one.rawValue]
+                + [UInt8(publicKey.count)] + publicKey
+                + [Opcode.one.rawValue, Opcode.codeSeparator.rawValue, Opcode.checkMultiSigVerify.rawValue],
+            maximumByteCount: 200
+        )
+        let context = ScriptExecutionContext(
+            transaction: transaction,
+            inputIndex: 0,
+            spentOutput: TransactionOutput(satoshis: 1_000, lockingScript: lock),
+            transactionLimits: Self.limits
+        )
+        func execute(_ era: ScriptExecutionEra, _ flags: ScriptVerificationFlags) throws -> ScriptExecutionResult {
+            try ScriptInterpreter.execute(
+                unlockingScript: transaction.inputs[0].unlockingScript,
+                lockingScript: lock,
+                configuration: ScriptExecutionConfiguration(era: era, flags: flags, resourceLimits: .standard),
+                context: context
+            )
+        }
+        #expect(try execute(.afterChronicle, [.enableForkID]).stack == [[1]])
+        #expect(try execute(.afterGenesis, [.enableForkID, .chronicle]).stack == [[1]])
+        #expect(throws: ScriptExecutionError.consensus(.checkMultiSignatureVerifyFailed)) {
+            try execute(.afterGenesis, [.enableForkID])
+        }
+    }
+
+    @Test("an empty signature removes OP_0 instructions from the legacy script code")
+    func emptySignatureRemovesOpZero() {
+        // node:247-256: CScript(vchSig) of an empty signature is OP_0. The
+        // removal cannot change a verdict, because an empty signature never
+        // verifies, so it is pinned at the FindAndDelete level.
+        let pattern = ScriptMachine.pushEncoding([])
+        #expect(ScriptMachine.findAndDelete(hex("0051000100ac"), pattern: pattern) == hex("510100ac"))
+        #expect(ScriptMachine.findAndDelete(hex("51ac"), pattern: pattern) == hex("51ac"))
+    }
+
+    @Test("OP_LSHIFTNUM of zero accepts exactly the number limit in added bytes")
+    func zeroLeftShiftBoundary() throws {
+        // 256,000,007 / 8 == 32,000,000 bytes: allowed; 256,000,008 is not.
+        #expect(try run(lock: "00040740420fb60087", era: .afterChronicle).stack == [[1]])
+        #expect(throws: ScriptExecutionError.consensus(
+            .numberTooLarge(actual: 32_000_001, maximum: 32_000_000)
+        )) {
+            try run(lock: "00040840420fb67551", era: .afterChronicle)
+        }
+    }
+
+    private func runBytes(lock: [UInt8], era: ScriptExecutionEra) throws -> ScriptExecutionResult {
+        try ScriptInterpreter.execute(
+            unlockingScript: try Script(bytes: [], maximumByteCount: 1),
+            lockingScript: try Script(bytes: lock, maximumByteCount: lock.count),
+            configuration: ScriptExecutionConfiguration(era: era, resourceLimits: .standard),
+            context: nil
+        )
+    }
+}
+
+private func le32(_ value: Int) -> [UInt8] {
+    (0..<4).map { UInt8(truncatingIfNeeded: value >> (8 * $0)) }
+}

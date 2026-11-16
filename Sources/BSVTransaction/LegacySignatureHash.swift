@@ -80,21 +80,6 @@ public extension Transaction {
         return Self.digestLegacySignatureMaterial(material)
     }
 
-    package func legacySignatureHash(
-        inputIndex: Int,
-        rawHashType: UInt8,
-        scriptCode: Script,
-        limits: TransactionLimits
-    ) throws -> Hash256 {
-        let material = try legacySignatureMaterial(
-            inputIndex: inputIndex,
-            rawHashType: rawHashType,
-            scriptCode: scriptCode,
-            limits: limits
-        )
-        return Self.digestLegacySignatureMaterial(material)
-    }
-
     /// Returns the legacy digest over script-code bytes whose declared
     /// CompactSize length may differ from the bytes written.
     ///
