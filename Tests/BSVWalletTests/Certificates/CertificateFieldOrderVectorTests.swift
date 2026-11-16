@@ -46,6 +46,109 @@ struct CertificateFieldOrderVectorTests {
 
     static let asciiCertificatePreimageByteCount = 286
 
+    /// Signed by `Certificate.sign` with names whose `localeCompare` order
+    /// this SDK does not reproduce: `ß`, which ICU sorts as `ss`, Cyrillic
+    /// with `ё` and case pairs, and CJK. TypeScript order:
+    /// `name Name strasse straße strat stress ёлка ель имя Имя 名前 日本`.
+    /// Produced by `certwire-vec.ts` (TypeScriptAuthVectors.md).
+    static let exoticCertificateJSON =
+        #"{"type":"NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU=","serialNumber":"NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY=","subject":"025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc","certifier":"03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb","revocationOutpoint":"0000000000000000000000000000000000000000000000000000000000000000.0","fields":{"straße":"AQ==","strasse":"Ag==","strat":"Aw==","stress":"BA==","имя":"BQ==","Имя":"Bg==","ёлка":"Bw==","ель":"CA==","日本":"CQ==","名前":"Cg==","name":"Cw==","Name":"DA=="},"signature":"30440220334e585ca445bbfef97538a8a2a8c7b7ef7618e6cc248df7473704cd54b26b820220196f71271a0830f0762ec7385fb2cabde5127b1592d14af46149e3460223a6fc"}"#
+
+    static let exoticCertificateBinary =
+        "353535353535353535353535353535353535353535353535353535353535353536363636363636363636363636363636"
+        + "36363636363636363636363636363636025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9"
+        + "bc03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb0000000000000000000000000000"
+        + "000000000000000000000000000000000000000c046e616d650443773d3d044e616d650444413d3d0773747261737365"
+        + "0441673d3d0773747261c39f650441513d3d0573747261740441773d3d067374726573730442413d3d08d191d0bbd0ba"
+        + "d0b00442773d3d06d0b5d0bbd18c0443413d3d06d0b8d0bcd18f0442513d3d06d098d0bcd18f0442673d3d06e5908de5"
+        + "898d0443673d3d06e697a5e69cac0443513d3d30440220334e585ca445bbfef97538a8a2a8c7b7ef7618e6cc248df747"
+        + "3704cd54b26b820220196f71271a0830f0762ec7385fb2cabde5127b1592d14af46149e3460223a6fc"
+
+    /// Signed by `Certificate.sign` with the host collation Node 22 resolves
+    /// under `LC_ALL=da_DK.UTF-8` (`da-DK`, capitals first), which sorts
+    /// `email Email id ID aa z` as `Email email ID id z aa`. Produced by
+    /// `certwire-vec.ts`.
+    static let danishCertificateJSON =
+        #"{"type":"Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc=","serialNumber":"ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg=","subject":"025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc","certifier":"03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb","revocationOutpoint":"0000000000000000000000000000000000000000000000000000000000000000.0","fields":{"email":"AQ==","Email":"Ag==","id":"Aw==","ID":"BA==","aa":"BQ==","z":"Bg=="},"signature":"3045022100e2642ed325b09615e6a8a0839625d21ba1a2fafaeff16391478e0c2b70c2824902201ad32b894373467af183e6000955e1eadd6ef7fb38a5f04117292054a8e8e03c"}"#
+
+    static let danishCertificateBinary =
+        "373737373737373737373737373737373737373737373737373737373737373738383838383838383838383838383838"
+        + "38383838383838383838383838383838025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9"
+        + "bc03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb0000000000000000000000000000"
+        + "000000000000000000000000000000000000000605456d61696c0441673d3d05656d61696c0441513d3d024944044241"
+        + "3d3d0269640441773d3d017a0442673d3d0261610442513d3d3045022100e2642ed325b09615e6a8a0839625d21ba1a2"
+        + "fafaeff16391478e0c2b70c2824902201ad32b894373467af183e6000955e1eadd6ef7fb38a5f04117292054a8e8e03c"
+
+    @Test("a TS certificate with names outside the reproduced order verifies from binary by received order")
+    func exoticTypeScriptCertificate() async throws {
+        let decoded = try Certificate(binary: try hex(Self.exoticCertificateBinary))
+        #expect(decoded.receivedFieldOrder?.map(\.value) == [
+            "name", "Name", "strasse", "straße", "strat", "stress", "ёлка", "ель", "имя", "Имя",
+            "名前", "日本",
+        ])
+        // Neither order this SDK computes is the one TypeScript signed.
+        let unsigned = try decoded.binary(includingSignature: false, limits: .standard, fieldOrder: .received)
+        #expect(unsigned != (try decoded.binary(includingSignature: false)))
+        #expect(unsigned != (try decoded.binary(
+            includingSignature: false, limits: .standard, fieldOrder: .utf8Bytes)))
+        #expect(Hex.encode(unsigned + decoded.signature!.derBytes) == Self.exoticCertificateBinary)
+        #expect(try await decoded.verifySignature())
+
+        // Read from JSON, the certificate is equal but has no received order.
+        let fromJSON = try Certificate(json: Array(Self.exoticCertificateJSON.utf8))
+        #expect(fromJSON == decoded)
+        #expect(fromJSON.receivedFieldOrder == nil)
+        #expect(try await fromJSON.verifySignature() == false)
+
+        // The received order carries through a signature replacement, and
+        // binds the values: a changed value fails in every order.
+        let resignable = try decoded.withoutSignature()
+        #expect(try await resignable.replacingSignature(decoded.signature!).verifySignature())
+        var fields = decoded.fields
+        fields[try CertificateFieldName("straße")] = try CertificateCiphertext([0xFF])
+        var tampered = try Certificate(
+            type: decoded.type, serialNumber: decoded.serialNumber, subject: decoded.subject,
+            certifier: decoded.certifier, revocationOutpoint: decoded.revocationOutpoint,
+            fields: fields, signature: decoded.signature)
+        tampered.receivedFieldOrder = decoded.receivedFieldOrder
+        #expect(try await tampered.verifySignature() == false)
+    }
+
+    @Test("a TS certificate signed under a Danish host collation verifies from binary")
+    func danishTypeScriptCertificate() async throws {
+        let decoded = try Certificate(binary: try hex(Self.danishCertificateBinary))
+        #expect(decoded.receivedFieldOrder?.map(\.value) == ["Email", "email", "ID", "id", "z", "aa"])
+        #expect(try await decoded.verifySignature())
+        let fromJSON = try Certificate(json: Array(Self.danishCertificateJSON.utf8))
+        #expect(fromJSON == decoded)
+        #expect(try await fromJSON.verifySignature() == false)
+    }
+
+    @Test("a certificate with no field or one is signed whatever the name")
+    func singleFieldAnyName() async throws {
+        for fields in [
+            [:],
+            [try CertificateFieldName("日本"): try CertificateCiphertext([1])],
+            [try CertificateFieldName("tab\tname"): try CertificateCiphertext([2])],
+        ] as [[CertificateFieldName: CertificateCiphertext]] {
+            let unsigned = try Certificate(
+                type: try CertificateTypeID([UInt8](repeating: 0x39, count: 32)),
+                serialNumber: try CertificateSerialNumber([UInt8](repeating: 0x3A, count: 32)),
+                subject: try key(7).publicKey,
+                certifier: try key(11).publicKey,
+                revocationOutpoint: Outpoint(
+                    transactionID: TransactionID(
+                        exactDigestBytesGuaranteed: [UInt8](repeating: 0, count: 32)),
+                    outputIndex: 0),
+                fields: fields)
+            let signed = try await unsigned.signed(using: ProtoWallet(rootKey: key(11)))
+            #expect(try await signed.verifySignature())
+            let decoded = try Certificate(binary: try signed.binary(includingSignature: true))
+            #expect(decoded == signed)
+            #expect(try await decoded.verifySignature())
+        }
+    }
+
     @Test("a TS certificate with accented and mixed-case names round-trips byte for byte and verifies")
     func accentedTypeScriptCertificate() async throws {
         let certificate = try Certificate(json: Array(Self.accentedCertificateJSON.utf8))
@@ -138,10 +241,7 @@ struct CertificateFieldOrderVectorTests {
     }
 
     private func unsignedCopy(of certificate: Certificate) throws -> Certificate {
-        try Certificate(
-            type: certificate.type, serialNumber: certificate.serialNumber,
-            subject: certificate.subject, certifier: certificate.certifier,
-            revocationOutpoint: certificate.revocationOutpoint, fields: certificate.fields)
+        try certificate.withoutSignature(keepingReceivedOrder: false)
     }
 
     private func hex(_ text: String) throws -> [UInt8] {
@@ -152,5 +252,17 @@ struct CertificateFieldOrderVectorTests {
         var bytes = [UInt8](repeating: 0, count: 32)
         bytes[31] = scalar
         return try PrivateKey(bytes)
+    }
+}
+
+extension Certificate {
+    /// The same certificate with no signature, with or without the order
+    /// its fields arrived in.
+    fileprivate func withoutSignature(keepingReceivedOrder: Bool = true) throws -> Certificate {
+        var copy = try Certificate(
+            type: type, serialNumber: serialNumber, subject: subject, certifier: certifier,
+            revocationOutpoint: revocationOutpoint, fields: fields)
+        if keepingReceivedOrder { copy.receivedFieldOrder = receivedFieldOrder }
+        return copy
     }
 }

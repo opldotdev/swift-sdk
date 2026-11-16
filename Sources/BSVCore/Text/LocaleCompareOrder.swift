@@ -1,7 +1,21 @@
-/// The order `@bsv/sdk` sorts signed names in: JavaScript
+/// The order `@bsv/sdk` sorts signed names in on an `en-US` host: JavaScript
 /// `String.prototype.localeCompare` with no arguments, which Node and Bun
-/// implement with the ICU root collation (`en-US`, tertiary strength,
-/// punctuation not ignored).
+/// implement with ICU at tertiary strength, punctuation not ignored, in the
+/// host's default locale. For `en-US`, and any other locale without a
+/// collation tailoring, that is the ICU root collation, which this order
+/// reproduces.
+///
+/// The host locale matters. Bun always resolves `en-US`; Node takes the
+/// default from `LC_ALL` or `LANG`, and `@bsv/sdk` itself calls the result a
+/// host-locale order (`auth/certificates/Certificate.ts:287-290`). Under a
+/// tailored locale, names sort differently even in plain ASCII: with
+/// `LC_ALL=da_DK.UTF-8`, Node 22 sorts `email Email id ID aa z` as
+/// `Email email ID id z aa` (capitals first, `aa` after `z`), and with
+/// `cs_CZ`, `ch` sorts after `h`. Danish, Norwegian, Czech, Slovak,
+/// Lithuanian, Estonian, Welsh and Azerbaijani tailor ASCII; Swedish, Polish,
+/// Spanish, Turkish, Hungarian and Canadian French also tailor accented
+/// letters. A name signed by TypeScript on such a host is in an order this
+/// one does not give, and that another TypeScript host may not give either.
 ///
 /// TypeScript uses it for certificate field names in the BRC-52 binary form
 /// and its signing preimage (`auth/certificates/Certificate.ts:290`) and for

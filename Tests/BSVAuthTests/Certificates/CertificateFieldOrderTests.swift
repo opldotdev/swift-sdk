@@ -69,6 +69,17 @@ struct CertificateFieldOrderTests {
         #expect(log.lines.contains { $0.contains("Certificate issue: a field name of 4 bytes") })
     }
 
+    @Test("a single field is issued whatever its name")
+    func singleFieldIssue() async throws {
+        let master = try await CertificateEngine.issue(
+            type: try CertificateTypeID([UInt8](repeating: 0x25, count: 32)),
+            subject: .publicKey(try key(7).publicKey),
+            plaintextFields: [try CertificateFieldName("øre"): "krone"],
+            using: ProtoWallet(rootKey: try key(11)))
+        #expect(master.certificate.fields.keys.map(\.value) == ["øre"])
+        #expect(try await master.certificate.verifySignature())
+    }
+
     @Test("certificates signed in byte order still verify through the engine")
     func byteOrderSignatureStillVerifies() async throws {
         let unsigned = try Certificate(

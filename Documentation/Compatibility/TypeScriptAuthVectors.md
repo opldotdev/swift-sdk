@@ -29,7 +29,12 @@ Node 22.23.4 (ICU, locale `en-US`). Both runtimes printed the same output.
 `IdentityClientTests.revealsTypeScriptCertificate`: one signed by
 `Certificate.sign` with 30 field names that `localeCompare` and byte order
 sort differently by case, accents, underscores and digits, and one with
-ASCII names only.
+ASCII names only. `certwire-vec.ts` prints two more certificates signed by
+`Certificate.sign` whose order Swift does not compute and verifies only by the
+order the fields arrive in: one with `ß`, Cyrillic and CJK names, and one with
+ASCII names signed under the collation Node 22 resolves for
+`LC_ALL=da_DK.UTF-8` (`da-DK`, capitals first), installed as the host default
+because Bun always resolves `en-US`.
 
 The vectors cover:
 
@@ -77,6 +82,7 @@ way, with the SDK import removed.
 ```sh
 bun run collate-vec.ts
 bun run certorder-vec.ts > certorder.json
+bun run certwire-vec.ts > certwire.json
 ```
 
 ## Checking Swift messages with TypeScript
@@ -761,6 +767,64 @@ await asciiCert.sign(new ProtoWallet(certifier))
 out.asciiCertBinary = Utils.toHex(asciiCert.toBinary(true))
 out.asciiCertPreimage = Utils.toHex(asciiCert.toBinary(false))
 out.asciiCertVerifies = await asciiCert.verify()
+out.runtime = [process.versions.bun ?? null, process.versions.node, Intl.Collator().resolvedOptions().locale]
+console.log(JSON.stringify(out, null, 1))
+```
+
+## `certwire-vec.ts`
+
+```ts
+// Certificates signed by @bsv/sdk 4.1.1 Certificate.sign whose field order
+// Swift's localeCompare emulation does not reproduce: names outside printable
+// ASCII and accented Latin (ß, Cyrillic, CJK), and plain ASCII names signed
+// on a host whose default collation is Danish.
+const { PrivateKey, ProtoWallet, Certificate, Utils } = await import(`${process.env.TS_SDK}/mod.ts`)
+
+const certifier = new PrivateKey(11)
+const subject = new PrivateKey(7)
+const outpoint = '0000000000000000000000000000000000000000000000000000000000000000.0'
+
+async function signed(typeByte: number, serialByte: number, names: string[]) {
+  const fields: Record<string, string> = {}
+  names.forEach((n, i) => { fields[n] = Utils.toBase64([i + 1]) })
+  const cert = new Certificate(
+    Utils.toBase64(new Array(32).fill(typeByte)),
+    Utils.toBase64(new Array(32).fill(serialByte)),
+    subject.toPublicKey().toString(),
+    certifier.toPublicKey().toString(),
+    outpoint,
+    fields
+  )
+  await cert.sign(new ProtoWallet(certifier))
+  return {
+    names,
+    sorted: [...names].sort((a, b) => a.localeCompare(b)),
+    json: JSON.stringify({
+      type: cert.type, serialNumber: cert.serialNumber, subject: cert.subject, certifier: cert.certifier,
+      revocationOutpoint: cert.revocationOutpoint, fields: cert.fields, signature: cert.signature
+    }),
+    binary: Utils.toHex(cert.toBinary(true)),
+    verifies: await cert.verify()
+  }
+}
+
+const out: Record<string, unknown> = {}
+out.exotic = await signed(0x35, 0x36, [
+  'straße', 'strasse', 'strat', 'stress', 'имя', 'Имя', 'ёлка', 'ель', '日本', '名前', 'name', 'Name'
+])
+
+// A Danish host: Node takes the default collation from LC_ALL/LANG, and under
+// LC_ALL=da_DK.UTF-8 Node 22 resolves { locale: 'da-DK', caseFirst: 'upper' }.
+// Bun always resolves en-US, so that collator is installed here as the host
+// default; the order it gives is checked against Node's below.
+const native = String.prototype.localeCompare
+const danish = new Intl.Collator('da-DK', { caseFirst: 'upper' })
+String.prototype.localeCompare = function (that: string) { return danish.compare(String(this), that) }
+out.danish = await signed(0x37, 0x38, ['email', 'Email', 'id', 'ID', 'aa', 'z'])
+String.prototype.localeCompare = native
+const nodeDanishOrder = ['Email', 'email', 'ID', 'id', 'z', 'aa']
+if ((out.danish as any).sorted.join() !== nodeDanishOrder.join()) throw new Error('not the Node da_DK order')
+out.danishRootOrder = [...(out.danish as any).names].sort((a: string, b: string) => a.localeCompare(b))
 out.runtime = [process.versions.bun ?? null, process.versions.node, Intl.Collator().resolvedOptions().locale]
 console.log(JSON.stringify(out, null, 1))
 ```

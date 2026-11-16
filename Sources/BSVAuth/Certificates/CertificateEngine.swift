@@ -12,11 +12,12 @@ public enum CertificateEngine {
     /// rejected rather than silently being treated as self, a stricter Swift
     /// deviation from the pinned Go helper's ambiguous fallback.
     ///
-    /// The certificate is signed with its fields in `localeCompare` order, as
-    /// `@bsv/sdk` signs them (`auth/certificates/Certificate.ts:290`). Field
+    /// The certificate is signed with its fields in `localeCompare` order on an
+    /// `en-US` host, as `@bsv/sdk` signs them
+    /// (`auth/certificates/Certificate.ts:290`). With two fields or more, field
     /// names must use only printable ASCII and accented Latin letters; another
     /// name throws `CertificateFieldNameError.unsupportedCharacter` before any
-    /// field is encrypted (COMP-041).
+    /// field is encrypted. A single field may have any name (COMP-041).
     public static func issue(
         type: CertificateTypeID,
         serialNumber suppliedSerialNumber: CertificateSerialNumber? = nil,

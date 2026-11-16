@@ -1,5 +1,6 @@
 import BSVAuth
 import BSVCore
+import BSVCrypto
 import BSVKeys
 import BSVNetwork
 import BSVOverlay
@@ -79,7 +80,10 @@ struct BSVLogSinkTests {
             revocationOutpoint: Outpoint(
                 transactionID: TransactionID(exactDigestBytesGuaranteed: [UInt8](repeating: 0, count: 32)),
                 outputIndex: 0),
-            fields: [try CertificateFieldName("日本"): try CertificateCiphertext([1])])
+            fields: [
+                try CertificateFieldName("日本"): try CertificateCiphertext([1]),
+                try CertificateFieldName("a"): try CertificateCiphertext([2]),
+            ])
         await #expect(throws: CertificateFieldNameError.unsupportedCharacter) {
             try await unsigned.signed(using: ProtoWallet(rootKey: certifier))
         }
@@ -87,6 +91,79 @@ struct BSVLogSinkTests {
             $0.category == "BSVWallet"
                 && $0.message.hasPrefix("Certificate signing: a field name of 6 bytes")
         })
+    }
+
+    @Test("certificate verification logs a match by byte or received order and an unexplained failure")
+    func certificateVerificationLines() async throws {
+        let lines = LogLines(marker: "Certificate verification:")
+        BSVLog.setHandler(lines.record)
+        defer { BSVLog.setHandler(nil) }
+        let wallet = try ProtoWallet(rootKey: certifierKey())
+
+        // Signed over UTF-8 byte order, as the Go SDK signs.
+        let goOrder = try unsignedCertificate(names: ["Zip", "age"], serial: 0x50)
+        let goSigned = try goOrder.replacingSignature(try await sign(
+            goOrder.binary(includingSignature: false, limits: .standard, fieldOrder: .utf8Bytes),
+            for: goOrder, with: wallet))
+        #expect(try await goSigned.verifySignature())
+
+        // Signed over the order the fields arrived in, which is neither.
+        var received = try unsignedCertificate(names: ["Zip", "age", "_x"], serial: 0x51)
+        received.receivedFieldOrder = try ["age", "_x", "Zip"].map { try CertificateFieldName($0) }
+        let receivedSigned = try received.replacingSignature(try await sign(
+            received.binary(includingSignature: false, limits: .standard, fieldOrder: .received),
+            for: received, with: wallet))
+        #expect(try await receivedSigned.verifySignature())
+
+        // A name outside the reproduced order, and a signature no order matches.
+        let exotic = try unsignedCertificate(names: ["日本", "a"], serial: 0x52)
+        let wrong = try exotic.replacingSignature(try await sign([1, 2, 3], for: exotic, with: wallet))
+        #expect(try await wrong.verifySignature() == false)
+
+        let messages = lines.entries.map(\.message)
+        #expect(messages.contains(
+            "Certificate verification: the signature covers its 2 fields in UTF-8 byte order, "
+                + "as the Go SDK signs, not in localeCompare order"))
+        #expect(messages.contains(
+            "Certificate verification: the signature covers its 3 fields in the order they were "
+                + "received, which is neither localeCompare order on an en-US host nor UTF-8 byte order"))
+        #expect(messages.contains { $0.hasPrefix(
+            "Certificate verification: the signature did not verify; a field name of 6 bytes") })
+        #expect(lines.entries.allSatisfy { $0.category == "BSVWallet" && !$0.hasPrivateDetail })
+    }
+
+    private func certifierKey() throws -> PrivateKey {
+        var key = [UInt8](repeating: 0, count: 32)
+        key[31] = 11
+        return try PrivateKey(key)
+    }
+
+    private func unsignedCertificate(names: [String], serial: UInt8) throws -> Certificate {
+        let certifier = try certifierKey().publicKey
+        var fields: [CertificateFieldName: CertificateCiphertext] = [:]
+        for (index, name) in names.enumerated() {
+            fields[try CertificateFieldName(name)] = try CertificateCiphertext([UInt8(index + 1)])
+        }
+        return try Certificate(
+            type: try CertificateTypeID([UInt8](repeating: 0x4F, count: 32)),
+            serialNumber: try CertificateSerialNumber([UInt8](repeating: serial, count: 32)),
+            subject: certifier,
+            certifier: certifier,
+            revocationOutpoint: Outpoint(
+                transactionID: TransactionID(exactDigestBytesGuaranteed: [UInt8](repeating: 0, count: 32)),
+                outputIndex: 0),
+            fields: fields)
+    }
+
+    private func sign(
+        _ preimage: [UInt8], for certificate: Certificate, with wallet: ProtoWallet
+    ) async throws -> ECDSASignature {
+        try await wallet.createSignature(.init(
+            protocolID: try CertificateProtocols.signature,
+            keyID: try WalletKeyID(certificate.signatureKeyID),
+            counterparty: .anyone,
+            payload: .digest(BSVHashing.sha256(preimage))
+        )).signature
     }
 }
 
