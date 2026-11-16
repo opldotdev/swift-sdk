@@ -372,11 +372,12 @@ struct BRC104HTTPFramingTests {
     func defaultPayloadBoundary() throws {
         let limit = AuthLimits.defaultPayloadBytes
         let requestID = [UInt8](repeating: 9, count: 32)
-        let empty = try BRC104Codec.encode(
-            BRC104Response(requestID: requestID, status: 200, body: [])
+        let oneByte = try BRC104Codec.encode(
+            BRC104Response(requestID: requestID, status: 200, body: [1])
         )
-        // The empty body's one-byte length prefix is five bytes for a body this large.
-        let overhead = empty.count - 1 + 5
+        // A one-byte body has a one-byte length prefix, which is five bytes for a
+        // body this large. (An empty body is written as -1, nine bytes.)
+        let overhead = oneByte.count - 2 + 5
         let largest = try BRC104Response(
             requestID: requestID, status: 200,
             body: [UInt8](repeating: 1, count: limit - overhead)
