@@ -181,7 +181,7 @@ print(script.isPayToPublicKeyHash)
 
 - Parses raw opcodes and PUSHDATA operations.
 - Reads and writes bounded BIP-276 text.
-- Reads and writes BRC-106 ASM and compact SASM.
+- Reads and writes @bsv/sdk-compatible ASM by default, plus BRC-106 ASM, compact SASM and Go SDK ASM.
 - Builds P2PK, P2PKH, P2SH, and BRC-18 scripts.
 - Runs Script with explicit limits and network-era rules.
 - Supports CHECKSIG, CHECKMULTISIG, CLTV, CSV, and Chronicle rules.

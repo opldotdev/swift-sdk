@@ -52,6 +52,24 @@ public struct Script: Hashable, Sendable {
 
     /// Parses every operation and enforces a separate ceiling for each pushed value.
     public func operations(maximumPushDataByteCount: Int) throws -> [ScriptOperation] {
+        try operations(
+            maximumPushDataByteCount: maximumPushDataByteCount,
+            lenientAfterTopLevelReturn: false
+        )
+    }
+
+    /// Parses operations, optionally reading the bytes after a top-level
+    /// OP_RETURN the way @bsv/sdk does.
+    ///
+    /// @bsv/sdk folds everything after an OP_RETURN that is not inside an
+    /// OP_IF/OP_NOTIF/OP_VERIF/OP_VERNOTIF block into one chunk, so those
+    /// bytes need not be well-formed pushes. When `lenientAfterTopLevelReturn`
+    /// is set, a truncated push there yields the bytes that remain instead
+    /// of an error. Everything before that OP_RETURN is parsed strictly.
+    func operations(
+        maximumPushDataByteCount: Int,
+        lenientAfterTopLevelReturn: Bool
+    ) throws -> [ScriptOperation] {
         guard maximumPushDataByteCount >= 0 else {
             throw ScriptError.invalidMaximumPushDataByteCount(maximumPushDataByteCount)
         }
@@ -59,78 +77,98 @@ public struct Script: Hashable, Sendable {
         var result: [ScriptOperation] = []
         result.reserveCapacity(storage.count)
         var offset = 0
+        var conditionalDepth = 0
+        var lenient = false
         while offset < storage.count {
-            let opcodeOffset = offset
-            let opcode = Opcode(rawValue: storage[offset])
-            offset += 1
-
-            let length: Int
-            switch opcode.rawValue {
-            case 0x01...0x4b:
-                length = Int(opcode.rawValue)
-            case 0x4c:
-                guard storage.count - offset >= 1 else {
-                    throw ScriptError.truncatedPushDataLength(
-                        offset: opcodeOffset,
-                        expected: 1,
-                        remaining: storage.count - offset
-                    )
-                }
-                length = Int(storage[offset])
-                offset += 1
-            case 0x4d:
-                guard storage.count - offset >= 2 else {
-                    throw ScriptError.truncatedPushDataLength(
-                        offset: opcodeOffset,
-                        expected: 2,
-                        remaining: storage.count - offset
-                    )
-                }
-                length = Int(storage[offset]) | (Int(storage[offset + 1]) << 8)
-                offset += 2
-            case 0x4e:
-                guard storage.count - offset >= 4 else {
-                    throw ScriptError.truncatedPushDataLength(
-                        offset: opcodeOffset,
-                        expected: 4,
-                        remaining: storage.count - offset
-                    )
-                }
-                let declared = UInt32(storage[offset])
-                    | (UInt32(storage[offset + 1]) << 8)
-                    | (UInt32(storage[offset + 2]) << 16)
-                    | (UInt32(storage[offset + 3]) << 24)
-                guard UInt64(declared) <= UInt64(Int.max) else {
-                    throw ScriptError.pushDataLengthNotRepresentable(declared)
-                }
-                length = Int(declared)
-                offset += 4
+            let operation = try readOperation(
+                at: &offset,
+                maximumPushDataByteCount: maximumPushDataByteCount,
+                lenient: lenient
+            )
+            result.append(operation)
+            guard lenientAfterTopLevelReturn, !lenient else { continue }
+            switch operation.opcode {
+            case .if, .notIf, .verIf, .verNotIf:
+                conditionalDepth += 1
+            case .endIf:
+                conditionalDepth -= 1
+            case .return where conditionalDepth == 0:
+                lenient = true
             default:
-                result.append(.opcode(opcode))
-                continue
+                break
             }
-
-            guard length <= maximumPushDataByteCount else {
-                throw ScriptError.pushDataTooLarge(
-                    actual: length,
-                    maximum: maximumPushDataByteCount
-                )
-            }
-            let remaining = storage.count - offset
-            guard length <= remaining else {
-                throw ScriptError.truncatedPushData(
-                    offset: opcodeOffset,
-                    expected: length,
-                    remaining: remaining
-                )
-            }
-            result.append(.push(
-                opcode: opcode,
-                data: Array(storage[offset..<(offset + length)])
-            ))
-            offset += length
         }
         return result
+    }
+
+    private func readOperation(
+        at offset: inout Int,
+        maximumPushDataByteCount: Int,
+        lenient: Bool
+    ) throws -> ScriptOperation {
+        let opcodeOffset = offset
+        let opcode = Opcode(rawValue: storage[offset])
+        offset += 1
+
+        let length: Int
+        let lengthByteCount: Int
+        switch opcode.rawValue {
+        case 0x01...0x4b:
+            length = Int(opcode.rawValue)
+            lengthByteCount = 0
+        case 0x4c:
+            lengthByteCount = 1
+            length = Int(storage[offset..<min(offset + 1, storage.count)].first ?? 0)
+        case 0x4d:
+            lengthByteCount = 2
+            length = storage[offset..<min(offset + 2, storage.count)]
+                .reversed()
+                .reduce(0) { ($0 << 8) | Int($1) }
+        case 0x4e:
+            lengthByteCount = 4
+            let declared = storage[offset..<min(offset + 4, storage.count)]
+                .reversed()
+                .reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+            guard UInt64(declared) <= UInt64(Int.max) else {
+                throw ScriptError.pushDataLengthNotRepresentable(declared)
+            }
+            length = Int(declared)
+        default:
+            return .opcode(opcode)
+        }
+
+        let lengthBytesRemaining = storage.count - offset
+        if lengthBytesRemaining < lengthByteCount {
+            guard lenient else {
+                throw ScriptError.truncatedPushDataLength(
+                    offset: opcodeOffset,
+                    expected: lengthByteCount,
+                    remaining: lengthBytesRemaining
+                )
+            }
+            offset = storage.count
+            return .push(opcode: opcode, data: [])
+        }
+        offset += lengthByteCount
+
+        let remaining = storage.count - offset
+        let takenLength = lenient ? min(length, remaining) : length
+        guard takenLength <= maximumPushDataByteCount else {
+            throw ScriptError.pushDataTooLarge(
+                actual: takenLength,
+                maximum: maximumPushDataByteCount
+            )
+        }
+        guard takenLength <= remaining else {
+            throw ScriptError.truncatedPushData(
+                offset: opcodeOffset,
+                expected: length,
+                remaining: remaining
+            )
+        }
+        let data = Array(storage[offset..<(offset + takenLength)])
+        offset += takenLength
+        return .push(opcode: opcode, data: data)
     }
 
     /// Appends a non-push opcode while preserving the script size ceiling.
@@ -160,6 +198,46 @@ public struct Script: Hashable, Sendable {
                 actual: Int.max,
                 maximum: maximumScriptByteCount
             )
+        }
+        try requireAppendCapacity(additional, maximum: maximumScriptByteCount)
+        storage.append(contentsOf: prefix)
+        storage.append(contentsOf: data)
+    }
+
+    /// Appends data behind a caller-chosen push opcode, which may be a
+    /// non-minimal OP_PUSHDATA1/2/4 form.
+    mutating func appendPushData(
+        _ data: [UInt8],
+        using opcode: Opcode,
+        maximumScriptByteCount: Int
+    ) throws {
+        let prefix: [UInt8]
+        let count = data.count
+        switch opcode {
+        case .pushData1 where count <= Int(UInt8.max):
+            prefix = [opcode.rawValue, UInt8(count)]
+        case .pushData2 where count <= Int(UInt16.max):
+            prefix = [
+                opcode.rawValue,
+                UInt8(truncatingIfNeeded: count),
+                UInt8(truncatingIfNeeded: count >> 8),
+            ]
+        case .pushData4 where UInt64(count) <= UInt64(UInt32.max):
+            prefix = [
+                opcode.rawValue,
+                UInt8(truncatingIfNeeded: count),
+                UInt8(truncatingIfNeeded: count >> 8),
+                UInt8(truncatingIfNeeded: count >> 16),
+                UInt8(truncatingIfNeeded: count >> 24),
+            ]
+        case _ where opcode.directPushByteCount == count:
+            prefix = [opcode.rawValue]
+        default:
+            throw ScriptError.dataTooLargeForPush(actual: count)
+        }
+        let (additional, overflow) = prefix.count.addingReportingOverflow(count)
+        guard !overflow else {
+            throw ScriptError.scriptTooLarge(actual: Int.max, maximum: maximumScriptByteCount)
         }
         try requireAppendCapacity(additional, maximum: maximumScriptByteCount)
         storage.append(contentsOf: prefix)
