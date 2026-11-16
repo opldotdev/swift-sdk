@@ -263,10 +263,20 @@ final class WalletWireGoOracleTests: XCTestCase {
             bytes: omittedSeekBytes,
             sequence: &sequence
         )
-        XCTAssertEqual(goOmittedSeekBytes, Array(omittedSeekBytes.dropLast()) + [0])
+        // COMP-045: Swift writes an omitted `privileged` as -1, as `@bsv/sdk`
+        // 4.1.1 does (WalletWireTransceiver.ts `#encodePrivilegedParams`
+        // writes a byte only for a boolean). Pinned Go stores both flags as
+        // Bool and writes 00 for each.
+        var goOmittedSeekExpected = omittedSeekBytes
+        goOmittedSeekExpected[goOmittedSeekExpected.count - 4] = 0
+        goOmittedSeekExpected[goOmittedSeekExpected.count - 1] = 0
+        XCTAssertEqual(omittedSeekBytes.suffix(4), [0xFF, 0xFF, 0xFF, 0xFF])
+        XCTAssertEqual(goOmittedSeekBytes, goOmittedSeekExpected)
 
         // Pinned Go preserves its optional-Boolean absence sentinel. Swift
-        // accepts that inbound form as false and emits the canonical 00 form.
+        // reads it as false and, like `@bsv/sdk` 4.1.1, writes false as absent
+        // (WalletWireTransceiver.ts:867 and :1225 write forSelf only for a
+        // boolean; COMP-045). An explicit privileged 00 likewise comes back as -1.
         let absentGetPublicKey = [UInt8](arrayLiteral: WalletCall.getPublicKey.rawValue, 0, 0)
             + keyParameters
             + [0xFF, 0]
@@ -285,7 +295,7 @@ final class WalletWireGoOracleTests: XCTestCase {
         }
         XCTAssertFalse(forSelf)
         var canonicalGetPublicKey = absentGetPublicKey
-        canonicalGetPublicKey[2 + 1 + keyParameters.count] = 0
+        canonicalGetPublicKey[3 + keyParameters.count - 2] = 0xFF
         XCTAssertEqual(
             try WalletWireCodec.encodeKeyQueryRequest(
                 decodedGetPublicKey.request,
@@ -322,7 +332,7 @@ final class WalletWireGoOracleTests: XCTestCase {
         }
         XCTAssertFalse(verifySignature.forSelf)
         var canonicalVerifySignature = absentVerifySignature
-        canonicalVerifySignature[2 + keyParameters.count] = 0
+        canonicalVerifySignature[2 + keyParameters.count - 2] = 0xFF
         XCTAssertEqual(
             try WalletWireCodec.encodeKeyQueryRequest(
                 decodedVerifySignature.request,

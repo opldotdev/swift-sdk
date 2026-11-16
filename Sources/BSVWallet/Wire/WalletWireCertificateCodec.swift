@@ -561,19 +561,16 @@ private func walletWireReadCertificateFields(
     )
     var result: [CertificateFieldName: CertificateCiphertext] = [:]
     result.reserveCapacity(min(count, reader.remainingCount / 2))
-    var prior: CertificateFieldName?
     for _ in 0..<count {
         let nameText = try reader.readString(
             maximum: certificateLimits.maximumFieldNameUTF8ByteCount,
             kind: "certificate field name"
         )
         let name = try CertificateFieldName(nameText, limits: certificateLimits)
-        if let prior, !(prior < name) {
-            throw WalletWireError.nonRoundTrippableValue(
-                kind: "unsorted or duplicate certificate fields"
-            )
+        // Any order is accepted, as @bsv/sdk writes insertion order; names stay unique.
+        guard result[name] == nil else {
+            throw WalletWireError.nonRoundTrippableValue(kind: "duplicate certificate fields")
         }
-        prior = name
         let base64 = try reader.readString(
             maximum: certificateLimits.maximumFieldCiphertextBase64UTF8ByteCount,
             kind: "certificate field value"

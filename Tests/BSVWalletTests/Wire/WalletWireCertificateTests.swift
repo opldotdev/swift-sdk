@@ -138,7 +138,10 @@ final class WalletWireCertificateTests: XCTestCase {
                     WalletCertificateResult(
                         certificate: fixture.certificate,
                         keyring: fixture.keyring,
-                        verifier: [7, 8]
+                        // The ABI carries the verifier as hex text; the wire
+                        // carries the 33 key bytes (WalletWireProcessor.ts:2144
+                        // writes `toArray(cert.verifier, 'hex')`).
+                        verifier: Array(Hex.encode(fixture.verifier.compressedBytes).utf8)
                     ),
                 ]
             )),

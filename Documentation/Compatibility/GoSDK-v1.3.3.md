@@ -275,7 +275,7 @@ Public:
 - `Debugger` lifecycle hooks.
 - `ScriptNumber`: construction, sign-magnitude bytes, arithmetic/comparisons, integer conversions.
 - `CheckMinimalDataEncoding`, `MinimallyEncode`, external signature-verifier injection.
-- Era/limit constants: pre-Genesis op/stack/script/element/number/pubkey limits and 32 MiB Chronicle number limit.
+- Era/limit constants: pre-Genesis op/stack/script/element/number/pubkey limits and 32 MiB Chronicle number limit. Swift uses the SV Node limit of 32,000,000 bytes instead (COMP-064).
 
 Edges: EC/hash, script, transaction, sighash, `x/crypto/ripemd160`.
 
@@ -465,18 +465,23 @@ are accepted for action calls 1 through 7, key calls 8 and 11 through 16, and
 queries 23 through 28. Certificate and linkage calls 9, 10, and 17 through 22
 are also accepted. Canonical CompactSize, exact discriminators and fixed
 results, checked UInt32 conversion, complete error frames, and redacted bounded
-remote errors follow COMP-045 and COMP-046. Go's absent `forSelf` value is
-accepted and normalized to the required Swift value `false`; canonical Swift
-output uses the explicit false byte. Action codecs require explicit BEEF limits
-and a payload-bounded writer. They reject nil/empty collisions and the three
-list-action script sentinels that the pinned Go writer emits but its reader
-cannot consume. They add no wallet execution, transport, storage, or permission
-policy.
+remote errors follow COMP-045 and COMP-046. Since the 4.1.1 interop work the
+wallet wire follows `@bsv/sdk` 4.1.1 where it differs from this Go release:
+false `privileged` and `forSelf` are written as absent, list totals count
+every match, createAction and signAction results use the TypeScript layout
+with display-order txids, and processor failures are answered in-band
+(COMP-050). The Go-oracle tests record each difference. Action codecs require
+explicit BEEF limits and a payload-bounded writer and add no wallet execution,
+transport, storage, or permission policy.
 
 Certificate wire codecs follow COMP-048. They use the existing strict BRC-52
 binary codec, display-order revocation transaction IDs, low-S DER, bounded
-UTF-8-byte-sorted maps, and exact keyring presence. `nil` keyring emits `00`;
-a nonempty keyring emits `01` and its map. A present empty keyring is rejected.
+maps that Swift writes UTF-8-byte-sorted and reads in any order (as
+`@bsv/sdk` 4.1.1 writes them), and exact keyring presence. `nil` keyring emits `00`;
+a nonempty keyring emits `01` and its map. An empty keyring is stored as `nil`
+and emits `00`, as `@bsv/sdk` 4.1.1 writes it. Certificate binary fields are
+read in any order (TypeScript writes `localeCompare` order) and written in
+byte order.
 The Swift codec supports bounded multi-certificate discovery through the
 intended nested grammar. Live-Go parity uses zero or one item, and the safe Go
 adapter rejects multiple items before the pinned identity-certificate reader
@@ -893,7 +898,10 @@ License warning: these live under the Open BSV-licensed upstream. Use the Go ora
 5. Era boundaries:
    - pre-Genesis number length 4 and classic script/stack/op limits,
    - post-Genesis number ceiling 750,000 bytes,
-   - post-Chronicle number ceiling 32 MiB,
+   - post-Chronicle number ceiling 32,000,000 bytes (SV Node
+     `MAX_SCRIPT_NUM_LENGTH_AFTER_CHRONICLE`; Go uses 32 MiB, see COMP-064),
+   - post-Chronicle `OP_RSHIFTNUM` rounds a negative value toward zero, as
+     SV Node does; Go floors it (COMP-064),
    - Chronicle reactivates/version-gates `VER`, `VERIF`, `VERNOTIF`, `2MUL`, `2DIV`, `SUBSTR`, `LEFT`, `RIGHT`, numeric shifts.
 6. Minimal-push is checked at numeric evaluation/policy-dependent points, not indiscriminately for every unevaluated push.
 7. Legacy `SIGHASH_SINGLE` out-of-range “hash of 1” bug is consensus.

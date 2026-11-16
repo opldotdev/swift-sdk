@@ -97,13 +97,12 @@ public struct ProtoWallet:
             for: request.counterparty,
             nonce: proofNonce
         )
-        // BRC-97 defines z as a variable-width big-endian integer. The live
-        // TypeScript SDK emits its minimal representation; Go's fixed 32-byte
-        // padding differs only when z has leading zero bytes.
-        let encodedResponse = Array(proof.response.drop(while: { $0 == 0 }))
+        // R(33) || S'(33) || z(32): TypeScript 4.x (`ProtoWallet.ts`
+        // `z.toArray('be', 32)`) and Go both pad z to 32 bytes, so the proof
+        // is always 98 bytes and verifiers may slice fixed offsets.
         let proofBytes = proof.noncePublicKey.compressedBytes
             + proof.nonceSharedSecret.compressedBytes
-            + encodedResponse
+            + proof.response
         let protocolID = try WalletProtocolID(
             securityLevel: .everyAppAndCounterparty,
             name: "counterparty linkage revelation"
@@ -135,9 +134,9 @@ public struct ProtoWallet:
         _ request: WalletRevealSpecificKeyLinkageRequest
     ) async throws -> WalletRevealSpecificKeyLinkageResult {
         try requireStandardPrivilege(request.privilege)
-        guard case .publicKey(let counterparty) = request.counterparty else {
-            throw WalletCryptoError.keyDerivationFailed
-        }
+        // TypeScript 4.x resolves `self` to the identity key and `anyone` to the
+        // public key of private key 1, and its clients reject any other answer.
+        let counterparty = try keyDeriver.resolvedCounterparty(request.counterparty)
         let linkage = try keyDeriver.revealSpecificSecret(
             counterparty: request.counterparty,
             protocolID: request.protocolID,
@@ -219,7 +218,7 @@ public struct ProtoWallet:
             keyID: request.keyID,
             counterparty: request.counterparty
         )
-        let code = BSVHashing.hmacSHA256(request.data, key: key.bytes)
+        let code = BSVHashing.hmacSHA256(request.data, key: walletHMACKey(key.bytes))
         do {
             return WalletCreateHMACResult(hmac: try WalletHMAC(bytes: code.bytes))
         } catch {
@@ -235,11 +234,21 @@ public struct ProtoWallet:
             keyID: request.keyID,
             counterparty: request.counterparty
         )
-        return WalletVerifyHMACResult(valid: BSVHashing.isValidHMACSHA256(
+        // Tags from TypeScript wallets and from current Swift use the minimal
+        // key; tags Swift created before the switch used the padded 32-byte
+        // key. Both stay valid. The two keys differ only when the shared X
+        // coordinate has a leading zero byte.
+        let minimalKey = walletHMACKey(key.bytes)
+        let valid = BSVHashing.isValidHMACSHA256(
+            request.hmac.bytes,
+            authenticating: request.data,
+            key: minimalKey
+        ) || (minimalKey.count != key.bytes.count && BSVHashing.isValidHMACSHA256(
             request.hmac.bytes,
             authenticating: request.data,
             key: key.bytes
         ))
+        return WalletVerifyHMACResult(valid: valid)
     }
 
     public func createSignature(
@@ -298,6 +307,15 @@ public struct ProtoWallet:
     public var description: String { "<redacted proto wallet>" }
     public var debugDescription: String { description }
     public var customMirror: Mirror { walletEmptyMirror(self) }
+}
+
+/// The BRC-56 HMAC key: the shared X coordinate as its minimal big-endian
+/// integer (leading zero bytes removed; zero is one `00` byte). This matches
+/// TypeScript `@bsv/sdk` 4.1.1 `ProtoWallet.createHmac`, which keys HMAC-SHA256
+/// with `SymmetricKey.toArray()`. BRC-2 encryption keeps the 32-byte key.
+func walletHMACKey(_ paddedKey: [UInt8]) -> [UInt8] {
+    let minimal = Array(paddedKey.drop(while: { $0 == 0 }))
+    return minimal.isEmpty ? [0] : minimal
 }
 
 private func walletCurrentISO8601Timestamp() -> String {
