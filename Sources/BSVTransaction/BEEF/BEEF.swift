@@ -69,10 +69,15 @@ public struct BEEF: Hashable, Sendable {
     }
 
     /// Parses exactly one bounded standard BEEF envelope.
+    ///
+    /// `transactionOrder` defaults to ``BEEFTransactionOrder/parentsFirst``.
+    /// Pass ``BEEFTransactionOrder/any`` for BEEF written by another
+    /// implementation; the result is always in parents-first order.
     public init(
         bytes: [UInt8],
         limits: BEEFLimits,
-        compactSizeCanonicality: CompactSizeCanonicality = .required
+        compactSizeCanonicality: CompactSizeCanonicality = .required,
+        transactionOrder: BEEFTransactionOrder = .parentsFirst
     ) throws {
         guard bytes.count <= limits.maximumByteCount else {
             throw BEEFError.envelopeTooLarge(
@@ -221,10 +226,17 @@ public struct BEEF: Hashable, Sendable {
                 cause: error
             )
         }
+        let ordered: [BEEFTransaction]
+        switch transactionOrder {
+        case .parentsFirst:
+            ordered = entries
+        case .any:
+            ordered = try Self.parentsFirst(entries, limits: limits.transactionLimits)
+        }
         try self.init(
             version: version,
             merklePaths: paths,
-            transactions: entries,
+            transactions: ordered,
             limits: limits
         )
     }
@@ -233,7 +245,8 @@ public struct BEEF: Hashable, Sendable {
     public init(
         hex: String,
         limits: BEEFLimits,
-        compactSizeCanonicality: CompactSizeCanonicality = .required
+        compactSizeCanonicality: CompactSizeCanonicality = .required,
+        transactionOrder: BEEFTransactionOrder = .parentsFirst
     ) throws {
         do {
             if limits.maximumByteCount <= (Int.max - 1) / 2 {
@@ -247,7 +260,8 @@ public struct BEEF: Hashable, Sendable {
             try self.init(
                 bytes: Hex.decode(hex, maximumDecodedByteCount: limits.maximumByteCount),
                 limits: limits,
-                compactSizeCanonicality: compactSizeCanonicality
+                compactSizeCanonicality: compactSizeCanonicality,
+                transactionOrder: transactionOrder
             )
         } catch let error as TextEncodingError {
             throw BEEFError.invalidHex(error)

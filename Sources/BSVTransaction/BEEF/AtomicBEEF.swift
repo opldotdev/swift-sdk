@@ -21,10 +21,19 @@ public struct AtomicBEEF: Hashable, Sendable {
         self.beef = beef
     }
 
+    /// Parses one bounded BRC-95 envelope.
+    ///
+    /// `transactionOrder` applies to the nested BEEF. With
+    /// ``BEEFTransactionOrder/any`` the records are reordered parents-first, so
+    /// the subject, which every other record must be an ancestor of, ends last.
+    /// Reordering cannot restore a record the writer left out: an envelope
+    /// whose ancestry is incomplete still throws
+    /// ``BEEFError/missingAncestor(transaction:ancestor:)``.
     public init(
         bytes: [UInt8],
         limits: BEEFLimits,
-        compactSizeCanonicality: CompactSizeCanonicality = .required
+        compactSizeCanonicality: CompactSizeCanonicality = .required,
+        transactionOrder: BEEFTransactionOrder = .parentsFirst
     ) throws {
         guard bytes.count <= limits.maximumByteCount else {
             throw BEEFError.envelopeTooLarge(
@@ -80,7 +89,8 @@ public struct AtomicBEEF: Hashable, Sendable {
         let beef = try BEEF(
             bytes: nestedBytes,
             limits: nestedLimits,
-            compactSizeCanonicality: compactSizeCanonicality
+            compactSizeCanonicality: compactSizeCanonicality,
+            transactionOrder: transactionOrder
         )
         try self.init(subjectTransactionID: subject, beef: beef, limits: limits)
     }
