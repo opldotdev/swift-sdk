@@ -68,7 +68,7 @@ public enum IdentityParser {
                 prefix: "Entity certified by ", value: certifierName, limits: limits
             )
             badgeIconURL = identity.certifierInfo.iconURL
-            badgeClickURL = "https://projectbabbage.com/docs/registrant"
+            badgeClickURL = "https://bsv-blockchain.github.io/ts-sdk/reference/identity/"
         case .cool:
             name = field("cool", in: fields) == "true" ? "Cool Person!" : "Not cool!"
         case .anyone:
@@ -76,13 +76,13 @@ public enum IdentityParser {
             avatarURL = "XUT4bpQ6cpBaXi1oMzZsXfpkWGbtp2JTUYAoN7PzhStFJ6wLfoeR"
             badgeLabel = "Represents the ability for anyone to access this information."
             badgeIconURL = "XUUV39HVPkpmMzYNTx7rpKzJvXfeiVyQWg2vfSpjBAuhunTCA9uG"
-            badgeClickURL = "https://projectbabbage.com/docs/anyone-identity"
+            badgeClickURL = "https://bsv-blockchain.github.io/ts-sdk/reference/identity/"
         case .self:
             name = "You"
             avatarURL = "XUT9jHGk2qace148jeCX5rDsMftkSGYKmigLwU2PLLBc7Hm63VYR"
             badgeLabel = "Represents your ability to access this information."
             badgeIconURL = "XUUV39HVPkpmMzYNTx7rpKzJvXfeiVyQWg2vfSpjBAuhunTCA9uG"
-            badgeClickURL = "https://projectbabbage.com/docs/self-identity"
+            badgeClickURL = "https://bsv-blockchain.github.io/ts-sdk/reference/identity/"
         case nil:
             return try DisplayableIdentity.unknown(
                 avatarURL: field("profilePhoto", in: fields),

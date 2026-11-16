@@ -40,6 +40,16 @@ final class UHRPURLTests: XCTestCase {
         }
     }
 
+    func testParsesTypeScriptSchemeWithoutSlashes() throws {
+        // TypeScript storage/StorageUtils.ts:9-13 strips "uhrp:" and then an
+        // optional "//", so "uhrp:<id>" is a valid UHRP URL there.
+        let expectedHash = try Hash256(Hex.decode(testHashHex, maximumDecodedByteCount: 32))
+        for input in ["uhrp:\(testURL)", "UHRP:\(testURL)"] {
+            XCTAssertEqual(try UHRPURL(parsing: input).hash, expectedHash)
+        }
+        XCTAssertThrowsError(try UHRPURL(parsing: "uhrp:/\(testURL)"))
+    }
+
     func testRejectsMalformedChecksumAndVersion() throws {
         XCTAssertThrowsError(
             try UHRPURL(parsing: "XUU7cTfy6fA6q2neLDmzPqJnGB6o18PXKoGaWLPrH1SeWLKgdCKq")

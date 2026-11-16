@@ -44,6 +44,7 @@ public struct WhatsOnChainBroadcaster: Broadcaster, Sendable {
         let localTransactionID = try transaction.transactionID(limits: limits)
         let body = try JSONEncoder().encode(BroadcastRequest(txhex: transactionHex))
         let request = try makeRequest(body: body)
+        let operation = "WhatsOnChainBroadcaster.broadcast"
 
         do {
             try Task.checkCancellation()
@@ -79,13 +80,38 @@ public struct WhatsOnChainBroadcaster: Broadcaster, Sendable {
                         redactingFieldNames: ["txhex"]
                     )
                 }
+                NetworkLog.failure(
+                    operation,
+                    request: request,
+                    statusCode: response.statusCode,
+                    body: response.body,
+                    redacting: [transactionHex],
+                    reason: "transaction \(localTransactionID.displayHex)"
+                )
                 throw NetworkServiceError.httpStatus(
                     code: response.statusCode,
                     message: message
                 )
             }
-            let providerTransactionID = try parseCanonicalTransactionID(response.body)
+            let providerTransactionID: TransactionID
+            do {
+                providerTransactionID = try parseCanonicalTransactionID(response.body)
+            } catch {
+                NetworkLog.failure(
+                    operation,
+                    request: request,
+                    statusCode: response.statusCode,
+                    body: response.body,
+                    redacting: [transactionHex],
+                    reason: "the answer is not a transaction ID"
+                )
+                throw error
+            }
             guard providerTransactionID == localTransactionID else {
+                NetworkLog.error(
+                    "\(operation): WhatsOnChain answered transaction \(providerTransactionID.displayHex) "
+                        + "for \(localTransactionID.displayHex)"
+                )
                 throw NetworkServiceError.inconsistentResponse
             }
             return BroadcastResult(transactionID: localTransactionID)
@@ -94,6 +120,7 @@ public struct WhatsOnChainBroadcaster: Broadcaster, Sendable {
         } catch let error as NetworkServiceError {
             throw error
         } catch {
+            NetworkLog.failure(operation, request: request, underlying: error)
             throw NetworkServiceError.transport(code: nil)
         }
     }

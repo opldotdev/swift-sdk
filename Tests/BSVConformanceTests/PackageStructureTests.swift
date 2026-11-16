@@ -108,17 +108,20 @@ struct PackageStructureTests {
         try expectTarget(
             "BSVKVStore",
             in: manifest,
-            dependencies: ["BSVKeys", "BSVScript"]
+            dependencies: ["BSVCrypto", "BSVKeys", "BSVScript", "BSVWallet"]
         )
         try expectTarget(
             "BSVStorage",
             in: manifest,
-            dependencies: ["BSVCore", "BSVCrypto", "BSVKeys"]
+            dependencies: ["BSVCore", "BSVCrypto", "BSVKeys", "BSVScript"]
         )
         try expectTarget(
             "BSVRegistry",
             in: manifest,
-            dependencies: ["BSVCore", "BSVKeys", "BSVOverlay", "BSVScript", "BSVTransaction", "BSVWallet"]
+            dependencies: [
+                "BSVCore", "BSVCrypto", "BSVKeys", "BSVOverlay", "BSVScript", "BSVTransaction",
+                "BSVWallet",
+            ]
         )
         try expectTarget(
             "BSVWallet",

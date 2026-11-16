@@ -89,7 +89,7 @@ struct TransactionFeeTests {
         }
     }
 
-    @Test("equal change distribution is atomic and leaves only rounding dust")
+    @Test("equal change distribution is atomic and gives the remainder to the last change output")
     func applyFee() throws {
         let limits = try feeLimits()
         let empty = try Script(bytes: [], maximumByteCount: 0)
@@ -111,9 +111,8 @@ struct TransactionFeeTests {
         let requiredFee = try model.fee(for: transaction, limits: limits)
         try transaction.applyFee(using: model, limits: limits)
 
-        #expect(transaction.outputs[1].satoshis == transaction.outputs[2].satoshis)
-        #expect(try transaction.fee() >= requiredFee)
-        #expect(try transaction.fee() - requiredFee < 2)
+        #expect(transaction.outputs[2].satoshis - transaction.outputs[1].satoshis < 2)
+        #expect(try transaction.fee() == requiredFee)
 
         let beforeFailure = transaction
         transaction.outputs[0].satoshis = 10_000
@@ -123,6 +122,33 @@ struct TransactionFeeTests {
         }
         #expect(transaction == underfunded)
         transaction = beforeFailure
+    }
+
+    @Test("the change remainder goes to the last change output, as @bsv/sdk does")
+    func changeRemainder() throws {
+        // @bsv/sdk Transaction.ts #distributeEqualChange.
+        let limits = try feeLimits()
+        let empty = try Script(bytes: [], maximumByteCount: 0)
+        var transaction = Transaction(
+            inputs: [TransactionInput(
+                previousOutput: try testOutpoint(fill: 4),
+                unlockingScript: empty,
+                sourceOutput: TransactionOutput(satoshis: 10_002, lockingScript: empty),
+                estimatedUnlockingScriptByteCount: 0
+            )],
+            outputs: [
+                TransactionOutput(satoshis: 0, lockingScript: empty, isChange: true),
+                TransactionOutput(satoshis: 1_000, lockingScript: empty),
+                TransactionOutput(satoshis: 0, lockingScript: empty, isChange: true),
+                TransactionOutput(satoshis: 0, lockingScript: empty, isChange: true),
+            ]
+        )
+        try transaction.applyFee(
+            using: SatoshisPerKilobyteFeeModel(satoshisPerKilobyte: 0),
+            limits: limits
+        )
+        #expect(transaction.outputs.map(\.satoshis) == [3_000, 1_000, 3_000, 3_002])
+        #expect(try transaction.fee() == 0)
     }
 
     @Test("dust change is removed and no-change transactions preserve excess fee")

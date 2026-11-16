@@ -280,12 +280,64 @@ public struct Opcode: RawRepresentable, Hashable, Sendable {
         }
     }
 
-    /// Parses canonical BRC-106 names, compact SASM names, and common SDK aliases.
+    /// Name emitted by @bsv/sdk 4.x `Script.toASM`.
+    ///
+    /// @bsv/sdk keeps the first name it lists for each byte: `OP_0`, `OP_1`,
+    /// the restored Chronicle names at 0xb3...0xb7, `OP_NOP9`/`OP_NOP10` at
+    /// 0xb8/0xb9, `OP_NOP11`...`OP_NOP73` at 0xba...0xf8, `OP_SMALLDATA` at
+    /// 0xf9 and `OP_NOP77` at 0xfc. Direct pushes (0x01...0x4b) have no name
+    /// there and are printed as their data, so this returns `name` for them.
+    public var typeScriptName: String {
+        return switch rawValue {
+        case 0x00: "OP_0"
+        case 0x51: "OP_1"
+        case 0xb1: "OP_CHECKLOCKTIMEVERIFY"
+        case 0xb2: "OP_CHECKSEQUENCEVERIFY"
+        case 0xb6: "OP_LSHIFTNUM"
+        case 0xb7: "OP_RSHIFTNUM"
+        case 0xb8: "OP_NOP9"
+        case 0xb9: "OP_NOP10"
+        case 0xba...0xf8: "OP_NOP\(Int(rawValue) - 0xba + 11)"
+        case 0xf9: "OP_SMALLDATA"
+        case 0xfa: "OP_SMALLINTEGER"
+        case 0xfb: "OP_PUBKEYS"
+        case 0xfc: "OP_NOP77"
+        default: name
+        }
+    }
+
+    /// Parses an opcode name in the selected dialect.
+    ///
+    /// `.brc106` takes canonical BRC-106 names, compact SASM names, and common
+    /// SDK aliases. `.goSDK` takes the pinned Go SDK's names. `.typeScript`
+    /// takes exactly the names @bsv/sdk 4.x `Script.fromASM` knows: its `OP_*`
+    /// table with aliases, plus the bare tokens `0` and `-1`.
     public init?(asmName: String, dialect: ScriptASMDialect) {
-        let table = dialect == .brc106 ? Self.brcASMNameTable : Self.goSDKASMNameTable
+        let table = switch dialect {
+        case .brc106: Self.brcASMNameTable
+        case .goSDK: Self.goSDKASMNameTable
+        case .typeScript: Self.typeScriptASMNameTable
+        }
         guard let opcode = table[asmName] else { return nil }
         self = opcode
     }
+
+    private static let typeScriptASMNameTable: [String: Opcode] = {
+        var names: [String: Opcode] = [:]
+        for raw in UInt16(UInt8.min)...UInt16(UInt8.max) {
+            let opcode = Opcode(rawValue: UInt8(raw))
+            guard !opcode.isDirectPush else { continue }
+            names[opcode.typeScriptName] = opcode
+        }
+        let aliases: [String: Opcode] = [
+            "0": .zero, "-1": .oneNegate, "OP_FALSE": .zero, "OP_TRUE": .one,
+            "OP_NOP2": .checkLockTimeVerify, "OP_NOP3": .checkSequenceVerify,
+            "OP_NOP4": .substring, "OP_NOP5": .left, "OP_NOP6": .right,
+            "OP_NOP7": .leftShiftNumber, "OP_NOP8": .rightShiftNumber,
+        ]
+        for (name, opcode) in aliases { names[name] = opcode }
+        return names
+    }()
 
     private static let brcASMNameTable: [String: Opcode] = {
         var names: [String: Opcode] = [:]

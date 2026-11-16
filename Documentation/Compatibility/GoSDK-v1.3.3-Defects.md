@@ -221,7 +221,9 @@ Suggested correction: require the intended verifier key as an input, or define
 and implement a public-disclosure keyring scheme that does not require a lost
 secret.
 
-Swift handling: the caller must supply the verifier public key explicitly.
+Swift handling: the disclosure always proves the keyring to the "anyone"
+public key (scalar 1), as TypeScript `@bsv/sdk` 4.1.1 does, so any reader and
+the `tm_identity` topic manager can decrypt it (COMP-054).
 
 ### GO-013: Identity output-index configuration has no effect
 
@@ -400,8 +402,10 @@ Corrupt on-chain fields are indistinguishable from a deliberate empty schema.
 Suggested correction: return a malformed-definition error and preserve no
 partially decoded certificate definition.
 
-Swift handling: `RegistryDefinitionCodec` rejects malformed, noncanonical, and
-unknown certificate descriptor JSON before it constructs a definition.
+Swift handling: `RegistryDefinitionCodec` rejects malformed certificate
+descriptor JSON and descriptors with missing or unknown keys before it
+constructs a definition. Key order and spacing are free, as in TypeScript
+(COMP-055).
 
 ### GO-024: Registry default-network detection never adopts the wallet network
 

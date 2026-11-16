@@ -50,7 +50,8 @@ public enum OverlayHTTPError: Error, Equatable, Sendable {
     case invalidQuery
     case malformedResponse
     case unsupportedContentType
-    case rejected(statusCode: Int)
+    /// `message` is the overlay's own short reason (redacted, one line), when it gave one.
+    case rejected(statusCode: Int, message: String? = nil)
     case resourceLimit
     case transport
     case uncertainDelivery
@@ -87,18 +88,19 @@ public struct HTTPSOverlayLookupFacilitator: LookupFacilitator, Sendable {
             question,
             limits: configuration.overlayLimits
         )
+        let request = HTTPRequest(
+            method: .post,
+            url: url,
+            headers: [
+                "Content-Type": "application/json",
+                "X-Aggregation": "yes",
+            ],
+            body: Data(body)
+        )
         let response: HTTPResponse
         do {
             response = try await transport.send(
-                HTTPRequest(
-                    method: .post,
-                    url: url,
-                    headers: [
-                        "Content-Type": "application/json",
-                        "X-Aggregation": "yes",
-                    ],
-                    body: Data(body)
-                ),
+                request,
                 maximumResponseBodyByteCount: configuration.overlayLimits
                     .maximumLookupAnswerByteCount
             )
@@ -109,25 +111,37 @@ public struct HTTPSOverlayLookupFacilitator: LookupFacilitator, Sendable {
         } catch NetworkServiceError.responseBodyTooLarge {
             throw OverlayHTTPError.resourceLimit
         } catch {
+            NetworkLog.failure("HTTPSOverlayLookupFacilitator.lookup", request: request, underlying: error)
             throw OverlayHTTPError.transport
         }
         try Task.checkCancellation()
         guard response.statusCode == 200 else {
-            throw OverlayHTTPError.rejected(statusCode: response.statusCode)
+            throw overlayRejection("HTTPSOverlayLookupFacilitator.lookup", request: request, response: response)
         }
         let bytes = [UInt8](response.body)
         switch mediaType(response.headerValue(for: "Content-Type")) {
         case "application/json":
-            return try OverlayHTTPCodec.lookupJSONResponse(
-                bytes,
-                limits: configuration.overlayLimits
-            )
+            return try loggingUnreadable("HTTPSOverlayLookupFacilitator.lookup", request, response) {
+                try OverlayHTTPCodec.lookupJSONResponse(
+                    bytes,
+                    limits: configuration.overlayLimits
+                )
+            }
         case "application/octet-stream":
-            return try OverlayHTTPCodec.lookupBinaryResponse(
-                bytes,
-                configuration: configuration
-            )
+            return try loggingUnreadable("HTTPSOverlayLookupFacilitator.lookup", request, response) {
+                try OverlayHTTPCodec.lookupBinaryResponse(
+                    bytes,
+                    configuration: configuration
+                )
+            }
         default:
+            NetworkLog.failure(
+                "HTTPSOverlayLookupFacilitator.lookup",
+                request: request,
+                statusCode: response.statusCode,
+                body: response.body,
+                reason: "unsupported Content-Type \(response.headerValue(for: "Content-Type") ?? "none")"
+            )
             throw OverlayHTTPError.unsupportedContentType
         }
     }
@@ -184,19 +198,29 @@ public struct HTTPSOverlayTopicFacilitator: TopicFacilitator, Sendable {
                     .maximumLookupAnswerByteCount
             )
         } catch {
+            NetworkLog.failure("HTTPSOverlayTopicFacilitator.submit", request: request, underlying: error)
             throw OverlayHTTPError.uncertainDelivery
         }
         guard !Task.isCancelled else { throw OverlayHTTPError.uncertainDelivery }
         guard response.statusCode == 200 else {
-            throw OverlayHTTPError.rejected(statusCode: response.statusCode)
+            throw overlayRejection("HTTPSOverlayTopicFacilitator.submit", request: request, response: response)
         }
         guard mediaType(response.headerValue(for: "Content-Type")) == "application/json" else {
+            NetworkLog.failure(
+                "HTTPSOverlayTopicFacilitator.submit",
+                request: request,
+                statusCode: response.statusCode,
+                body: response.body,
+                reason: "unsupported Content-Type \(response.headerValue(for: "Content-Type") ?? "none")"
+            )
             throw OverlayHTTPError.unsupportedContentType
         }
-        return try OverlayHTTPCodec.steakResponse(
-            [UInt8](response.body),
-            limits: configuration.overlayLimits
-        )
+        return try loggingUnreadable("HTTPSOverlayTopicFacilitator.submit", request, response) {
+            try OverlayHTTPCodec.steakResponse(
+                [UInt8](response.body),
+                limits: configuration.overlayLimits
+            )
+        }
     }
 }
 
@@ -226,4 +250,43 @@ private func mediaType(_ value: String?) -> String? {
     return value.split(separator: ";", maxSplits: 1).first?
         .trimmingCharacters(in: .whitespacesAndNewlines)
         .lowercased()
+}
+
+/// A non-200 overlay answer: logged in full once, thrown with the overlay's short reason.
+private func overlayRejection(
+    _ operation: String,
+    request: HTTPRequest,
+    response: HTTPResponse
+) -> OverlayHTTPError {
+    NetworkLog.failure(
+        operation,
+        request: request,
+        statusCode: response.statusCode,
+        body: response.body
+    )
+    return .rejected(
+        statusCode: response.statusCode,
+        message: sanitizedProviderText(response.body).flatMap(oneLineProviderReason)
+    )
+}
+
+/// Runs `decode` and logs the answer it could not read before rethrowing its error.
+private func loggingUnreadable<T>(
+    _ operation: String,
+    _ request: HTTPRequest,
+    _ response: HTTPResponse,
+    _ decode: () throws -> T
+) throws -> T {
+    do {
+        return try decode()
+    } catch {
+        NetworkLog.failure(
+            operation,
+            request: request,
+            statusCode: response.statusCode,
+            body: response.body,
+            reason: "unreadable answer: \(String(reflecting: error))"
+        )
+        throw error
+    }
 }

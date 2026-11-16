@@ -1,14 +1,20 @@
+import BSVCrypto
 import BSVKeys
 import BSVScript
+import BSVWallet
 
 /// Resource bounds for the transport-neutral key-value token codec.
 public struct KVStoreLimits: Hashable, Sendable {
-    /// Bounds that are suitable for a wallet-tagged locator and a 1 MiB value.
+    /// Bounds for a wallet-tagged locator and a 2 MiB value, the largest
+    /// value field TypeScript `LocalKVStore` reads (`MAX_LOCAL_TOKEN_BYTES`).
     public static let standard = KVStoreLimits(
         validatedMaximumLocatorUTF8ByteCount: 2_000,
-        validatedMaximumValueByteCount: 1_048_576,
-        validatedMaximumScriptByteCount: 1_048_617
+        validatedMaximumValueByteCount: 2_097_152,
+        validatedMaximumScriptByteCount: 2_097_266
     )
+
+    /// The largest strict DER secp256k1 signature, in bytes.
+    static let maximumSignatureByteCount = 72
 
     public let maximumLocatorUTF8ByteCount: Int
     public let maximumValueByteCount: Int
@@ -18,8 +24,8 @@ public struct KVStoreLimits: Hashable, Sendable {
     /// `maximumValueByteCount`.
     public init(
         maximumLocatorUTF8ByteCount: Int = 2_000,
-        maximumValueByteCount: Int = 1_048_576,
-        maximumScriptByteCount: Int = 1_048_617
+        maximumValueByteCount: Int = 2_097_152,
+        maximumScriptByteCount: Int = 2_097_266
     ) throws {
         guard maximumLocatorUTF8ByteCount > 0,
               maximumValueByteCount > 0,
@@ -52,6 +58,8 @@ public struct KVStoreLimits: Hashable, Sendable {
         maximumScriptByteCount = validatedMaximumScriptByteCount
     }
 
+    /// The largest token script for a value: lock (35), value push,
+    /// signature push (at most 73), and one `OP_2DROP`.
     static func maximumTokenScriptByteCount(forValueByteCount byteCount: Int) throws -> Int {
         guard byteCount > 0, byteCount <= Int(UInt32.max) else {
             throw KVStoreError.invalidLimits
@@ -75,7 +83,13 @@ public struct KVStoreLimits: Hashable, Sendable {
         guard !encodedFieldOverflow else {
             throw KVStoreError.sizeOverflow
         }
-        let (withDrop, dropOverflow) = encodedFieldByteCount.addingReportingOverflow(1)
+        let (withSignature, signatureOverflow) = encodedFieldByteCount.addingReportingOverflow(
+            1 + maximumSignatureByteCount
+        )
+        guard !signatureOverflow else {
+            throw KVStoreError.sizeOverflow
+        }
+        let (withDrop, dropOverflow) = withSignature.addingReportingOverflow(1)
         guard !dropOverflow else {
             throw KVStoreError.sizeOverflow
         }
@@ -122,6 +136,31 @@ public struct KVStoreLocator: Hashable, Sendable, CustomStringConvertible,
         self.key = key
     }
 
+    /// The wallet protocol that locks and signs this locator's token:
+    /// `[2, context]`, as TypeScript `LocalKVStore.getProtocol` uses.
+    ///
+    /// Throws `KVStoreError.invalidWalletLocator` when the context is not a
+    /// valid wallet protocol name (for example shorter than 5 characters).
+    public func walletProtocolID() throws -> WalletProtocolID {
+        do {
+            return try WalletProtocolID(securityLevel: .everyAppAndCounterparty, name: context)
+        } catch let error as WalletValidationError {
+            throw KVStoreError.invalidWalletLocator(error)
+        }
+    }
+
+    /// The wallet key ID for this locator's token: the key itself.
+    ///
+    /// Throws `KVStoreError.invalidWalletLocator` when the key is not a valid
+    /// wallet key ID.
+    public func walletKeyID() throws -> WalletKeyID {
+        do {
+            return try WalletKeyID(key)
+        } catch let error as WalletValidationError {
+            throw KVStoreError.invalidWalletLocator(error)
+        }
+    }
+
     public var description: String { "<redacted key-value locator>" }
     public var debugDescription: String { description }
     public var customMirror: Mirror {
@@ -144,16 +183,23 @@ public struct KVStoreLocator: Hashable, Sendable, CustomStringConvertible,
     }
 }
 
-/// The payload and public-key lock of a single key-value token.
+/// The value, public-key lock, and owner signature of one key-value token.
+///
+/// This is the `LocalKVStore` token of `@bsv/sdk` 4.1.1: two PushDrop
+/// fields, the value and a signature over the value by the locking key
+/// (`kvstore/LocalKVStore.ts`). A token value always carries a signature that
+/// verifies under its locking key.
 public struct KVStoreToken: Hashable, Sendable, CustomStringConvertible,
     CustomDebugStringConvertible, CustomReflectable
 {
     public let value: [UInt8]
     public let lockingPublicKey: PublicKey
+    public let signature: ECDSASignature
 
     public init(
         value: [UInt8],
         lockingPublicKey: PublicKey,
+        signature: ECDSASignature,
         limits: KVStoreLimits = .standard
     ) throws {
         guard !value.isEmpty else {
@@ -165,8 +211,17 @@ public struct KVStoreToken: Hashable, Sendable, CustomStringConvertible,
                 maximum: limits.maximumValueByteCount
             )
         }
+        // TypeScript verification has no low-S rule, so a high-S signature
+        // from another wallet is accepted here too.
+        guard signature.verifiesInScript(
+            publicKey: lockingPublicKey,
+            digest: BSVHashing.sha256(value)
+        ) else {
+            throw KVStoreError.invalidSignature
+        }
         self.value = value
         self.lockingPublicKey = lockingPublicKey
+        self.signature = signature
     }
 
     public var description: String { "<redacted key-value token>" }
@@ -187,4 +242,10 @@ public enum KVStoreError: Error, Equatable, Sendable {
     case valueByteCountExceedsLimit(actual: Int, maximum: Int)
     case invalidTokenFieldCount(actual: Int)
     case invalidLockingScript(PushDropError)
+    case invalidSignatureEncoding
+    case invalidSignature
+    case lockingKeyMismatch
+    /// The locator's context or key is not valid in the wallet's protocol
+    /// or key ID grammar.
+    case invalidWalletLocator(WalletValidationError)
 }

@@ -218,12 +218,11 @@ struct MerklePathTests {
             try MerklePath(bytes: bytes + [0], limits: limits)
         }
 
-        var badFlags = bytes
+        // Flags are a bitmask; bits other than 0 and 1 are ignored.
+        var extraFlagBits = bytes
         let firstFlagsIndex = 4
-        badFlags[firstFlagsIndex] = 3
-        #expect(throws: MerklePathError.invalidFlags(level: 0, leaf: 0, flags: 3)) {
-            try MerklePath(bytes: badFlags, limits: limits)
-        }
+        extraFlagBits[firstFlagsIndex] = 0xfe
+        #expect(try MerklePath(bytes: extraFlagBits, limits: limits) == fixture.pathA)
 
         let oversizedHeight = CompactSize.encode(UInt64(UInt32.max) + 1) + [1]
         #expect(throws: MerklePathError.blockHeightOutOfRange(

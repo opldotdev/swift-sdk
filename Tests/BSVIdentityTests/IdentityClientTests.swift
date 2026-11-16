@@ -1,5 +1,6 @@
 @testable import BSVIdentity
 import BSVCore
+import BSVCrypto
 import BSVKeys
 import BSVScript
 import BSVTransaction
@@ -141,7 +142,7 @@ struct IdentityClientTests {
         }
     }
 
-    @Test("public disclosure uses the explicit verifier and canonical bounded JSON")
+    @Test("public disclosure proves to the anyone verifier and writes canonical bounded JSON")
     func revealsAttributes() async throws {
         let fixture = try await identityFixture()
         let state = IdentityWalletState(
@@ -150,18 +151,22 @@ struct IdentityClientTests {
         )
         let wallet = IdentityTestWallet(root: fixture.root, state: state)
         let client = try IdentityClient(wallet: wallet, limits: fixture.limits)
-        let verifier = try PrivateKey(Array(repeating: 2, count: 31) + [3]).publicKey
         let broadcaster = RecordingBroadcaster(expected: fixture.transactionID)
 
         let result = try await client.publiclyRevealAttributes(
             certificate: fixture.certificate,
             fieldsToReveal: [fixture.field],
-            verifier: verifier,
             using: broadcaster
         )
         #expect(result.transactionID == fixture.transactionID)
         let snapshot = await state.snapshot()
-        #expect(snapshot.proveVerifier == verifier)
+        // TypeScript identity/IdentityClient.ts:471-477 fixes the verifier.
+        #expect(
+            snapshot.proveVerifier.map { Hex.encode($0.compressedBytes) }
+                == "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+        #expect(
+            try IdentityPublicReveal.verifierPublicKey().compressedBytes
+                == Hex.decode(IdentityPublicReveal.verifierPublicKeyHex, maximumDecodedByteCount: 33))
         let request = try #require(snapshot.action)
         let output = try #require(request.outputs?.first)
         let script = try Script(
@@ -195,6 +200,140 @@ struct IdentityClientTests {
         #expect(text.range(of: "\"fields\":")!.lowerBound < text.range(of: "\"keyring\":")!.lowerBound)
         #expect(await broadcaster.callCount() == 1)
         #expect(!String(reflecting: client).contains("IdentityTestWallet"))
+    }
+
+    /// The token must pass the TypeScript tm_identity topic manager
+    /// (packages/overlays/topics/src/identity/identityTokenValidation.ts):
+    /// exactly two fields in a five-chunk script, locked to the anyone key's
+    /// view of the subject under [1, "identity"], key ID "1", and signed by
+    /// the same key over the certificate JSON.
+    @Test("disclosure token matches the TypeScript tm_identity rules")
+    func disclosureTokenMatchesTopicManager() async throws {
+        let subject = try PrivateKey(Array(repeating: 0, count: 31) + [0x5c])
+        let fixture = try await identityFixture(root: subject)
+        let state = IdentityWalletState(
+            proofKeyring: [fixture.field: try CertificateCiphertext([7, 8, 9])],
+            completedTransaction: fixture.atomic
+        )
+        let client = try IdentityClient(
+            wallet: IdentityTestWallet(root: subject, state: state),
+            limits: fixture.limits
+        )
+        #expect(
+            client.options.protocolID
+                == (try WalletProtocolID(securityLevel: .everyApp, name: "identity")))
+        _ = try await client.publiclyRevealAttributes(
+            certificate: fixture.certificate,
+            fieldsToReveal: [fixture.field],
+            using: RecordingBroadcaster(expected: fixture.transactionID)
+        )
+        let output = try #require(await state.snapshot().action?.outputs?.first)
+        let decoded = try PushDrop.decode(
+            try Script(bytes: output.lockingScript, maximumByteCount: 1_000_000),
+            lockPosition: .beforeCompatibility,
+            limits: fixture.limits.pushDropLimits
+        )
+        #expect(decoded.fields.count == 2)
+        // <33 key> OP_CHECKSIG <json> <signature> OP_2DROP: five chunks.
+        #expect(output.lockingScript.first == 0x21)
+        #expect(output.lockingScript[34] == 0xac)
+        #expect(output.lockingScript.last == 0x6d)
+
+        let anyone = try PrivateKey(Array(repeating: 0, count: 31) + [1])
+        let expectedKey = try subject.publicKey.derivedChild(
+            with: anyone,
+            invoiceNumber: "1-identity-1"
+        )
+        #expect(decoded.publicKey == expectedKey)
+        let signature = try ECDSASignature(derBytes: decoded.fields[1])
+        #expect(expectedKey.verify(signature, digest: BSVHashing.sha256(decoded.fields[0])))
+
+        // The previous Swift default, [2, "identity"], locks to another key.
+        let levelTwoKey = try subject.publicKey.derivedChild(
+            with: anyone,
+            invoiceNumber: "2-identity-1"
+        )
+        #expect(decoded.publicKey != levelTwoKey)
+    }
+
+    /// The locking key `@bsv/sdk` 4.1.1 itself (ts-stack `3b1abc569`, run
+    /// under bun) gives a public reveal by the identity of `PrivateKey(42)`:
+    ///
+    /// ```ts
+    /// const { PrivateKey, ProtoWallet } = await import(`${process.env.TS_SDK}/mod.ts`)
+    /// const wallet = new ProtoWallet(new PrivateKey(42))
+    /// const { publicKey } = await wallet.getPublicKey({
+    ///   protocolID: [1, 'identity'], keyID: '1', counterparty: 'anyone', forSelf: true
+    /// }) // IdentityClient: pushdrop.lock(fields, [1, 'identity'], '1', 'anyone', true)
+    /// ```
+    @Test("disclosure locking key matches the key TypeScript generates")
+    func disclosureLockingKeyMatchesTypeScriptVector() async throws {
+        let typeScriptKey = "034009190eadccbea812a05e818ecf8a77e29b9d886008f8a428c247fccec9a2d8"
+        let subject = try PrivateKey(Array(repeating: 0, count: 31) + [42])
+        let options = try IdentityClientOptions()
+
+        // Swift's wallet path with the default options.
+        let walletKey = try await ProtoWallet(rootKey: subject).getPublicKey(.init(
+            selection: .derived(
+                protocolID: options.protocolID,
+                keyID: options.keyID,
+                counterparty: .anyone,
+                forSelf: true
+            )
+        )).publicKey
+        #expect(Hex.encode(walletKey.compressedBytes) == typeScriptKey)
+
+        // The token IdentityClient writes is locked to that key.
+        let fixture = try await identityFixture(root: subject)
+        let state = IdentityWalletState(
+            proofKeyring: [fixture.field: try CertificateCiphertext([7, 8, 9])],
+            completedTransaction: fixture.atomic
+        )
+        let client = try IdentityClient(
+            wallet: IdentityTestWallet(root: subject, state: state),
+            limits: fixture.limits
+        )
+        _ = try await client.publiclyRevealAttributes(
+            certificate: fixture.certificate,
+            fieldsToReveal: [fixture.field],
+            using: RecordingBroadcaster(expected: fixture.transactionID)
+        )
+        let output = try #require(await state.snapshot().action?.outputs?.first)
+        let decoded = try PushDrop.decode(
+            try Script(bytes: output.lockingScript, maximumByteCount: 1_000_000),
+            lockPosition: .beforeCompatibility,
+            limits: fixture.limits.pushDropLimits
+        )
+        #expect(Hex.encode(decoded.publicKey.compressedBytes) == typeScriptKey)
+    }
+
+    @Test("badge links match the TypeScript identity client")
+    func badgeLinksMatchTypeScript() async throws {
+        let fixture = try await identityFixture()
+        let link = "https://bsv-blockchain.github.io/ts-sdk/reference/identity/"
+        for kind in [KnownIdentityType.registrant, .anyone, .self] {
+            let certificate = try Certificate(
+                type: try kind.certificateType,
+                serialNumber: fixture.certificate.serialNumber,
+                subject: fixture.root.publicKey,
+                certifier: fixture.root.publicKey,
+                revocationOutpoint: fixture.certificate.revocationOutpoint,
+                fields: fixture.certificate.fields
+            )
+            let parsed = try IdentityParser.parse(
+                try WalletIdentityCertificate(
+                    certificate: certificate,
+                    certifierInfo: try WalletIdentityCertifier(
+                        name: "Certifier", iconURL: "icon", description: "description", trust: 1
+                    ),
+                    publiclyRevealedKeyring: [:],
+                    decryptedFields: [try CertificateFieldName("name"): "Entity"]
+                ),
+                limits: fixture.limits
+            )
+            #expect(parsed.badgeClickURL == link)
+        }
+        #expect(try DisplayableIdentity.unknown(limits: fixture.limits).badgeClickURL == link)
     }
 
     @Test("disclosure JSON enforces exact and max plus one limits during append")
@@ -239,7 +378,6 @@ struct IdentityClientTests {
             try await client.publiclyRevealAttributes(
                 certificate: fixture.certificate,
                 fieldsToReveal: [fixture.field, fixture.field],
-                verifier: fixture.root.publicKey,
                 using: broadcaster
             )
         }
@@ -267,7 +405,6 @@ struct IdentityClientTests {
             try await client.publiclyRevealAttributes(
                 certificate: fixture.certificate,
                 fieldsToReveal: [fixture.field],
-                verifier: fixture.root.publicKey,
                 using: RecordingBroadcaster(expected: fixture.transactionID)
             )
         }
@@ -312,9 +449,10 @@ private struct IdentityFixture {
 }
 
 private func identityFixture(
-    type: CertificateTypeID? = nil
+    type: CertificateTypeID? = nil,
+    root: PrivateKey? = nil
 ) async throws -> IdentityFixture {
-    let root = try PrivateKey(Array(repeating: 0, count: 31) + [1])
+    let root = try root ?? PrivateKey(Array(repeating: 0, count: 31) + [1])
     let field = try CertificateFieldName("userName")
     let unsigned = try Certificate(
         type: try type ?? KnownIdentityType.x.certificateType,

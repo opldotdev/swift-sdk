@@ -8,26 +8,45 @@ public enum ScriptASMStyle: Equatable, Sendable {
     case compact
     /// Canonical opcode names emitted by the pinned Go SDK v1.3.3.
     case goSDK
+    /// @bsv/sdk 4.1.1 `Script.toASM` opcode names (`OP_0`, `OP_1`,
+    /// Chronicle names). Where 4.1.1 writes text it cannot read back (a
+    /// top-level OP_RETURN, zero-length pushes), this follows the unmerged
+    /// @bsv/sdk fixes: the OP_RETURN is named, the bytes after it are read
+    /// leniently, and zero-length pushes are written as `OP_0`.
+    case typeScript
 }
 
-/// Opcode-name interpretation for the BRC-106/Go Chronicle naming conflict.
+/// Opcode-name interpretation for the BRC-106/Go/TypeScript naming conflicts.
 public enum ScriptASMDialect: Equatable, Sendable {
     case brc106
     case goSDK
+    /// The token rules of @bsv/sdk 4.1.1 `Script.fromASM`: its opcode table,
+    /// `0` and `-1`, lowercase hexadecimal with odd lengths padded with a
+    /// leading zero, and `OP_PUSHDATA1/2/4 <length> <hex>` with the push
+    /// opcode kept. Swift also requires that length to be the data's byte
+    /// count, written in plain decimal.
+    case typeScript
 }
 
 extension Script {
-    /// Parses bounded BRC ASM or compact SASM in an explicitly selected dialect.
+    /// Parses bounded ASM in the selected dialect.
     ///
-    /// Requiring `dialect` prevents conflicting NOP names from silently changing
-    /// bytes between BRC-106 and Go SDK text. Tokens must be separated by exactly
-    /// one ASCII space. Opcode aliases are
-    /// accepted, while hexadecimal tokens are encoded with the shortest push
-    /// length prefix used by the Go SDK. Consequently, ASM preserves program
-    /// meaning but does not preserve a non-minimal push opcode choice.
+    /// The default `.typeScript` dialect reads what @bsv/sdk 4.1.1 `fromASM`
+    /// reads, so ASM written by Swift keeps its bytes in @bsv/sdk. Empty text
+    /// is an empty script (4.1.1 reads it as `00`). `.brc106` reads
+    /// BRC-106 ASM and compact SASM; `.goSDK` reads the pinned Go SDK's
+    /// names. The dialects disagree on some NOP names, so pick the one that
+    /// wrote the text. Tokens must be separated by exactly one ASCII space.
+    /// Hexadecimal tokens are encoded with the shortest push length prefix.
+    /// Consequently, ASM preserves program meaning but does not preserve a
+    /// non-minimal push opcode choice, except for the `.typeScript` form
+    /// `OP_PUSHDATA1 <length> <hex>` (and its PUSHDATA2/4 forms), whose
+    /// decimal length must equal the data's byte count. A trailing
+    /// `OP_PUSHDATA1` (or `OP_PUSHDATA1 0`) with no data token is an empty
+    /// push, as in @bsv/sdk.
     public init(
         asm: String,
-        dialect: ScriptASMDialect,
+        dialect: ScriptASMDialect = .typeScript,
         maximumScriptByteCount: Int,
         maximumASMByteCount: Int
     ) throws {
@@ -73,46 +92,117 @@ extension Script {
         }
 
         var result = try Script(bytes: [], maximumByteCount: maximumScriptByteCount)
-        for (tokenIndex, tokenBytes) in utf8.split(separator: 0x20).enumerated() {
-            let token = String(decoding: tokenBytes, as: UTF8.self)
+        let tokens = utf8.split(separator: 0x20).map { String(decoding: $0, as: UTF8.self) }
+        let padsOddHex = dialect == .typeScript
+        var tokenIndex = 0
+        while tokenIndex < tokens.count {
+            let token = tokens[tokenIndex]
             if let opcode = Opcode(asmName: token, dialect: dialect) {
-                guard !opcode.isDataPush else {
+                guard opcode.isDataPush else {
+                    try result.append(opcode, maximumScriptByteCount: maximumScriptByteCount)
+                    tokenIndex += 1
+                    continue
+                }
+                // Only the TypeScript table names push opcodes, and only
+                // OP_PUSHDATA1/2/4: those take a length and a data token.
+                guard dialect == .typeScript else {
                     throw ScriptError.pushOpcodeRequiresData(opcode)
                 }
-                try result.append(opcode, maximumScriptByteCount: maximumScriptByteCount)
+                let data: [UInt8]
+                if tokenIndex + 2 < tokens.count {
+                    // @bsv/sdk decodes this token without its raw-token
+                    // check, so uppercase hexadecimal is accepted here.
+                    data = try Self.asmData(
+                        tokens[tokenIndex + 2],
+                        index: tokenIndex + 2,
+                        padsOddLength: true,
+                        requiresLowercase: false,
+                        maximumByteCount: maximumScriptByteCount
+                    )
+                } else {
+                    // @bsv/sdk reads a missing data token as no data, so a
+                    // trailing `OP_PUSHDATA1` or `OP_PUSHDATA1 0` is `4c00`.
+                    data = []
+                }
+                if tokenIndex + 1 < tokens.count {
+                    let lengthToken = tokens[tokenIndex + 1]
+                    guard lengthToken == String(data.count) else {
+                        throw ScriptError.invalidASMPushDataLength(index: tokenIndex + 1)
+                    }
+                }
+                try result.appendPushData(
+                    data,
+                    using: opcode,
+                    maximumScriptByteCount: maximumScriptByteCount
+                )
+                tokenIndex += min(3, tokens.count - tokenIndex)
                 continue
             }
 
-            let data: [UInt8]
-            do {
-                data = try Hex.decode(
-                    token,
-                    maximumDecodedByteCount: maximumScriptByteCount
-                )
-            } catch let error as TextEncodingError {
-                if case .invalidCharacter = error {
-                    throw ScriptError.invalidASMToken(index: tokenIndex)
-                }
-                throw ScriptError.invalidASMData(index: tokenIndex, error)
-            }
+            let data = try Self.asmData(
+                token,
+                index: tokenIndex,
+                padsOddLength: padsOddHex,
+                requiresLowercase: dialect == .typeScript,
+                maximumByteCount: maximumScriptByteCount
+            )
             try result.appendPushData(data, maximumScriptByteCount: maximumScriptByteCount)
+            tokenIndex += 1
         }
         self = result
     }
 
-    /// Formats bounded BRC ASM or compact SASM.
+    private static func asmData(
+        _ token: String,
+        index: Int,
+        padsOddLength: Bool,
+        requiresLowercase: Bool,
+        maximumByteCount: Int
+    ) throws -> [UInt8] {
+        // @bsv/sdk re-encodes a raw data token and rejects it unless the
+        // text is unchanged, so it refuses uppercase hexadecimal.
+        if requiresLowercase, token.utf8.contains(where: { (0x41...0x46).contains($0) }) {
+            throw ScriptError.invalidASMToken(index: index)
+        }
+        let hex = padsOddLength && token.utf8.count % 2 == 1 ? "0" + token : token
+        do {
+            return try Hex.decode(hex, maximumDecodedByteCount: maximumByteCount)
+        } catch let error as TextEncodingError {
+            if case .invalidCharacter = error {
+                throw ScriptError.invalidASMToken(index: index)
+            }
+            throw ScriptError.invalidASMData(index: index, error)
+        }
+    }
+
+    /// Formats bounded ASM in the selected style.
     ///
-    /// Pushed values are lowercase hexadecimal. Empty non-minimal pushes are
-    /// normalized to `OP_FALSE`/`false`, matching their stack semantics.
+    /// The default `.typeScript` style writes @bsv/sdk 4.1.1 opcode names and
+    /// follows the unmerged @bsv/sdk fixes where 4.1.1 text cannot be read
+    /// back (see `ScriptASMStyle.typeScript`). Pushed values are lowercase
+    /// hexadecimal. Empty non-minimal pushes are normalized to the style's
+    /// name for OP_0, matching their stack semantics.
+    ///
+    /// Malformed pushes are errors, except in the `.typeScript` style after
+    /// an OP_RETURN outside any conditional, where @bsv/sdk keeps the
+    /// remaining bytes as data: a truncated push there is written as the
+    /// bytes that remain, or `OP_0` when none remain. That text is lossy: it
+    /// reads back as a different, well-formed script (`6a056869` is written
+    /// `OP_RETURN 6869`, which reads as `6a026869`). Do not use it as a
+    /// script's identity or as a well-formedness check; `style: .canonical`
+    /// or `operations(maximumPushDataByteCount:)` reject malformed pushes.
     public func asm(
-        style: ScriptASMStyle = .canonical,
+        style: ScriptASMStyle = .typeScript,
         maximumPushDataByteCount: Int,
         maximumASMByteCount: Int
     ) throws -> String {
         guard maximumASMByteCount >= 0 else {
             throw ScriptError.invalidMaximumASMByteCount(maximumASMByteCount)
         }
-        let operations = try operations(maximumPushDataByteCount: maximumPushDataByteCount)
+        let operations = try operations(
+            maximumPushDataByteCount: maximumPushDataByteCount,
+            lenientAfterTopLevelReturn: style == .typeScript
+        )
         var tokens: [String] = []
         tokens.reserveCapacity(operations.count)
         var outputByteCount = 0
@@ -125,6 +215,7 @@ extension Script {
                 case .canonical: token = opcode.name
                 case .compact: token = opcode.compactName
                 case .goSDK: token = opcode.goSDKName
+                case .typeScript: token = opcode.typeScriptName
                 }
             case .push(_, let data):
                 if data.isEmpty {
@@ -132,6 +223,7 @@ extension Script {
                     case .canonical: token = Opcode.zero.name
                     case .compact: token = Opcode.zero.compactName
                     case .goSDK: token = Opcode.zero.goSDKName
+                    case .typeScript: token = Opcode.zero.typeScriptName
                     }
                 } else {
                     token = Hex.encode(data)
