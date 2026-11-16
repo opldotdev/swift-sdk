@@ -1,70 +1,55 @@
-# COMP-045: Canonical and bounded wallet-wire decoding
+# COMP-045: Wallet-wire primitives follow TypeScript 4.1.1
 
-## Context
+Status: Accepted. Revised: the wire now follows `@bsv/sdk` 4.1.1 instead of
+pinned Go v1.3.3.
 
-Pinned Go wallet serializers accept several values that cannot be reproduced
-without ambiguity or unsafe allocation. Their readers accept nonminimal
-CompactSize counts, optional Boolean bytes `02...fe`, UInt32 truncation, and an
-uninitialized counterparty byte. Some result readers ignore trailing payload,
-accept unknown enum bytes as zero values, or consume only the first 32 HMAC
-bytes. Error-result framing also permits trailing bytes after the stack.
-Pinned Go's ECDSA parser also normalizes a valid high-S signature to low-S, so
-deserializing and reserializing call-16 requests or call-15 results can change
-their bytes even when the DER structure is canonical.
+## Why the wire follows TypeScript
+
+TypeScript wallets and apps are the 1Sat wallet's peers. Every binary
+wallet-wire frame a Swift processor or transceiver exchanges with them must
+have the bytes `@bsv/sdk` 4.1.1 writes and must accept the bytes it sends.
+Where pinned Go v1.3.3 differs, Swift now follows TypeScript and records the
+Go difference as a divergence in the Go-oracle tests.
+
+Safety bounds stay. They reject hostile or malformed input but never
+legitimate TypeScript traffic.
 
 ## Ruling
 
-Swift emits canonical CompactSize and applies explicit frame, payload, text,
-originator, error-message, and error-stack bounds before copying fields. It
-accepts optional Boolean only as `00`, `01`, or one-byte `ff`; a missing
-privileged reason is one-byte `ff`. Public counterparties are self, anyone, or
-one exact compressed SEC1 key. UInt32 values do not truncate.
+Encoding follows the TypeScript writers in
+`packages/sdk/src/wallet/substrates/WalletWireTransceiver.ts` and
+`WalletWireProcessor.ts`:
 
-The Swift request models store `forSelf` as a required Boolean. Swift accepts
-the Go optional-Boolean absence byte and normalizes it to `false`. Canonical
-Swift output emits `00` for `false` and `01` for `true`. It does not emit the
-absence byte for this required value.
+- An omitted optional Boolean is `ff`. TypeScript writes a byte only for a
+  boolean value, and its callers omit `false`, so Swift writes `privileged`
+  and `forSelf` as `ff` when they are false. It reads `00`, `01` and `ff`.
+- An omitted counterparty is `00`. Swift reads it as the call's default
+  (`self`, or `anyone` for `createSignature`).
+- An empty string in a label or tag list is written with length 0. Length 0
+  and `-1` both read as the empty string.
+- An omitted optional string in a request may be empty.
+- A false `verifyHMAC` or `verifySignature` result is the error frame
+  TypeScript sends: code 1 with `HMAC is not valid` or
+  `Signature is not valid`.
+- Error frames carry a code from 1 to 8. Any other code is sent as 1. The
+  message is cut to 4,096 UTF-8 bytes on a character boundary, and the stack
+  is empty. The standard remote message limit is 4,096 bytes.
 
-The pinned-Go oracle applies a non-allocating, call-aware byte-index preflight
-before invoking a selected wallet serializer. For calls 8, 11 through 16, and
-23 through 28 it checks the complete request and success-result grammar:
-canonical CompactSize widths, bounded counts before slicing, exact fixed
-fields and sentinels, checked UInt32 heights, protocol/key/access/counterparty
-fields, both public-key request arms, signature data/digest arms, bounded DER
-structure, empty-call shapes, and full consumption. A declaration above its
-field or operation maximum is a resource-limit failure; a declaration within
-the maximum that exceeds the remaining packet is a truncation. Remote-error
-message and stack counts use the same distinction. The final process-level
-panic recovery remains a sanitized last resort and never includes packet data.
-DER preflight validates nonzero R and S scalars below the secp256k1 order with
-fixed-width byte comparisons and requires S at or below the curve half-order.
-High-S is rejected as non-round-trippable before pinned Go can normalize it.
+Swift keeps these bounds: canonical CompactSize, explicit frame, payload,
+text, originator and error limits, checked UInt32 values, low-S DER
+signatures, exact SEC1 keys and full payload consumption.
 
-Typed result decoding requires exact HMAC, public-key, DER-signature, header,
-authentication, network, and empty-success shapes. A verification or
-wait-for-authentication success represents only `true`; `false` cannot be
-encoded through a Go-compatible success frame. Empty optional strings/bytes
-that Go changes into absence, and empty verify-signature data that changes the
-semantic arm, are rejected as non-round-trippable.
+## Divergence from pinned Go v1.3.3
 
-## Consequences
+Go stores `privileged`, `forSelf` and `seekPermission` as plain Booleans and
+writes `00` for false where Swift and TypeScript write `ff`. The safe Go
+adapter rejects zero-length list entries. `WalletWireGoOracleTests` and
+`WalletWireActionGoOracleTests` assert both differences.
 
-Canonical Swift values for the 13 key/query calls remain byte-compatible with
-Go v1.3.3. A Go absent `forSelf` value is the documented exception: Swift
-accepts it and emits explicit false on re-encoding. Malformed inputs fail with
-redacted typed errors rather than being normalized, truncated, ignored, or
-used to allocate without a bound. Raw
-request framing still recognizes all defined calls 1 through 28, but the typed
-key/query API is intentionally closed to calls 8, 11 through 16, and 23 through
-28. COMP-046 adds the separate typed action subset. Certificate, transport,
-wallet behavior, persistence, and permission policy remain outside this
-checkpoint. The hostile Go matrix specifically
-covers FD/FE/FF CompactSize widths including
-MaxUInt64, noncanonical and truncated encodings, bounded-versus-short declared
-counts, fixed-field truncations, invalid discriminators, UInt32 overflow, DER
-structure and scalar boundaries, high-S rejection, empty/fixed result shapes,
-and trailing bytes in the applicable
-request and result grammar families. Swift tests cover exact success/failure
-frame maxima, CompactSize prefix growth, checked-add overflow, and limit
-relationships. A persistent pinned-Go oracle checks canonical request and
-result re-encoding in both directions without importing Go fixtures.
+## Tests
+
+`WalletWireKeyQueryTests`, `WalletWireAdversarialTests` and
+`WalletWireTypeScript41VectorTests` cover the vectors with TypeScript source
+citations. `WalletWireTypeScriptOracleTests` compares every call with live
+TypeScript frames when `BSV_TS_WALLET_WIRE_VECTORS` is set
+(`Tools/Conformance/TSOracle/generate.sh`).

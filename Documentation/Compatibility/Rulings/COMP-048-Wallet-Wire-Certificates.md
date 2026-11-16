@@ -1,59 +1,49 @@
-# COMP-048: Wallet-wire certificate strictness
+# COMP-048: Wallet-wire certificate calls follow TypeScript 4.1.1
 
-Status: Accepted.
+Status: Accepted. Revised: certificate calls now accept the `@bsv/sdk` 4.1.1
+forms instead of requiring pinned Go v1.3.3 ordering and totals.
 
-## Context
+## Why the wire follows TypeScript
 
-Pinned Go v1.3.3 defines wallet-wire calls 9, 10, and 17 through 22. Its
-canonical writers sort most certificate maps, use display-order transaction ID
-bytes in certificate revocation outpoints, and use CompactSize for lengths and
-counts.
-
-The pinned implementation also has three observable artifacts:
-
-- A list-certificate result uses `00` for an absent keyring and `01` plus a map
-  for a present keyring. Its reader turns a present empty map into absence.
-- The prove-certificate result writer ranges over its map without sorting.
-- The identity-certificate reader checks for end of input inside one item. It
-  cannot read a discovery result that contains more than one certificate.
-
-The separate Go maintainer report tracks this issue as
-[GO-001](../GoSDK-v1.3.3-Defects.md#go-001-discovery-results-cannot-contain-more-than-one-identity-certificate).
-
-Several pinned readers also accept nonminimal CompactSize, unchecked UInt32
-conversion, unsorted or duplicate maps, non-low-S signatures, loose presence
-bytes, or trailing data.
+TypeScript wallets and apps are the 1Sat wallet's peers (COMP-045). Their
+certificate frames must be read and answered without rejection.
 
 ## Ruling
 
-Swift provides strict bounded typed request and result codecs for the eight
-calls. The codecs:
+- **Map order.** TypeScript writes keyrings, fields and attributes in object
+  insertion order. Swift reads maps in any order and rejects only a repeated
+  name. Swift writes maps sorted by raw UTF-8 bytes, which TypeScript accepts.
+- **List and discovery totals.** `totalCertificates` counts every match. The
+  records follow with no count and end at the end of the frame. A page may be
+  shorter than its total but never longer, and never longer than the
+  request's limit.
+- **listCertificates verifier.** The wire carries the 33 compressed key bytes,
+  or length 0 when absent. The ABI and JSON keep the hex text. Any other
+  length is refused.
+- **Keyring presence.** `nil` is `00`; a nonempty map is `01` and the map.
+  TypeScript writes an empty keyring as `00` and returns `{}` for it, so JSON
+  `keyring: {}` reads as no keyring.
+- **Call 29.** TypeScript 4.x probes call 29 (certificate compatibility
+  profile) before discovery and some list, prove and relinquish calls. A Swift
+  processor answers code 1 `Invalid call code: 29`, the exact answer on which
+  the TypeScript transceiver falls back to the plain calls. The full profile
+  is not implemented: it exists to carry certificate types other than 32 bytes,
+  which Swift `CertificateTypeID` cannot represent.
 
-- Require canonical CompactSize and complete input consumption.
-- Check all counts and lengths before collection allocation or copying.
-- Require canonical compressed public keys and low-S DER signatures.
-- Use display-order transaction ID bytes for certificate revocation outpoints.
-- Emit and require unique map keys in raw UTF-8 byte order.
-- Require canonical Base64 in embedded certificate field values.
-- Use checked UInt32 conversions for outpoint indexes and pagination.
-- Keep request, result, direct ABI, and reflection diagnostics redacted.
+Swift keeps canonical CompactSize, compressed keys, low-S DER, checked UInt32
+values, canonical Base64 and full consumption.
 
-`WalletCertificateResult.keyring` is optional. `nil` encodes as `00`. A
-nonempty map encodes as `01` followed by the map. The initializer and decoder
-reject a present empty map because Go cannot preserve that state.
+## Divergence from pinned Go v1.3.3
 
-Swift implements the intended bounded nested grammar for discovery results and
-supports multiple certificates. Live-Go byte parity covers zero or one item.
-The safe Go adapter rejects multiple items before it calls the defective pinned
-reader. For a prove-certificate result, the live Go adapter performs strict
-canonical preflight and pinned typed parsing, then returns the validated input
-bytes. It does not return nondeterministic pinned map-writer output.
+The safe Go adapter requires sorted maps and a record count equal to the
+total, and the pinned identity-certificate reader cannot read more than one
+discovery record (GO-001). `WalletWireCertificateGoOracleTests` asserts the
+total difference. Canonical certificate frames with sorted maps still match Go
+byte for byte.
 
-## Consequences
+## Tests
 
-Canonical zero- and one-certificate packets have the same bytes in Swift and
-pinned Go v1.3.3. Swift also supports bounded multi-certificate discovery
-packets, although pinned Go cannot read them. Malformed, lossy, or
-nondeterministic forms fail with bounded typed errors. The packet supplies
-serialization only. It does not supply wallet execution, persistence,
-transport, permission prompts, certificate revocation checks, or trust policy.
+`WalletWireCertificateTests`, `WalletWireCertificateAdversarialTests` and
+`WalletWireTypeScript41VectorTests` cover these forms.
+`WalletWireTypeScriptOracleTests` replays live TypeScript frames, including the
+call-29 probe and fallback.
