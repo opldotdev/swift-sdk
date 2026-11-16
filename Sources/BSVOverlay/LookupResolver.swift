@@ -30,6 +30,10 @@ public enum OverlayDiscoveredHostPolicy: Hashable, Sendable {
     /// to every request through `createPublicNetworkFetch`
     /// (`storage/PublicHTTPSFetch.ts:114-158`). This is the default, because
     /// anyone can publish a one-satoshi advertisement.
+    ///
+    /// Only the advertised host text is checked. Unlike `@bsv/sdk` on Node,
+    /// a domain is not resolved first, so one whose DNS answer is a private
+    /// address is still contacted; see `COMP-061`.
     case publicNetworkOnly
     /// Any `https://` origin, for private deployments and tests.
     case anyHTTPSOrigin
@@ -67,6 +71,20 @@ public struct LookupResolution: Sendable {
     public let hostFailures: [OverlayHostFailure]
     /// Outputs left out because their transaction or output could not be read.
     public let rejectedOutputs: [LookupOutputRejection]
+    /// SLAP trackers that failed while another tracker answered, in sorted
+    /// host order.
+    public let trackerFailures: [OverlayHostFailure]
+    /// Advertised hosts left out because the host limit was reached. A
+    /// caller that needs every advertised host can treat a nonzero count as
+    /// a partial lookup.
+    public let skippedHostCount: Int
+}
+
+/// The hosts one lookup will ask, and what discovery left out.
+private struct LookupHostSelection {
+    var hosts: [OverlayHost]
+    var trackerFailures: [OverlayHostFailure] = []
+    var skippedHostCount = 0
 }
 
 /// An immutable, bounded resolver for SHIP and SLAP lookup services.
@@ -145,9 +163,9 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
     /// (`resolveTxIdForOutput` in `LookupResolver.ts`). The answer is nil when
     /// no host answered, or when every output any host returned was left out.
     public func resolveDetailed(_ question: LookupQuestion) async throws -> LookupResolution {
-        let hosts = try await competentHosts(for: question.service)
-        guard !hosts.isEmpty else { throw OverlayPolicyError.noCompetentHosts }
-        let results = try await query(question, at: hosts)
+        let selection = try await hostSelection(for: question.service)
+        guard !selection.hosts.isEmpty else { throw OverlayPolicyError.noCompetentHosts }
+        let results = try await query(question, at: selection.hosts)
         var answers: [(OverlayHost, LookupAnswer)] = []
         var failures: [OverlayHostFailure] = []
         for (host, result) in results {
@@ -156,39 +174,53 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
             case .failure(let error): failures.append(OverlayHostFailure(host: host, error: error))
             }
         }
-        let (answer, rejected) = try aggregate(answers)
         for failure in failures { OverlayLog.hostFailure("LookupResolver.resolve", failure) }
+        let (answer, rejected) = try aggregate(answers)
         for rejection in rejected { OverlayLog.rejectedOutput("LookupResolver.resolve", rejection) }
-        return LookupResolution(answer: answer, hostFailures: failures, rejectedOutputs: rejected)
+        return LookupResolution(
+            answer: answer,
+            hostFailures: failures,
+            rejectedOutputs: rejected,
+            trackerFailures: selection.trackerFailures,
+            skippedHostCount: selection.skippedHostCount
+        )
     }
 
     /// Returns the explicit or discovered hosts for one lookup service.
     public func competentHosts(for service: OverlayService) async throws -> [OverlayHost] {
-        let primary: [OverlayHost]
-        if service.rawValue == "ls_slap" {
-            primary = slapTrackers
-        } else if let override = hostOverrides[service] {
-            primary = override
-        } else {
-            primary = try await discoverHosts(
-                for: service, alongside: Set(additionalHosts[service] ?? []))
-        }
-        let combined = Self.uniqueSorted(primary + (additionalHosts[service] ?? []))
-        try Self.validateHosts(combined, limits: limits)
-        return combined
+        try await hostSelection(for: service).hosts
     }
 
-    /// Asks the SLAP trackers which hosts serve `service`. Caller hosts in
-    /// `alongside` keep their places; discovered hosts fill the rest of the
-    /// host limit in the order the trackers listed them, and later ones are
-    /// left out, as `LookupHostQueue.add` in @bsv/sdk does
-    /// (`overlay-tools/LookupHostQueue.ts:20-29`). A flood of advertisements
-    /// therefore cannot stop a lookup.
+    private func hostSelection(for service: OverlayService) async throws -> LookupHostSelection {
+        let callerHosts = additionalHosts[service] ?? []
+        var selection: LookupHostSelection
+        if service.rawValue == "ls_slap" {
+            selection = LookupHostSelection(hosts: slapTrackers)
+        } else if let override = hostOverrides[service] {
+            selection = LookupHostSelection(hosts: override)
+        } else {
+            selection = try await discoverHosts(for: service, alongside: Set(callerHosts))
+        }
+        selection.hosts = Self.uniqueSorted(selection.hosts + callerHosts)
+        try Self.validateHosts(selection.hosts, limits: limits)
+        return selection
+    }
+
+    /// Asks the SLAP trackers which hosts serve `service`.
+    ///
+    /// Caller hosts in `alongside` keep their places. The rest of the host
+    /// limit is shared between the trackers, as in @bsv/sdk: each tracker
+    /// may name at most an equal share (`LookupDiscovery.ts:107-110`), and
+    /// hosts are then taken from the trackers in turn
+    /// (`LookupHostQueue.ts:47-59`) until the limit is reached. One tracker,
+    /// or one flood of advertisements, therefore cannot fill every place,
+    /// and hosts past the limit are counted and left out rather than failing
+    /// the lookup.
     private func discoverHosts(
         for service: OverlayService,
         alongside callerHosts: Set<OverlayHost>
-    ) async throws -> [OverlayHost] {
-        guard !slapTrackers.isEmpty else { return [] }
+    ) async throws -> LookupHostSelection {
+        guard !slapTrackers.isEmpty else { return LookupHostSelection(hosts: []) }
         let slapService: OverlayService
         do {
             slapService = try OverlayService(rawValue: "ls_slap", limits: limits)
@@ -202,38 +234,70 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
             limits: limits
         )
         let results = try await query(question, at: slapTrackers)
-        guard results.contains(where: { if case .success = $0.1 { true } else { false } }) else {
+        var trackerFailures: [OverlayHostFailure] = []
+        for case (let tracker, .failure(let error)) in results {
+            trackerFailures.append(OverlayHostFailure(host: tracker, error: error))
+        }
+        for failure in trackerFailures {
+            OverlayLog.hostFailure("LookupResolver.discoverHosts", failure)
+        }
+        guard trackerFailures.count < results.count else {
             throw OverlayPolicyError.noSuccessfulResponses
         }
-        var discovered: Set<OverlayHost> = []
+
+        let room = max(0, limits.maximumResolutionHostCount - callerHosts.count)
+        let share = max(1, room / slapTrackers.count)
         var skipped = 0
+        var perTracker: [[OverlayHost]] = []
         for case (_, .success(.outputList(let outputs))) in results {
+            var named: [OverlayHost] = []
+            var seen: Set<OverlayHost> = []
             for output in outputs {
                 guard
                     let token = verifiedAdvertisement(
                         in: output,
                         beefLimits: beefLimits,
-                        adminTokenLimits: adminTokenLimits
+                        adminTokenLimits: adminTokenLimits,
+                        operation: "LookupResolver.discoverHosts"
                     ),
                     token.subject == .slap(service),
                     let host = advertisedHTTPSHost(
                         token, policy: discoveredHostPolicy, limits: limits)
                 else { continue }
-                guard !callerHosts.contains(host), !discovered.contains(host) else { continue }
-                guard discovered.count + callerHosts.count < limits.maximumResolutionHostCount
-                else {
+                guard !callerHosts.contains(host), seen.insert(host).inserted else { continue }
+                if named.count < share {
+                    named.append(host)
+                } else {
                     skipped += 1
-                    continue
                 }
-                discovered.insert(host)
             }
+            perTracker.append(named)
+        }
+
+        var discovered: Set<OverlayHost> = []
+        var position = 0
+        while perTracker.contains(where: { position < $0.count }) {
+            for named in perTracker where position < named.count {
+                let host = named[position]
+                guard !discovered.contains(host) else { continue }
+                if discovered.count < room {
+                    discovered.insert(host)
+                } else {
+                    skipped += 1
+                }
+            }
+            position += 1
         }
         if skipped > 0 {
             OverlayLog.skippedHosts(
                 "LookupResolver.discoverHosts", count: skipped,
                 limit: limits.maximumResolutionHostCount)
         }
-        return discovered.sorted()
+        return LookupHostSelection(
+            hosts: discovered.sorted(),
+            trackerFailures: trackerFailures,
+            skippedHostCount: skipped
+        )
     }
 
     /// Each host's answer or failure, in host order. Only cancellation and
@@ -428,14 +492,27 @@ package func overlayLookupTransaction(
 package func verifiedAdvertisement(
     in output: OutputListItem,
     beefLimits: BEEFLimits,
-    adminTokenLimits: OverlayAdminTokenLimits
+    adminTokenLimits: OverlayAdminTokenLimits,
+    operation: String
 ) -> OverlayAdminToken? {
-    guard let transaction = try? output.transaction(beefLimits: beefLimits),
-        Int(output.outputIndex) < transaction.outputs.count
-    else { return nil }
-    let selected = transaction.outputs[Int(output.outputIndex)]
-    guard selected.satoshis == 1 else { return nil }
-    return try? OverlayAdminTokenCodec.decode(selected.lockingScript, limits: adminTokenLimits)
+    do {
+        let transaction = try output.transaction(beefLimits: beefLimits)
+        guard Int(output.outputIndex) < transaction.outputs.count else {
+            throw OverlayPolicyError.invalidLookupOutput
+        }
+        let selected = transaction.outputs[Int(output.outputIndex)]
+        guard selected.satoshis == 1 else {
+            OverlayLog.skippedAdvertisement(
+                operation, output: output, reason: "holds \(selected.satoshis) satoshis, not 1")
+            return nil
+        }
+        return try OverlayAdminTokenCodec.decode(selected.lockingScript, limits: adminTokenLimits)
+    } catch {
+        OverlayLog.skippedAdvertisement(
+            operation, output: output,
+            reason: "\(type(of: error)): \(String(reflecting: error))")
+        return nil
+    }
 }
 
 /// The `https://` origin an advertisement names, as a host the HTTPS

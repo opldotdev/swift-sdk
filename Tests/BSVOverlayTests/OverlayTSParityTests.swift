@@ -371,8 +371,9 @@ struct OverlayTSParityTests {
 
     @Test("S5: advertised IP hosts are parsed and written as WHATWG URL does")
     func whatwgHosts() throws {
-        // `new URL(uri).origin` in Bun, the parser `@bsv/sdk` uses
+        // `new URL(uri).origin` in Node 22, the parser `@bsv/sdk` uses
         // (`OverlayAdminTokenTemplate.ts:81-95`, `SHIPBroadcaster.ts:102-125`).
+        // Bun's parser refuses some valid IPv6 forms, such as the last row.
         let origins: [(String, String?)] = [
             ("https://1.2.3.4.5/", nil),
             ("https://256.1.1.1/", nil),
@@ -397,6 +398,7 @@ struct OverlayTSParityTests {
             ("https://[1:0:0:2:0:0:0:3]/", "https://[1:0:0:2::3]"),
             ("https://[::]/", "https://[::]"),
             ("https://[::1.2.3.4]/", "https://[::102:304]"),
+            ("https://[1:0::2002:64:1.2.3.4]/", "https://[1::2002:64:102:304]"),
         ]
         for (uri, origin) in origins {
             #expect(OverlayAdvertisementURI.httpsOrigin(uri) == origin, "\(uri)")
@@ -429,10 +431,16 @@ struct OverlayTSParityTests {
                 OverlayAdvertisementURI.isPublicHTTPSOrigin("https://\(host)") == isPublic,
                 "\(host)")
         }
-        for name in ["printer.local", "db.internal", "box.home.arpa", "a.localhost", "localhost."] {
+        for name in [
+            "printer.local", "db.internal", "box.home.arpa", "a.localhost", "localhost.",
+            // Empty labels: digits and dots, as `PublicHTTPSFetch.ts:201-204`
+            // refuses them, and names whose trailing dots hide a private suffix.
+            "127.0.0.1..", "9..", "..", "localhost..", "printer.local..", "a..example",
+        ] {
             #expect(!OverlayAdvertisementURI.isPublicHTTPSOrigin("https://\(name)"), "\(name)")
         }
         #expect(OverlayAdvertisementURI.isPublicHTTPSOrigin("https://overlay.example"))
+        #expect(OverlayAdvertisementURI.isPublicHTTPSOrigin("https://overlay.example."))
         // A numeric alias of a private address is caught after canonicalization.
         #expect(!OverlayAdvertisementURI.isPublicHTTPSOrigin("https://2130706433/"))
     }
@@ -653,6 +661,111 @@ struct OverlayTSParityTests {
         )
         let report = try await broadcaster.broadcastDetailed(try atomicBEEF(limits: limits))
         #expect(report.acknowledgedTopics.keys.map(\.rawValue) == [first.rawValue])
+    }
+
+    @Test("S1: each tracker gets a share of the host limit, and skips are reported")
+    func trackersShareTheHostLimit() async throws {
+        let limits = try overlayLimits(maximumNameBytes: 256, maximumHosts: 4)
+        let service = try OverlayService(rawValue: "ls_records")
+        let flooding = try OverlayHost(rawValue: "https://a-tracker.example")
+        let honest = try OverlayHost(rawValue: "https://b-tracker.example")
+        var key: UInt8 = 130
+        func ads(_ hosts: [String]) throws -> LookupAnswer {
+            try LookupAnswer(outputList: hosts.map {
+                key += 1
+                return try advertisementItem("SLAP", host: $0, subject: service.rawValue, key: key)
+            })
+        }
+        let flood = try ads((1...6).map { "https://flood\($0).example" })
+        let named = try ads(["https://honest1.example", "https://honest2.example"])
+        let resolver = try LookupResolver(
+            facilitator: ParityLookupMock(responses: [flooding: flood, honest: named]),
+            slapTrackers: [flooding, honest],
+            beefLimits: try beefLimits(),
+            limits: limits
+        )
+        // A share is 4 / 2 = 2 hosts, so the first tracker's flood cannot
+        // take the second tracker's places.
+        #expect(
+            try await resolver.competentHosts(for: service).map(\.rawValue) == [
+                "https://flood1.example", "https://flood2.example",
+                "https://honest1.example", "https://honest2.example",
+            ])
+        let resolution = try await resolver.resolveDetailed(
+            try LookupQuestion(service: service, query: [0x7b, 0x7d], limits: limits))
+        #expect(resolution.skippedHostCount == 4)
+        #expect(resolution.trackerFailures.isEmpty)
+    }
+
+    @Test("S2: a tracker that fails while another answers is reported")
+    func trackerFailureIsReported() async throws {
+        let service = try OverlayService(rawValue: "ls_records")
+        let down = try OverlayHost(rawValue: "https://down-tracker.example")
+        let up = try OverlayHost(rawValue: "https://up-tracker.example")
+        let answer = try LookupAnswer(outputList: [
+            advertisementItem("SLAP", host: "https://records.example", subject: service.rawValue, key: 140)
+        ])
+        let resolver = try LookupResolver(
+            facilitator: ParityLookupMock(responses: [up: answer]),
+            slapTrackers: [down, up],
+            beefLimits: try beefLimits()
+        )
+        let resolution = try await resolver.resolveDetailed(
+            try LookupQuestion(service: service, query: [0x7b, 0x7d]))
+        #expect(resolution.trackerFailures.map(\.host) == [down])
+        #expect(resolution.hostFailures.map(\.host.rawValue) == ["https://records.example"])
+        #expect(resolution.skippedHostCount == 0)
+    }
+
+    @Test("S1 and N1: hosts named in requirements keep their places and must be discovered")
+    func namedHostsKeepTheirPlaces() async throws {
+        let topic = try OverlayTopic(rawValue: "tm_a")
+        let first = try OverlayHost(rawValue: "https://first.example")
+        let second = try OverlayHost(rawValue: "https://second.example")
+        let discovery = try LookupAnswer(outputList: [
+            advertisementItem("SHIP", host: first.rawValue, subject: "tm_a", key: 150),
+            advertisementItem("SHIP", host: second.rawValue, subject: "tm_a", key: 151),
+        ])
+        let acknowledged = try Steak(
+            instructions: [topic: try AdmittanceInstructions(outputsToAdmit: [0])])
+        let facilitator = ParityTopicMock(steaks: [first: acknowledged, second: acknowledged])
+        let limits = try beefLimits()
+        let atomic = try atomicBEEF(limits: limits)
+
+        // With room for one host, the named second host is kept and the
+        // first, which arrived earlier, is left out and counted.
+        let reserved = try OverlayTopicBroadcaster(
+            topics: [topic], facilitator: facilitator,
+            resolver: ParityResolverMock(answer: discovery),
+            acknowledgmentByHost: [second: try AckFrom(requirement: .all)],
+            beefLimits: limits,
+            limits: try overlayLimits(maximumNameBytes: 256, maximumHosts: 1)
+        )
+        let report = try await reserved.broadcastDetailed(atomic)
+        #expect(report.acknowledgedTopics.keys.map(\.rawValue) == [second.rawValue])
+        #expect(report.skippedHostCount == 1)
+        #expect(report.failure == nil)
+
+        // A named host that discovery did not return fails even a `.none`
+        // requirement, as in `SHIPBroadcaster.ts:659-662`.
+        let missing = try OverlayTopicBroadcaster(
+            topics: [topic], facilitator: facilitator,
+            resolver: ParityResolverMock(answer: discovery),
+            acknowledgmentByHost: [
+                try OverlayHost(rawValue: "https://absent.example"): try AckFrom(requirement: .none)
+            ],
+            beefLimits: limits
+        )
+        let missingReport = try await missing.broadcastDetailed(atomic)
+        #expect(missingReport.failure == .acknowledgmentFailed)
+        #expect(missingReport.skippedHostCount == 0)
+    }
+
+    @Test("S5: the overlay log writes a host as scheme, host and port only")
+    func logLocationDropsCredentialsAndQuery() throws {
+        let host = try OverlayHost(rawValue: "https://user:secret@overlay.example:8443/path?key=1")
+        #expect(OverlayLog.location(host) == "https://overlay.example:8443")
+        #expect(OverlayLog.location(try OverlayHost(rawValue: "https://overlay.example")) == "https://overlay.example")
     }
 
     @Test("N3: an acknowledgment host that is not an https origin is rejected up front")

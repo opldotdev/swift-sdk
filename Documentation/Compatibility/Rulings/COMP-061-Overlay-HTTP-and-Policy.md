@@ -39,7 +39,14 @@ the TS hosts:
   transaction's ancestry, the output keeps the shared BEEF and its
   `transactionID` names the subject. Any other failure to build the Atomic
   BEEF fails the answer. Merkle paths are kept and renumbered as TS does: those
-  the selected records reference, in first-reference order.
+  the selected records reference, in first-reference order. Swift reads that
+  order from its parents-first records and TS from the order the records
+  arrived in, so when a sender lists a child before its parents the two can
+  write the same paths in a different order; both envelopes are valid.
+  Atomic BEEF for a chain of unproven transactions grows with the chain, so
+  the bytes generated and handed out are counted as they are built and the
+  answer fails with `resourceLimit` once either passes the answer limit, as
+  `extractAtomicOutputs` does (`LookupResolver.ts:917-938`).
 - **Reading an output.** `OutputListItem.transaction(beefLimits:)` is public, so
   callers read the transaction an output belongs to the way the resolver does:
   the `transactionID` when present, else the Atomic BEEF subject, else the last
@@ -53,8 +60,10 @@ the TS hosts:
   text may be at most twice the freeform limit.
 - **STEAK.** The camelCase keys TS hosts send (`outputsToAdmit`,
   `coinsToRetain`, optional `coinsRemoved`) are read, as is Go's PascalCase.
-  A STEAK naming a topic that was not submitted is malformed. An instruction
-  object with no keys is read as Go's shape: no instructions.
+  A STEAK naming a topic that was not submitted is malformed. So is an
+  instruction object with no keys: `validateSTEAK` requires `outputsToAdmit`
+  and `coinsToRetain` (`SHIPBroadcaster.ts:255-256`), and Go always writes
+  every field, so the host counts as failed.
 - **Submission.** `X-Topics` is comma-separated, as `SHIPBroadcaster.ts` sends
   and Overlay Express reads. Off-chain values are sent, not dropped: header
   `x-includes-off-chain-values: true` and body `varint(beef length) || beef ||
@@ -73,13 +82,22 @@ the TS hosts:
   when every host answered and `uncertainDelivery` when a host failed, since
   that host may have admitted the transaction. `broadcastDetailed` reports each
   host's acknowledged topics and each failure with its error. Hosts past the
-  host limit are left out, as TS stops at its host cap, instead of failing.
-  SLAP discovery for a lookup does the same (`LookupHostQueue.ts:20-29`):
-  caller hosts keep their places and discovered hosts fill the rest of the
-  limit in tracker order. Hosts a caller lists directly still throw
-  `limitExceeded` past the limit, as TS throws for more than 32.
-  Acknowledgment-policy keys that are not `https://` origins are rejected when
-  the broadcaster is made, since no discovered host could match them.
+  host limit are left out, as TS stops at its host cap, instead of failing;
+  hosts named in `acknowledgmentByHost` always keep their places, and
+  `OverlayBroadcastReport.skippedHostCount` counts the rest. A named host
+  that discovery did not return fails its requirement, even `.none`, as in
+  `SHIPBroadcaster.ts:659-662`. Acknowledgment-policy keys that are not
+  `https://` origins are rejected when the broadcaster is made, since no
+  discovered host could match them.
+- **Lookup host limit.** SLAP discovery shares the host limit as TS does.
+  Caller hosts keep their places. Each tracker may name at most an equal
+  share of the rest (`LookupDiscovery.ts:107-110`), and hosts are then taken
+  from the trackers in turn (`LookupHostQueue.ts:47-59`), so one tracker or
+  one flood of advertisements cannot fill every place.
+  `LookupResolution.skippedHostCount` counts hosts left out, and
+  `trackerFailures` lists trackers that failed while another answered. Hosts a
+  caller lists directly still throw `limitExceeded` past the limit, as TS
+  throws for more than 32.
 - **Host normalization.** Discovered hosts, caller-supplied resolver hosts that
   are `https://` origins, and acknowledgment-policy keys are normalized to the
   origin TS requests (canonical host, no default port, no trailing slash), so
@@ -89,12 +107,22 @@ the TS hosts:
 - **Discovered hosts must be public.** By default (`discoveredHostPolicy:
   .publicNetworkOnly`) discovery skips an advertised host that is a loopback,
   private, link-local, shared, multicast or reserved IPv4 or IPv6 address, or
-  `localhost`, `.localhost`, `.local`, `.internal` or `.home.arpa`. Anyone can
-  publish a one-satoshi advertisement, and TS refuses such addresses in
-  `createPublicNetworkFetch` (`storage/PublicHTTPSFetch.ts:114-158`). TS also
-  resolves names and refuses private answers; that needs DNS and belongs to
-  the transport. `.anyHTTPSOrigin` turns the filter off for private
-  deployments. Caller-supplied hosts are never filtered.
+  `localhost`, `.localhost`, `.local`, `.internal` or `.home.arpa` once a
+  trailing dot is removed. A domain with any other empty label, or made only
+  of digits and dots, is refused too (`PublicHTTPSFetch.ts:201-204`). Anyone
+  can publish a one-satoshi advertisement, and TS refuses such addresses in
+  `createPublicNetworkFetch` (`storage/PublicHTTPSFetch.ts:114-158`).
+  `.anyHTTPSOrigin` turns the filter off for private deployments.
+  Caller-supplied hosts are never filtered.
+- **Known gap: DNS answers.** On Node, TS also resolves each name, refuses a
+  private answer and connects to the address it checked
+  (`PublicHTTPSFetch.ts:262-271`). Swift checks only the advertised text: the
+  `URLSession` transport resolves names itself and cannot be pinned to a
+  checked address, and a check before the request would leave the answer
+  free to change in between. An advertised domain that resolves to a private
+  address is therefore still contacted. TLS limits that to a connection
+  attempt whose certificate must match the advertised name, and the
+  transport refuses every redirect.
 - **Bad outputs.** An output whose transaction cannot be read, whose `txid`
   disagrees with its BEEF, or whose index is out of range is left out, as TS
   does, instead of failing the lookup. `resolveDetailed` reports each such

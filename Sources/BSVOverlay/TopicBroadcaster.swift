@@ -14,6 +14,11 @@ public struct OverlayBroadcastReport: Sendable {
     /// Why the broadcast did not meet its acknowledgment requirements, or nil
     /// when it did.
     public let failure: OverlayPolicyError?
+    /// Advertised hosts left out because the host limit was reached. Hosts
+    /// named in the acknowledgment requirements always keep their places, so
+    /// a caller that must reach every advertised host can treat a nonzero
+    /// count as a partial broadcast.
+    public let skippedHostCount: Int
 }
 
 /// A deterministic, one-shot SHIP broadcaster for caller-supplied Atomic BEEF.
@@ -155,7 +160,7 @@ public struct OverlayTopicBroadcaster: Sendable {
             offChainValues: offChainValues,
             limits: limits
         )
-        let hosts = try await interestedHosts()
+        let (hosts, skippedHostCount) = try await interestedHosts()
         guard !hosts.isEmpty else { throw OverlayPolicyError.noInterestedHosts }
         var submissions: [(OverlayHost, TaggedBEEF)] = []
         submissions.reserveCapacity(hosts.count)
@@ -192,7 +197,8 @@ public struct OverlayTopicBroadcaster: Sendable {
             transactionID: atomicBEEF.subjectTransactionID,
             acknowledgedTopics: acknowledged,
             hostFailures: failures,
-            failure: failure
+            failure: failure,
+            skippedHostCount: skippedHostCount
         )
     }
 
@@ -201,9 +207,13 @@ public struct OverlayTopicBroadcaster: Sendable {
     /// Like `@bsv/sdk` `SHIPBroadcaster` (`SHIPBroadcaster.ts:476-482,738-783`),
     /// each host is later sent only the topics it advertised, because the
     /// overlay engine refuses a submission that names a topic it does not host.
-    /// As there, hosts past the host limit are left out rather than failing
-    /// the broadcast; the resolver's output order decides which are kept.
-    private func interestedHosts() async throws -> [OverlayHost: Set<OverlayTopic>] {
+    /// As there, hosts past the host limit are left out and counted rather
+    /// than failing the broadcast. Hosts named in `acknowledgmentByHost` keep
+    /// their places, so advertisements cannot crowd out a host the caller
+    /// requires; other hosts fill the rest in the resolver's output order.
+    private func interestedHosts() async throws -> (
+        hosts: [OverlayHost: Set<OverlayTopic>], skipped: Int
+    ) {
         let service: OverlayService
         do {
             service = try OverlayService(rawValue: "ls_ship", limits: limits)
@@ -223,22 +233,28 @@ public struct OverlayTopicBroadcaster: Sendable {
 
         let requested = Set(topics)
         var hosts: [OverlayHost: Set<OverlayTopic>] = [:]
+        let unnamedRoom = limits.maximumResolutionHostCount - acknowledgmentByHost.count
+        var unnamedCount = 0
         var skipped = 0
         for output in outputs {
             guard
                 let token = verifiedAdvertisement(
                     in: output,
                     beefLimits: beefLimits,
-                    adminTokenLimits: adminTokenLimits
+                    adminTokenLimits: adminTokenLimits,
+                    operation: "OverlayTopicBroadcaster.broadcast"
                 ),
                 case .ship(let topic) = token.subject,
                 requested.contains(topic),
                 let host = advertisedHTTPSHost(
                     token, policy: discoveredHostPolicy, limits: limits)
             else { continue }
-            guard hosts[host] != nil || hosts.count < limits.maximumResolutionHostCount else {
-                skipped += 1
-                continue
+            if hosts[host] == nil, acknowledgmentByHost[host] == nil {
+                guard unnamedCount < unnamedRoom else {
+                    skipped += 1
+                    continue
+                }
+                unnamedCount += 1
             }
             hosts[host, default: []].insert(topic)
         }
@@ -247,7 +263,7 @@ public struct OverlayTopicBroadcaster: Sendable {
                 "OverlayTopicBroadcaster.broadcast", count: skipped,
                 limit: limits.maximumResolutionHostCount)
         }
-        return hosts
+        return (hosts, skipped)
     }
 
     /// Each host's STEAK or failure, in host order. A host that answers with
@@ -310,8 +326,12 @@ public struct OverlayTopicBroadcaster: Sendable {
                 Self.satisfies(acknowledgmentFromAnyHost, $0, topics)
             })
         else { return false }
+        // A named host that discovery did not return fails even a `.none`
+        // requirement, as in `@bsv/sdk` (`SHIPBroadcaster.ts:659-662`).
         for (host, requirement) in acknowledgmentByHost {
-            guard Self.satisfies(requirement, acknowledged[host] ?? none, topics) else {
+            guard hosts.contains(host),
+                Self.satisfies(requirement, acknowledged[host] ?? none, topics)
+            else {
                 return false
             }
         }

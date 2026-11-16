@@ -431,10 +431,12 @@ enum OverlayHTTPCodec {
             let retained: [UInt32]
             let removed: [UInt32]
             let ancillary: [TransactionID]
-            // An empty object has no keys to tell the two shapes apart. Go's
-            // shape, whose fields are all optional, reads it as no instructions,
-            // which is how it was read before camelCase support.
-            if !keys.isEmpty, keys.isSubset(of: ["outputsToAdmit", "coinsToRetain", "coinsRemoved"]) {
+            // An empty object is neither shape: `validateSTEAK` in `@bsv/sdk`
+            // requires `outputsToAdmit` and `coinsToRetain`
+            // (`SHIPBroadcaster.ts:255-256`), and Go's encoder always writes
+            // every field. TS counts the host as failed, so this does too.
+            guard !keys.isEmpty else { throw OverlayHTTPError.malformedResponse }
+            if keys.isSubset(of: ["outputsToAdmit", "coinsToRetain", "coinsRemoved"]) {
                 // `validateSTEAK` in `@bsv/sdk` (`SHIPBroadcaster.ts:237-262`):
                 // `outputsToAdmit` and `coinsToRetain` are required arrays and
                 // `coinsRemoved` is an optional array.

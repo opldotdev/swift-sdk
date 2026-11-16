@@ -445,12 +445,23 @@ struct OverlayTSWireTests {
         }
     }
 
-    @Test("N1: an instruction object with no keys is a non-acknowledgment")
+    @Test("N5: an instruction object with no keys is malformed, as validateSTEAK finds")
     func emptyInstructionObject() async throws {
         let topic = try OverlayTopic(rawValue: "tm_test")
-        let steak = try await submit(responseBody: #"{"tm_test":{}}"#, topics: [topic]).steak
-        #expect(steak.instructions[topic] != nil)
-        #expect(!steak.acknowledges(topic))
+        await #expect(throws: OverlayHTTPError.malformedResponse) {
+            _ = try await submit(responseBody: #"{"tm_test":{}}"#, topics: [topic])
+        }
+    }
+
+    @Test("N6: a JSON answer over the answer limit is a resource limit")
+    func oversizedJSONAnswer() throws {
+        let configuration = try OverlayHTTPConfiguration(beefLimits: beefLimits())
+        let limit = configuration.overlayLimits.maximumLookupAnswerByteCount
+        let body = [UInt8]("{\"type\":\"freeform\",\"result\":\"".utf8)
+            + [UInt8](repeating: 0x61, count: limit) + [UInt8]("\"}".utf8)
+        #expect(throws: OverlayHTTPError.resourceLimit) {
+            _ = try OverlayHTTPCodec.lookupJSONResponse(body, configuration: configuration)
+        }
     }
 
     @Test("M1: Atomic BEEF built for an aggregated chain stops at the answer limit")

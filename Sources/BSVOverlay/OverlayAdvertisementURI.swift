@@ -9,10 +9,11 @@
 /// default port is dropped.
 ///
 /// It accepts nothing `@bsv/sdk` rejects. It rejects a few forms that the
-/// WHATWG parser repairs and no advertisement writer emits: percent-encoded or
-/// non-ASCII host text, any `@` in the authority, a backslash, dot segments or
-/// other text in a path that must be `/`, extra slashes after the scheme, and
-/// leading or trailing spaces.
+/// WHATWG parser accepts or repairs and no advertisement writer emits:
+/// percent-encoded or non-ASCII host text, host characters outside letters,
+/// digits, `-`, `.` and `_` (such as `! $ & ' ( ) * + , ; = ~`), any `@` in
+/// the authority, a backslash, dot segments or other text in a path that must
+/// be `/`, extra slashes after the scheme, and leading or trailing spaces.
 enum OverlayAdvertisementURI {
     static let maximumByteCount = 4_096
 
@@ -62,10 +63,18 @@ enum OverlayAdvertisementURI {
     /// for an address literal (`storage/PublicHTTPSFetch.ts:61-158`).
     ///
     /// An IPv4 or IPv6 host must be a public unicast address. A domain may
-    /// not be `localhost` or end in `.localhost`, `.local`, `.internal` or
-    /// `.home.arpa`. `@bsv/sdk` also resolves domains and refuses ones that
-    /// resolve to a private address; that check needs DNS, so it belongs to
-    /// the transport.
+    /// not have an empty label other than one trailing dot, may not be only
+    /// digits and dots (`PublicHTTPSFetch.ts:201-204`), and, after its
+    /// trailing dot is removed, may not be `localhost` or end in
+    /// `.localhost`, `.local`, `.internal` or `.home.arpa`.
+    ///
+    /// Not checked: what a domain resolves to. On Node, `@bsv/sdk` resolves
+    /// each name, refuses one that resolves to a private address and connects
+    /// to the address it checked (`PublicHTTPSFetch.ts:262-271`). The
+    /// `URLSession` transport resolves names itself and cannot be pinned to a
+    /// checked address, so an advertised domain that resolves to a private
+    /// address is still contacted. TLS limits that to a connection attempt
+    /// whose certificate must match the advertised name.
     static func isPublicHTTPSOrigin(_ value: String) -> Bool {
         guard let url = httpsAuthority(value) else { return false }
         switch url.hostKind {
@@ -76,8 +85,12 @@ enum OverlayAdvertisementURI {
         case .domain:
             var name = url.host
             if name.hasSuffix(".") { name.removeLast() }
+            let labels = name.split(separator: ".", omittingEmptySubsequences: false)
+            guard !name.isEmpty, !labels.contains(where: \.isEmpty),
+                !name.allSatisfy({ $0 == "." || ("0"..."9").contains($0) })
+            else { return false }
             let privateSuffixes = [".localhost", ".local", ".internal", ".home.arpa"]
-            return !name.isEmpty && name != "localhost"
+            return name != "localhost"
                 && !privateSuffixes.contains(where: { name.hasSuffix($0) })
         }
     }

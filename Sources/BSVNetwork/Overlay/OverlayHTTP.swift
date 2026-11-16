@@ -153,8 +153,10 @@ public struct HTTPSOverlayLookupFacilitator: LookupFacilitator, Sendable {
             throw CancellationError()
         } catch NetworkServiceError.cancelled {
             throw CancellationError()
-        } catch NetworkServiceError.responseBodyTooLarge {
-            throw OverlayHTTPError.resourceLimit
+        } catch let error as NetworkServiceError {
+            NetworkLog.failure("HTTPSOverlayLookupFacilitator.lookup", request: request, underlying: error)
+            if case .responseBodyTooLarge = error { throw OverlayHTTPError.resourceLimit }
+            throw OverlayHTTPError.transport
         } catch {
             NetworkLog.failure("HTTPSOverlayLookupFacilitator.lookup", request: request, underlying: error)
             throw OverlayHTTPError.transport
@@ -287,7 +289,7 @@ private func mediaType(_ value: String?) -> String? {
         .lowercased()
 }
 
-/// A non-200 overlay answer: logged in full once, thrown with the overlay's short reason.
+/// A non-2xx overlay answer: logged in full once, thrown with the overlay's short reason.
 private func overlayRejection(
     _ operation: String,
     request: HTTPRequest,
