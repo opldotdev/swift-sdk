@@ -18,9 +18,9 @@ certificate frames must be read and answered without rejection.
   which differs from byte order when names differ in case, digits or
   punctuation (`cardholder` comes before `cardNumber`). Swift reads certificate
   fields in any order and rejects only a repeated name, so acquireCertificate,
-  listCertificates and discovery read TypeScript answers. Swift still writes
-  byte order; signing and writing in `localeCompare` order follows once that
-  comparator is available below BSVAuth.
+  listCertificates and discovery read TypeScript answers. Swift writes and
+  signs certificate binary in `localeCompare` order too (COMP-041), so a
+  certificate TypeScript sent re-encodes byte for byte.
 - **List and discovery totals.** `totalCertificates` counts every match. The
   records follow with no count and end at the end of the frame. A page may be
   shorter than its total but never longer. A processor refuses a page longer

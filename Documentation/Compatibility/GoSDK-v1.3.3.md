@@ -480,8 +480,8 @@ maps that Swift writes UTF-8-byte-sorted and reads in any order (as
 `@bsv/sdk` 4.1.1 writes them), and exact keyring presence. `nil` keyring emits `00`;
 a nonempty keyring emits `01` and its map. An empty keyring is stored as `nil`
 and emits `00`, as `@bsv/sdk` 4.1.1 writes it. Certificate binary fields are
-read in any order (TypeScript writes `localeCompare` order) and written in
-byte order.
+read in any order and written in `localeCompare` order, as `@bsv/sdk` 4.1.1
+writes and signs them; the pinned Go SDK writes byte order (COMP-041).
 The Swift codec supports bounded multi-certificate discovery through the
 intended nested grammar. Live-Go parity uses zero or one item, and the safe Go
 adapter rejects multiple items before the pinned identity-certificate reader

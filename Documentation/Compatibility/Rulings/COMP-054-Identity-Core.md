@@ -22,7 +22,10 @@ append and writes large Base64 values directly under the limit.
 Swift requires a wallet. It does not create a random fallback wallet. Swift
 proves the disclosure keyring to the fixed "anyone" verifier and checks that
 the wallet returns exactly the requested proved-keyring fields. It verifies the certificate
-signature before any disclosure wallet call.
+signature before any disclosure wallet call, over the fields in `localeCompare`
+order as TypeScript `IdentityClient.publiclyRevealAttributes` does
+(`identity/IdentityClient.ts:461`), or over the UTF-8 byte order Go signs
+(COMP-041).
 
 Swift uses canonical lowercase compressed-key hex for display identity keys.
 It treats every unrecognized certificate type as unknown. It accepts only

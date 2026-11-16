@@ -105,12 +105,14 @@ requested certificate type.
 Errors stay short and name no side, so the same text fits Swift as client or
 server. The detailed cause of a refused message or certificate, such as the
 underlying `BRC104Error`, JSON or certificate decoding error, or which
-certificate failed which check, is written to the system log on Apple
-platforms through `os.Logger` with subsystem `dev.opl.swift-sdk` and category
-`BSVAuth`. The reasons `BSVAuth` writes hold no certificate field value,
+certificate failed which check, is written to `BSVLog` with category
+`BSVAuth`: the system log on Apple platforms through `os.Logger` with
+subsystem `dev.opl.swift-sdk`, and the caller's `BSVLog` handler on every
+platform. The reasons `BSVAuth` writes hold no certificate field value,
 keyring, nonce or signature. An underlying error defined by this SDK is logged
 in full; any other, such as one from a caller's wallet, is public by type only
-and its description is marked private.
+and its description is marked private. The handler receives that description
+as `<private>` unless it was installed with `revealingPrivateDetails`.
 
 ## Compatibility
 

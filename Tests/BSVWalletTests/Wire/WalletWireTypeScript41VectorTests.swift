@@ -69,6 +69,20 @@ struct WalletWireTypeScript41VectorTests {
         #expect(walletIsBalanceBasket("p btms balance tokens"))
         #expect(!walletIsBalanceBasket("balance"))
         #expect(!walletIsBalanceBasket("p btms tokens"))
+        // Matched after `validateIdentifier`'s trim().toLowerCase()
+        // (wallet/validationHelpers.ts:376-418), as the wallet toolbox does.
+        #expect(walletIsBalanceBasket(" Balance Tickets"))
+        #expect(walletIsBalanceBasket("\u{A0}\u{FEFF}BALANCE default\t\n"))
+        #expect(walletIsBalanceBasket("\u{3000}P BTMS Balance tokens"))
+        #expect(!walletIsBalanceBasket(" balance"))
+        #expect(!walletIsBalanceBasket("\u{85}balance default"))
+        #expect(!walletIsBalanceBasket("p  balance tokens"))
+        // The pattern matches code units: a space followed by a combining
+        // mark is still a space, and `[^ ]+` admits a tab.
+        #expect(walletIsBalanceBasket("balance \u{301}x"))
+        #expect(walletIsBalanceBasket("p \u{301}m balance x"))
+        #expect(walletIsBalanceBasket("p a\tb balance x"))
+        #expect(!walletIsBalanceBasket("p m \u{301}balance x"))
 
         let request = WalletWireActionRequest.listOutputs(
             try WalletListOutputsRequest(basket: "balance default")
@@ -97,6 +111,19 @@ struct WalletWireTypeScript41VectorTests {
         }
         #expect(jsonBalance.totalOutputs == 5_000_000_000)
         #expect(String(decoding: try codec.encodeResult(jsonResult), as: UTF8.self) == json)
+
+        // A basket the wallet normalises to a balance query reads the full balance.
+        let spaced = WalletWireActionRequest.listOutputs(
+            try WalletListOutputsRequest(basket: " Balance Tickets")
+        )
+        let spacedResult = try WalletWireCodec.decodeActionResult(
+            frame, expectedCall: .listOutputs, request: spaced, beefLimits: actionBEEFLimits()
+        )
+        guard case .listOutputs(let spacedBalance) = spacedResult else {
+            Issue.record("expected listOutputs")
+            return
+        }
+        #expect(spacedBalance.totalOutputs == 5_000_000_000)
     }
 
     // MARK: W4 and G5 in-band processor errors

@@ -7,7 +7,7 @@ import BSVTransaction
 @testable import BSVWallet
 
 final class BRC52CertificateBinaryTests: XCTestCase {
-    func testExactIDsDisplayTxidCompactVoutAndRawUTF8FieldOrder() throws {
+    func testExactIDsDisplayTxidCompactVoutAndLocaleCompareFieldOrder() throws {
         let type = try CertificateTypeID(Array(0..<32).map(UInt8.init))
         let serial = try CertificateSerialNumber(Array(32..<64).map(UInt8.init))
         let subject = try key(7).publicKey
@@ -39,9 +39,14 @@ final class BRC52CertificateBinaryTests: XCTestCase {
         XCTAssertEqual(Array(binary[130..<162]), displayBytes)
         XCTAssertEqual(Array(binary[162..<165]), [0xfd, 0xfd, 0x00])
         XCTAssertEqual(binary[165], 2)
-        XCTAssertEqual(binary[166], 1)
-        XCTAssertEqual(binary[167], Character("z").asciiValue)
+        // `localeCompare` ignores the C1 control U+0080, so it sorts before
+        // `z`; UTF-8 byte order puts it after.
+        XCTAssertEqual(Array(binary[166..<169]), [2, 0xC2, 0x80])
         XCTAssertEqual(try Certificate(binary: binary), certificate)
+        let byteOrder = try certificate.binary(
+            includingSignature: false, limits: .standard, fieldOrder: .utf8Bytes)
+        XCTAssertEqual(Array(byteOrder[166..<168]), [1, Character("z").asciiValue!])
+        XCTAssertEqual(try Certificate(binary: byteOrder), certificate)
     }
 
     func testStrictCanonicalBase64JSONAndExactIdentifierWidths() throws {

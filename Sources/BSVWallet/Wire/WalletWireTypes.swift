@@ -5,10 +5,25 @@ import BSVKeys
 public struct WalletWireLimits: Hashable, Sendable {
     public static let hardMaximumOriginatorUTF8ByteCount = 255
 
+    /// Room a frame leaves beyond its largest payload, 64 KiB: the call byte,
+    /// the originator, protocol ID, key ID, counterparty, privileged reason,
+    /// CompactSize lengths, flags, a signature, and the 48 bytes an encrypt
+    /// result adds to its plaintext. Together they come to under 3 KiB.
+    public static let frameOverheadByteCount = 64 << 10
+
+    /// The default frame bound: `WalletCryptoLimits.defaultPayloadByteCount`
+    /// (16 MiB plus 512 KiB) plus `frameOverheadByteCount`, so a wallet
+    /// reached over the wire signs, verifies, HMACs, encrypts and decrypts
+    /// every payload its own cryptography and BSVAuth accept by default.
+    /// It is also the default bound on a frame's call parameters or result
+    /// payload, `maximumPayloadByteCount`.
+    public static let defaultFrameByteCount =
+        WalletCryptoLimits.defaultPayloadByteCount + frameOverheadByteCount
+
     public static let standard = WalletWireLimits(
-        validatedFrame: 16_777_216,
+        validatedFrame: defaultFrameByteCount,
         originator: 255,
-        payload: 8_388_608,
+        payload: defaultFrameByteCount,
         text: 2_000,
         remoteMessage: 4_096,
         remoteStack: 8_192,
@@ -26,9 +41,9 @@ public struct WalletWireLimits: Hashable, Sendable {
     public let cryptoLimits: WalletCryptoLimits
 
     public init(
-        maximumFrameByteCount: Int = 16_777_216,
+        maximumFrameByteCount: Int = WalletWireLimits.defaultFrameByteCount,
         maximumOriginatorUTF8ByteCount: Int = 255,
-        maximumPayloadByteCount: Int = 8_388_608,
+        maximumPayloadByteCount: Int = WalletWireLimits.defaultFrameByteCount,
         maximumTextUTF8ByteCount: Int = 2_000,
         maximumRemoteMessageUTF8ByteCount: Int = 4_096,
         maximumRemoteStackUTF8ByteCount: Int = 8_192,

@@ -7,13 +7,18 @@ public struct WalletABILimits: Hashable, Sendable {
     public static let maximumProtocolPageSize: UInt32 = 10_000
     public static let defaultPageSize: UInt32 = 10
 
+    /// The default bound on the bytes one ABI value carries in all its
+    /// payloads: `WalletWireLimits.defaultFrameByteCount`, so a value as large
+    /// as a wallet-wire frame can hold is accepted.
+    public static let defaultAggregatePayloadByteCount = WalletWireLimits.defaultFrameByteCount
+
     public static let standard = WalletABILimits(
         validatedText: 2_000,
         collection: 10_000,
         tags: 1_000,
         labels: 1_000,
         payload: 8_388_608,
-        aggregate: 16_777_216
+        aggregate: defaultAggregatePayloadByteCount
     )
 
     public let maximumTextUTF8ByteCount: Int
@@ -29,7 +34,7 @@ public struct WalletABILimits: Hashable, Sendable {
         maximumTagCount: Int = 1_000,
         maximumLabelCount: Int = 1_000,
         maximumBytePayloadCount: Int = 8_388_608,
-        maximumAggregatePayloadByteCount: Int = 16_777_216
+        maximumAggregatePayloadByteCount: Int = WalletABILimits.defaultAggregatePayloadByteCount
     ) throws {
         let values = [
             maximumTextUTF8ByteCount, maximumCollectionCount, maximumTagCount,

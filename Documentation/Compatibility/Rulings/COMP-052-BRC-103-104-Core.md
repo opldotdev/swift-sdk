@@ -96,7 +96,8 @@ SDK disagreed on the wire, Swift now follows the SDK:
   each general payload through the wallet, so `WalletCryptoLimits` defaults to
   the same 16 MiB plus 512 KiB (`WalletCryptoLimits.defaultPayloadByteCount`,
   which `AuthLimits.defaultPayloadBytes` is); the TypeScript `ProtoWallet` has
-  no bound.
+  no bound. Wallet-wire frames default to that payload plus 64 KiB of framing
+  (COMP-045), so a wallet reached over the wire signs the same payloads.
 
 `Tests/BSVAuthTests/BRC103/TypeScriptInteropTests.swift` replays TypeScript
 messages from `TypeScriptAuthVectors.md` and checks Swift messages against a

@@ -859,10 +859,49 @@ public struct WalletInternalizeActionResult: Equatable, Sendable {
 
 /// True for a BRC-112 balance basket, `balance <basket>` or `p <module> balance <basket>`.
 /// Its `listOutputs` total is a balance, not an output count, and has no records.
+///
+/// The basket is tested after the normalisation `@bsv/sdk` 4.1.1 applies to
+/// it, `validateIdentifier`'s `trim().toLowerCase()`
+/// (`wallet/validationHelpers.ts:376-418`, `validateListOutputsArgs` at
+/// `:1652`), against the pattern of `wallet/moduleBalanceQuery.ts:1`. The
+/// wallet toolbox decides a balance query on that normalised basket
+/// (`wallet-toolbox/src/Wallet.ts`, `validateListOutputsArgs`), so
+/// `" Balance Tickets"` is a balance query there and here. The TypeScript
+/// wire codecs test the raw basket instead (`WalletWireProcessor.ts:1296`,
+/// `WalletWireTransceiver.ts:726`).
+///
+/// The pattern is matched on UTF-8 bytes, as the JavaScript regular
+/// expression matches code units, so a space followed by a combining mark is
+/// still a space.
 public func walletIsBalanceBasket(_ basket: String) -> Bool {
-    if basket.hasPrefix("balance ") { return true }
-    guard basket.hasPrefix("p ") else { return false }
-    let rest = basket.dropFirst(2)
-    guard let space = rest.firstIndex(of: " "), space != rest.startIndex else { return false }
-    return rest[rest.index(after: space)...].hasPrefix("balance ")
+    let bytes = Array(walletNormalizedIdentifier(basket).utf8)
+    let balance = Array("balance ".utf8)
+    if bytes.starts(with: balance) { return true }
+    guard bytes.starts(with: Array("p ".utf8)) else { return false }
+    let rest = bytes.dropFirst(2)
+    // `[^ ]+`: UTF-8 never encodes another scalar with a 0x20 byte.
+    guard let space = rest.firstIndex(of: 0x20), space != rest.startIndex else { return false }
+    return rest[(space + 1)...].starts(with: balance)
+}
+
+/// A basket, label or tag as `@bsv/sdk` `validateIdentifier` normalises it:
+/// JavaScript `String.prototype.trim` (ECMAScript white space and line
+/// terminators) and then Unicode lowercasing.
+package func walletNormalizedIdentifier(_ value: String) -> String {
+    let scalars = value.unicodeScalars
+    guard let first = scalars.firstIndex(where: { !walletIsJavaScriptWhitespace($0) }),
+          let last = scalars.lastIndex(where: { !walletIsJavaScriptWhitespace($0) })
+    else { return "" }
+    return String(scalars[first...last]).lowercased()
+}
+
+/// ECMAScript `WhiteSpace` and `LineTerminator`, what `trim` removes.
+private func walletIsJavaScriptWhitespace(_ scalar: Unicode.Scalar) -> Bool {
+    switch scalar.value {
+    case 0x09...0x0D, 0x20, 0xA0, 0x1680, 0x2000...0x200A, 0x2028, 0x2029, 0x202F, 0x205F,
+         0x3000, 0xFEFF:
+        return true
+    default:
+        return false
+    }
 }

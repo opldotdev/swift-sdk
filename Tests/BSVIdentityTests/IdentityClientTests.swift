@@ -202,6 +202,40 @@ struct IdentityClientTests {
         #expect(!String(reflecting: client).contains("IdentityTestWallet"))
     }
 
+    /// A certificate signed by `@bsv/sdk` 4.1.1 `Certificate.sign`, whose
+    /// fields TypeScript orders with `localeCompare`
+    /// (`auth/certificates/Certificate.ts:290`): names differ from byte order
+    /// in case, accents, underscores and digits. TypeScript
+    /// `IdentityClient.publiclyRevealAttributes` verifies it
+    /// (`identity/IdentityClient.ts:461`); so must this client. From
+    /// `certorder-vec.ts` (Documentation/Compatibility/TypeScriptAuthVectors.md).
+    @Test("public disclosure accepts a certificate TypeScript signed in localeCompare order")
+    func revealsTypeScriptCertificate() async throws {
+        let fixture = try await identityFixture()
+        let certificate = try Certificate(json: Array(Self.typeScriptCertificateJSON.utf8))
+        let field = try CertificateFieldName("résumé")
+        let subject = try PrivateKey(Array(repeating: 0, count: 31) + [7])
+        #expect(certificate.subject == subject.publicKey)
+        let state = IdentityWalletState(
+            proofKeyring: [field: try CertificateCiphertext([7, 8, 9])],
+            completedTransaction: fixture.atomic
+        )
+        let client = try IdentityClient(
+            wallet: IdentityTestWallet(root: subject, state: state),
+            limits: fixture.limits
+        )
+        let result = try await client.publiclyRevealAttributes(
+            certificate: certificate,
+            fieldsToReveal: [field],
+            using: RecordingBroadcaster(expected: fixture.transactionID)
+        )
+        #expect(result.transactionID == fixture.transactionID)
+        #expect(await state.snapshot().action != nil)
+    }
+
+    private static let typeScriptCertificateJSON =
+        #"{"type":"MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE=","serialNumber":"MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI=","subject":"025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc","certifier":"03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb","revocationOutpoint":"0000000000000000000000000000000000000000000000000000000000000000.0","fields":{"Zip":"AQ==","zip_code":"Ag==","zip-code":"Aw==","zip2":"BA==","zip10":"BQ==","Zeta":"Bg==","email":"Bw==","eMail":"CA==","Email":"CQ==","_id":"Cg==","id":"Cw==","ID":"DA==","a1":"DQ==","a_1":"Dg==","a-1":"Dw==","aB":"EA==","ab":"EQ==","cafe":"Eg==","café":"Ew==","Café":"FA==","cafés":"FQ==","émile":"Fg==","Émile":"Fw==","naïve":"GA==","nausea":"GQ==","résumé":"Gg==","resume":"Gw==","zoë":"HA==","Ångström":"HQ==","angle":"Hg=="},"signature":"30440220414ba43586646efbbb901e48680c419bb5de91ec1730ef99f7602bda95c1711b02204aa129d5d7bb3d1d2c5865243d48a9f84a34dbeab5b58f8ce06c6d9d0e607969"}"#
+
     /// The token must pass the TypeScript tm_identity topic manager
     /// (packages/overlays/topics/src/identity/identityTokenValidation.ts):
     /// exactly two fields in a five-chunk script, locked to the anyone key's

@@ -210,6 +210,8 @@ public struct CertificateFieldName: Hashable, Codable, Sendable, Comparable {
     private static let maximumProtocolUTF8ByteCount =
         CertificateLimits.maximumProtocolFieldNameUTF8ByteCount
 
+    /// Raw UTF-8 byte order. This is not the order `Certificate.binary`
+    /// writes and signs fields in, which is JavaScript `localeCompare` order.
     public static func < (lhs: Self, rhs: Self) -> Bool {
         lhs.utf8Bytes.lexicographicallyPrecedes(rhs.utf8Bytes)
     }
@@ -274,6 +276,11 @@ public struct Certificate:
     public let fields: [CertificateFieldName: CertificateCiphertext]
     public let signature: ECDSASignature?
 
+    /// The order the field records arrived in, for a certificate read with
+    /// `init(binary:)`: the order its signer wrote and signed. It is not part
+    /// of the certificate's value, so `==` ignores it.
+    package var receivedFieldOrder: [CertificateFieldName]?
+
     public init(
         type: CertificateTypeID,
         serialNumber: CertificateSerialNumber,
@@ -304,6 +311,16 @@ public struct Certificate:
         self.revocationOutpoint = revocationOutpoint
         self.fields = fields
         self.signature = signature
+        self.receivedFieldOrder = nil
+    }
+
+    /// Equal when every member is equal; the order the fields arrived in is
+    /// not compared.
+    public static func == (lhs: Certificate, rhs: Certificate) -> Bool {
+        lhs.type == rhs.type && lhs.serialNumber == rhs.serialNumber
+            && lhs.subject == rhs.subject && lhs.certifier == rhs.certifier
+            && lhs.revocationOutpoint == rhs.revocationOutpoint && lhs.fields == rhs.fields
+            && lhs.signature == rhs.signature
     }
 
     public var signatureKeyID: String { type.base64 + " " + serialNumber.base64 }
@@ -318,11 +335,13 @@ public struct Certificate:
         limits: CertificateLimits = .standard
     ) throws -> Certificate {
         guard self.signature == nil else { throw CertificateError.alreadySigned }
-        return try Certificate(
+        var signed = try Certificate(
             type: type, serialNumber: serialNumber, subject: subject, certifier: certifier,
             revocationOutpoint: revocationOutpoint, fields: fields, signature: signature,
             limits: limits
         )
+        signed.receivedFieldOrder = receivedFieldOrder
+        return signed
     }
 
     private enum CodingKeys: String, CodingKey {

@@ -2,18 +2,56 @@ import BSVCore
 import BSVKeys
 import BSVTransaction
 
+/// The order of the field records in a BRC-52 certificate binary.
+package enum CertificateFieldOrder: Sendable {
+    /// JavaScript `localeCompare` order, as `@bsv/sdk` writes and signs
+    /// (`auth/certificates/Certificate.ts:290`).
+    case localeCompare
+    /// Raw UTF-8 byte order, as the Go SDK and earlier releases of this SDK
+    /// write and sign.
+    case utf8Bytes
+    /// The order the records arrived in, for a certificate read with
+    /// `init(binary:)`; another certificate has none, and is refused.
+    case received
+}
+
 extension Certificate {
-    /// Canonical BRC-52 binary form. The revocation transaction ID is written in
-    /// human-display byte order, matching BRC-52 and the pinned Go v1.3.3 SDK.
+    /// The BRC-52 binary form, as `@bsv/sdk` 4.1.1 `Certificate.toBinary`
+    /// writes it. The revocation transaction ID is written in human-display
+    /// byte order, matching BRC-52, `@bsv/sdk` and the pinned Go v1.3.3 SDK.
+    ///
+    /// Fields are written in JavaScript `localeCompare` order of their names
+    /// (`auth/certificates/Certificate.ts:290`), the order TypeScript signs and
+    /// verifies. It differs from UTF-8 byte order when names differ in case,
+    /// accents, digits or punctuation: `_id, a_1, a1, email, Email, émile, id,
+    /// ID, Zip` against `Email, ID, Zip, _id, a1, a_1, email, id, émile`. The
+    /// order is exact for names of printable ASCII and accented Latin letters
+    /// (COMP-041).
     public func binary(
         includingSignature: Bool,
         limits: CertificateLimits = .standard
+    ) throws -> [UInt8] {
+        try binary(includingSignature: includingSignature, limits: limits, fieldOrder: .localeCompare)
+    }
+
+    /// The BRC-52 binary form with the field records in `fieldOrder`.
+    package func binary(
+        includingSignature: Bool,
+        limits: CertificateLimits,
+        fieldOrder: CertificateFieldOrder
     ) throws -> [UInt8] {
         if includingSignature && signature == nil { throw CertificateError.missingSignature }
         guard fields.count <= limits.maximumFieldCount else {
             throw CertificateError.tooManyFields(actual: fields.count, maximum: limits.maximumFieldCount)
         }
-        let names = fields.keys.sorted()
+        let names = switch fieldOrder {
+        case .localeCompare:
+            fields.keys.sorted { LocaleCompareOrder.areInIncreasingOrder($0.value, $1.value) }
+        case .utf8Bytes:
+            fields.keys.sorted()
+        case .received:
+            try receivedNames()
+        }
         var total = 162
         try certificateCheckedAdd(CompactSize.encodedLength(of: UInt64(revocationOutpoint.outputIndex)), to: &total)
         try certificateCheckedAdd(CompactSize.encodedLength(of: UInt64(names.count)), to: &total)
@@ -61,12 +99,23 @@ extension Certificate {
         return writer.bytes
     }
 
+    /// `receivedFieldOrder`, checked to name each field exactly once.
+    private func receivedNames() throws -> [CertificateFieldName] {
+        guard let names = receivedFieldOrder, names.count == fields.count,
+            Set(names) == Set(fields.keys)
+        else { throw CertificateError.fieldNotFound }
+        return names
+    }
+
     /// Parses one complete canonical BRC-52 binary certificate.
     ///
     /// Fields may arrive in any order: `@bsv/sdk` 4.1.1 writes them sorted with
-    /// `localeCompare` (auth/certificates/Certificate.ts:290), which differs from
-    /// raw byte order when names differ in case, digits or punctuation (for
-    /// example `cardholder` before `cardNumber`). Swift still writes byte order.
+    /// `localeCompare` (auth/certificates/Certificate.ts:290), as `binary`
+    /// does, and the Go SDK writes them in raw byte order. The two differ when
+    /// names differ in case, accents, digits or punctuation (for example
+    /// `cardholder` before `cardNumber`). The order they arrived in is kept for
+    /// `verifySignature`, which also checks the signature over it; `binary`
+    /// still writes `localeCompare` order.
     ///
     /// Unlike the pinned Go decoder, this rejects nonminimal CompactSize values,
     /// duplicate names, high-width vouts, noncanonical Base64, noncanonical DER,
@@ -90,6 +139,7 @@ extension Certificate {
                 throw CertificateError.tooManyFields(actual: Int(clamping: fieldCount), maximum: limits.maximumFieldCount)
             }
             var fields: [CertificateFieldName: CertificateCiphertext] = [:]
+            var order: [CertificateFieldName] = []
             var seenNames = Set<[UInt8]>()
             for _ in 0..<Int(fieldCount) {
                 let nameBytes = try cursor.readVarBytes(
@@ -108,6 +158,7 @@ extension Certificate {
                 let name = try CertificateFieldName(nameText, limits: limits)
                 let value = try CertificateCiphertext(base64: valueText, maximumByteCount: limits.maximumFieldCiphertextByteCount)
                 fields[name] = value
+                order.append(name)
             }
             let signature: ECDSASignature?
             if cursor.remaining == 0 {
@@ -121,6 +172,7 @@ extension Certificate {
             }
             try cursor.requireFinished()
             try self.init(type: type, serialNumber: serial, subject: subject, certifier: certifier, revocationOutpoint: outpoint, fields: fields, signature: signature, limits: limits)
+            receivedFieldOrder = order
         } catch let error as CertificateError {
             throw error
         } catch BinaryDecodingError.nonCanonicalCompactSize {

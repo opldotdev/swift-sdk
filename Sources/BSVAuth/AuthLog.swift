@@ -1,9 +1,9 @@
+import BSVCore
 import Foundation
-#if canImport(os)
-import os
-#endif
 
-/// The authentication log: subsystem `dev.opl.swift-sdk`, category `BSVAuth`.
+/// The authentication log: `BSVLog` category `BSVAuth`, written to
+/// `os.Logger` on Apple platforms and to the caller's `BSVLog` handler on
+/// every platform.
 ///
 /// When a detailed error is reported to the caller as a shorter one, such as
 /// a `BRC104Error` reported as `BRC104HTTPFramingError.invalidFrame`, the
@@ -17,9 +17,10 @@ import os
 /// known to carry a key or a certificate field value. Any other underlying
 /// error, such as one thrown by a caller's wallet, is public only by type:
 /// its description is marked private, so whatever that code put in it does
-/// not reach a shared log in clear.
+/// not reach a shared log in clear. A `BSVLog` handler receives it as
+/// `<private>` unless it was installed with `revealingPrivateDetails`.
 package enum AuthLog {
-    package static let subsystem = "dev.opl.swift-sdk"
+    package static let subsystem = BSVLog.subsystem
     package static let category = "BSVAuth"
 
     /// One line about an underlying error, split where the privacy marker
@@ -32,21 +33,19 @@ package enum AuthLog {
 
         /// The line as a reader of the system log without private data sees it.
         package var publicText: String {
-            prefix + (detailIsPrivate ? "<private>" : detail) + suffix
+            prefix + (detailIsPrivate ? BSVLog.privatePlaceholder : detail) + suffix
         }
     }
 
     /// Receives each line as well as the system log, for tests.
     @TaskLocal package static var observer: (@Sendable (String) -> Void)?
 
-    /// Receives each underlying-error entry as it is passed to `os.Logger`, for tests.
+    /// Receives each underlying-error entry as it is passed to `BSVLog`, for tests.
     @TaskLocal package static var entryObserver: (@Sendable (Entry) -> Void)?
 
     package static func error(_ message: String) {
         observer?(message)
-        #if canImport(os)
-        Logger(subsystem: subsystem, category: category).error("\(message, privacy: .public)")
-        #endif
+        BSVLog.error(category: category, message)
     }
 
     /// Records the detailed error behind a shorter one the caller receives.
@@ -58,18 +57,12 @@ package enum AuthLog {
         observer?(line(operation, underlying, as: reported))
         let entry = entry(operation, underlying, as: reported)
         entryObserver?(entry)
-        #if canImport(os)
-        let logger = Logger(subsystem: subsystem, category: category)
-        if entry.detailIsPrivate {
-            logger.error(
-                "\(entry.prefix, privacy: .public)\(entry.detail, privacy: .private)\(entry.suffix, privacy: .public)"
-            )
-        } else {
-            logger.error(
-                "\(entry.prefix, privacy: .public)\(entry.detail, privacy: .public)\(entry.suffix, privacy: .public)"
-            )
-        }
-        #endif
+        BSVLog.error(
+            category: category,
+            prefix: entry.prefix,
+            detail: entry.detail,
+            detailIsPrivate: entry.detailIsPrivate,
+            suffix: entry.suffix)
     }
 
     package static func entry<Reported: Error>(
@@ -86,14 +79,8 @@ package enum AuthLog {
 
     /// Whether `error` is a type this SDK defines.
     package static func isSDKError(_ error: any Error) -> Bool {
-        let module = String(reflecting: type(of: error)).prefix { $0 != "." }
-        return sdkModules.contains(String(module))
+        BSVLog.isSDKError(error)
     }
-
-    private static let sdkModules: Set<String> = [
-        "BSVAuth", "BSVCore", "BSVCrypto", "BSVKeys", "BSVMessage", "BSVScript",
-        "BSVTransaction", "BSVWallet",
-    ]
 
     /// Records why a check failed when the caller receives only `reported`.
     package static func rejected<Reported: Error>(

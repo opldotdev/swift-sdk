@@ -45,11 +45,23 @@ Encoding follows the TypeScript writers in
 - A processor never sends an error's type or value to the peer. An error the
   codecs do not describe gets a fixed text (`Invalid Wallet Wire <call>
   request`, `Invalid <call> result`). The full error goes to the local log:
-  subsystem `dev.opl.swift-sdk`, category `BSVWallet` (`WalletLog`).
+  `BSVLog` category `BSVWallet` (`WalletLog`), which is `os.Logger` subsystem
+  `dev.opl.swift-sdk` on Apple platforms and the caller's `BSVLog` handler on
+  every platform.
 
 Swift keeps these bounds: canonical CompactSize, explicit frame, payload,
 text, originator and error limits, checked UInt32 values, low-S DER
-signatures, exact SEC1 keys and full payload consumption.
+signatures, exact SEC1 keys and full payload consumption. The default frame
+bound, `WalletWireLimits.defaultFrameByteCount`, is
+`WalletCryptoLimits.defaultPayloadByteCount` (16 MiB plus 512 KiB) plus 64 KiB
+of framing (`frameOverheadByteCount`); the call parameters or result payload
+of a frame default to the same bound, and `WalletABILimits` bounds an ABI
+value's payloads in total by the same amount, so a wallet reached over the
+wire signs, verifies, HMACs, encrypts and decrypts every payload BSVAuth and
+the wallet's own cryptography accept. TypeScript sets no frame bound. The
+JSON form keeps its 8 MiB bounds (`WalletABILimits.maximumBytePayloadCount`
+and `WalletCryptoLimits.maximumJSONByteCount`), so a payload over 8 MiB
+crosses the binary wire but not a JSON substrate.
 
 ## Divergence from pinned Go v1.3.3
 
