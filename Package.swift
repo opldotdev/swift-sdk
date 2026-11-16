@@ -213,7 +213,7 @@ let package = Package(
         ),
         .testTarget(
             name: "BSVStorageTests",
-            dependencies: ["BSVStorage", "BSVCore", "BSVCrypto", "BSVKeys", "BSVScript"]
+            dependencies: ["BSVStorage", "BSVCore", "BSVCrypto", "BSVKeys", "BSVScript", "BSVWallet"]
         ),
         .testTarget(
             name: "BSVTransactionTests",

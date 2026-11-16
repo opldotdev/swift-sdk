@@ -256,6 +256,57 @@ struct IdentityClientTests {
         #expect(decoded.publicKey != levelTwoKey)
     }
 
+    /// The locking key `@bsv/sdk` 4.1.1 itself (ts-stack `3b1abc569`, run
+    /// under bun) gives a public reveal by the identity of `PrivateKey(42)`:
+    ///
+    /// ```ts
+    /// const { PrivateKey, ProtoWallet } = await import(`${process.env.TS_SDK}/mod.ts`)
+    /// const wallet = new ProtoWallet(new PrivateKey(42))
+    /// const { publicKey } = await wallet.getPublicKey({
+    ///   protocolID: [1, 'identity'], keyID: '1', counterparty: 'anyone', forSelf: true
+    /// }) // IdentityClient: pushdrop.lock(fields, [1, 'identity'], '1', 'anyone', true)
+    /// ```
+    @Test("disclosure locking key matches the key TypeScript generates")
+    func disclosureLockingKeyMatchesTypeScriptVector() async throws {
+        let typeScriptKey = "034009190eadccbea812a05e818ecf8a77e29b9d886008f8a428c247fccec9a2d8"
+        let subject = try PrivateKey(Array(repeating: 0, count: 31) + [42])
+        let options = try IdentityClientOptions()
+
+        // Swift's wallet path with the default options.
+        let walletKey = try await ProtoWallet(rootKey: subject).getPublicKey(.init(
+            selection: .derived(
+                protocolID: options.protocolID,
+                keyID: options.keyID,
+                counterparty: .anyone,
+                forSelf: true
+            )
+        )).publicKey
+        #expect(Hex.encode(walletKey.compressedBytes) == typeScriptKey)
+
+        // The token IdentityClient writes is locked to that key.
+        let fixture = try await identityFixture(root: subject)
+        let state = IdentityWalletState(
+            proofKeyring: [fixture.field: try CertificateCiphertext([7, 8, 9])],
+            completedTransaction: fixture.atomic
+        )
+        let client = try IdentityClient(
+            wallet: IdentityTestWallet(root: subject, state: state),
+            limits: fixture.limits
+        )
+        _ = try await client.publiclyRevealAttributes(
+            certificate: fixture.certificate,
+            fieldsToReveal: [fixture.field],
+            using: RecordingBroadcaster(expected: fixture.transactionID)
+        )
+        let output = try #require(await state.snapshot().action?.outputs?.first)
+        let decoded = try PushDrop.decode(
+            try Script(bytes: output.lockingScript, maximumByteCount: 1_000_000),
+            lockPosition: .beforeCompatibility,
+            limits: fixture.limits.pushDropLimits
+        )
+        #expect(Hex.encode(decoded.publicKey.compressedBytes) == typeScriptKey)
+    }
+
     @Test("badge links match the TypeScript identity client")
     func badgeLinksMatchTypeScript() async throws {
         let fixture = try await identityFixture()
