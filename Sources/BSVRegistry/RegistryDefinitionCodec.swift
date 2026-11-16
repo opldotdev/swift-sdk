@@ -1,15 +1,29 @@
 import BSVCore
+import BSVCrypto
 import BSVKeys
 import BSVScript
 import BSVWallet
 import Foundation
 
-/// Strict codec for the pinned Go registry's `beforeCompatibility` PushDrop fields.
+/// Codec for registry tokens as `@bsv/sdk` 4.1.1 writes and the TypeScript
+/// `tm_basketmap`, `tm_protomap` and `tm_certmap` topic managers admit them.
 ///
-/// All decoded text is bounded and UTF-8 validated before it is indexed or parsed.
-/// Embedded JSON must be the codec's canonical byte representation, preventing duplicate
-/// keys, ambiguous whitespace, and map-order-dependent registry records.
+/// A token is a lock-before PushDrop script with the definition's data fields
+/// (6 for a basket or protocol, 7 for a certificate, the operator key last)
+/// followed by one operator signature over the data fields concatenated. The
+/// locking key and the signing key are the operator's BRC-42 child for the
+/// kind's protocol (`[1, "basketmap"]`, `[1, "protomap"]`, `[1, "certmap"]`),
+/// key ID `"1"`, with the "anyone" key as the other party
+/// (`registry/registryTokenValidation.ts`, `registry/RegistryClient.ts`).
+///
+/// All decoded text is bounded and UTF-8 validated before it is indexed or
+/// parsed. Encoding writes canonical embedded JSON. Decoding accepts any
+/// valid certificate-field JSON object, as TypeScript `JSON.parse` does.
 public enum RegistryDefinitionCodec: Sendable {
+    /// The registry key ID used by every token.
+    public static let keyID = "1"
+
+    /// The data fields of a definition, without the trailing signature.
     public static func fields(
         for definition: RegistryDefinition,
         limits: RegistryLimits = .standard
@@ -48,24 +62,57 @@ public enum RegistryDefinitionCodec: Sendable {
         return try checkedFields(fields, limits: limits)
     }
 
+    /// Builds a signed registry token with the operator's wallet, as
+    /// TypeScript `pushdrop.lock(fields, protocol, "1", "anyone", true)` does.
+    ///
+    /// The wallet's identity key must be the definition's registry operator,
+    /// and no data field may be empty (see below).
+    /// The finished script is decoded and verified before it is returned.
     public static func lockingScript(
         for definition: RegistryDefinition,
-        publicKey: PublicKey,
+        using wallet: any WalletPublicKeyProviding & WalletSignatureOperations,
         limits: RegistryLimits = .standard
-    ) throws -> Script {
+    ) async throws -> Script {
         let encodedFields = try fields(for: definition, limits: limits)
+        // PushDrop writes an empty field as OP_0, which TypeScript and Swift
+        // both read back as [0]. The signature covers the empty bytes, so the
+        // token could never verify. TypeScript has the same limit.
+        guard !encodedFields.contains(where: \.isEmpty) else {
+            throw RegistryError.emptyField(name: "definitionField")
+        }
+        let protocolID = try definition.kind.walletProtocolID()
+        let walletKeyID = try WalletKeyID(Self.keyID)
+
+        try Task.checkCancellation()
+        let identityKey = try await wallet.getPublicKey(.init(selection: .identity)).publicKey
+        guard identityKey == definition.registryOperator.publicKey else {
+            throw RegistryError.walletIdentityIsNotRegistryOperator
+        }
+
+        let script: Script
         do {
-            return try PushDrop.lockingScript(
+            script = try await PushDrop.lockingScript(
                 fields: encodedFields,
-                publicKey: publicKey,
+                using: wallet,
+                protocolID: protocolID,
+                keyID: walletKeyID,
+                counterparty: .anyone,
+                forSelf: true,
+                includeSignature: true,
                 lockPosition: .beforeCompatibility,
                 limits: limits.pushDropLimits
             )
-        } catch {
+        } catch is PushDropError {
             throw RegistryError.pushDropFailure
         }
+        guard try decode(script, kind: definition.kind, limits: limits) == definition else {
+            throw RegistryError.invalidSignature
+        }
+        return script
     }
 
+    /// Decodes a registry token and authenticates it as TypeScript does: the
+    /// field count, the operator key linkage, and the operator signature.
     public static func decode(
         _ script: Script,
         kind: RegistryDefinitionKind,
@@ -81,9 +128,44 @@ public enum RegistryDefinitionCodec: Sendable {
         } catch {
             throw RegistryError.pushDropFailure
         }
-        return try definition(kind: kind, fields: decoded.fields, limits: limits)
+        let expectedCount = kind.dataFieldCount + 1
+        guard decoded.fields.count == expectedCount else {
+            throw RegistryError.unexpectedFieldCount(
+                kind: kind, actual: decoded.fields.count, expected: expectedCount)
+        }
+        let dataFields = Array(decoded.fields.dropLast())
+        let definition = try definition(kind: kind, fields: dataFields, limits: limits)
+
+        guard let signatureField = decoded.fields.last,
+            let signature = try? ECDSASignature(derBytes: signatureField),
+            signature.derBytes == signatureField
+        else {
+            throw RegistryError.invalidSignatureEncoding
+        }
+        let operatorKey = definition.registryOperator.publicKey
+        let expectedLockingKey: PublicKey
+        do {
+            expectedLockingKey = try WalletKeyDeriver.anyone().derivePublicKey(
+                protocolID: try kind.walletProtocolID(),
+                keyID: try WalletKeyID(Self.keyID),
+                counterparty: .publicKey(operatorKey),
+                forSelf: false
+            )
+        } catch {
+            throw RegistryError.lockingKeyNotLinkedToOperator
+        }
+        guard expectedLockingKey == decoded.publicKey else {
+            throw RegistryError.lockingKeyNotLinkedToOperator
+        }
+        let digest = BSVHashing.sha256(Array(dataFields.joined()))
+        guard expectedLockingKey.verify(signature, digest: digest) else {
+            throw RegistryError.invalidSignature
+        }
+        return definition
     }
 
+    /// Parses a definition from its data fields only. It does not check a
+    /// signature; use `decode(_:kind:limits:)` for on-chain tokens.
     public static func definition(
         kind: RegistryDefinitionKind,
         fields: [[UInt8]],
@@ -229,6 +311,13 @@ public enum RegistryDefinitionCodec: Sendable {
         return "{\(body)}"
     }
 
+    private static let certificateDescriptorKeys: Set<String> = [
+        "friendlyName", "description", "type", "fieldIcon",
+    ]
+
+    /// Parses certificate field descriptors in any key order or spacing, as
+    /// TypeScript `JSON.parse` does (`registry/RegistryClient.ts`). Each
+    /// descriptor must have exactly the four string keys TypeScript allows.
     private static func decodedCertificateFields(
         _ source: String,
         limits: RegistryLimits
@@ -238,9 +327,9 @@ public enum RegistryDefinitionCodec: Sendable {
         else {
             throw RegistryError.malformedEmbeddedJSON(field: "certificateFields")
         }
-        let wire: [String: CertificateFieldWire]
+        let wire: [String: [String: String]]
         do {
-            wire = try JSONDecoder().decode([String: CertificateFieldWire].self, from: data)
+            wire = try JSONDecoder().decode([String: [String: String]].self, from: data)
         } catch {
             throw RegistryError.malformedEmbeddedJSON(field: "certificateFields")
         }
@@ -252,20 +341,25 @@ public enum RegistryDefinitionCodec: Sendable {
         var fields: [String: RegistryCertificateFieldDescriptor] = [:]
         fields.reserveCapacity(wire.count)
         for (name, descriptor) in wire {
-            guard let type = RegistryCertificateFieldType(rawValue: descriptor.type) else {
+            guard Set(descriptor.keys) == certificateDescriptorKeys,
+                let friendlyName = descriptor["friendlyName"],
+                let description = descriptor["description"],
+                let typeText = descriptor["type"],
+                let fieldIcon = descriptor["fieldIcon"]
+            else {
+                throw RegistryError.malformedEmbeddedJSON(field: "certificateFields")
+            }
+            guard let type = RegistryCertificateFieldType(rawValue: typeText) else {
                 throw RegistryError.invalidCertificateFieldType
             }
             try registryFieldName(name, limits: limits)
             fields[name] = try RegistryCertificateFieldDescriptor(
-                friendlyName: descriptor.friendlyName,
-                description: descriptor.description,
+                friendlyName: friendlyName,
+                description: description,
                 type: type,
-                fieldIcon: descriptor.fieldIcon,
+                fieldIcon: fieldIcon,
                 limits: limits
             )
-        }
-        guard canonicalCertificateFields(fields) == source else {
-            throw RegistryError.nonCanonicalEmbeddedJSON(field: "certificateFields")
         }
         return fields
     }
@@ -303,11 +397,4 @@ public enum RegistryDefinitionCodec: Sendable {
         result += "\""
         return result
     }
-}
-
-private struct CertificateFieldWire: Decodable {
-    let friendlyName: String
-    let description: String
-    let type: String
-    let fieldIcon: String
 }

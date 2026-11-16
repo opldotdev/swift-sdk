@@ -18,3 +18,28 @@ authority, storage/conflict policy, and transport boundary.
 The valid one-field script format remains compatible with pinned Go v1.3.3.
 GO-027 through GO-035 record confirmed Go implementation defects that Swift
 does not reproduce.
+
+## TypeScript 4.1.1 token alignment (2026-11-16)
+
+TypeScript `LocalKVStore` (`packages/sdk/src/kvstore/LocalKVStore.ts`) now
+reads only two-field tokens: the value and a signature over the value, with
+`decodeCanonicalPushDrop(..., { fieldCount: 2 })` and
+`verifySignature(..., counterparty: "self")`. It writes them with
+`pushdrop.lock([value], [2, context], key, "self")`. A one-field Go or Swift
+token is no longer readable by TypeScript, so the TypeScript wire format wins:
+
+- `KVStoreTokenCodec` reads and writes exactly two fields. One-field tokens
+  are rejected with `invalidTokenFieldCount(actual: 1)`.
+- `KVStoreToken` carries the signature and its initializer checks it against
+  the locking key. Decoding checks the same, with a strict DER signature of at
+  most 72 bytes.
+- `KVStoreTokenCodec.lockingScript(value:locator:using:limits:)` writes a
+  token through the wallet's key and signature capabilities with protocol
+  `[2, context]`, key ID `key`, counterparty self.
+  `decode(_:locator:using:limits:)` also checks that the locking key is the
+  wallet's key for the locator, as TypeScript does before it trusts an output.
+- The standard value limit is 2 MiB, the TypeScript `MAX_LOCAL_TOKEN_BYTES`,
+  so encrypted values near the 1 MiB plaintext limit stay readable.
+
+The rest of this ruling stands: no wallet actions, BEEF, encryption,
+newest-value selection, persistence, or transport.

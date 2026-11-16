@@ -47,7 +47,7 @@ public struct RegistryLimits: Hashable, Sendable {
         guard maximumDefinitionTextUTF8ByteCount <= pushDropLimits.maximumFieldByteCount else {
             throw RegistryError.inconsistentLimit(name: "maximumDefinitionTextUTF8ByteCount")
         }
-        guard pushDropLimits.maximumFieldCount >= 7 else {
+        guard pushDropLimits.maximumFieldCount >= 8 else {
             throw RegistryError.inconsistentLimit(name: "pushDropLimits.maximumFieldCount")
         }
         self.maximumDefinitionTextUTF8ByteCount = maximumDefinitionTextUTF8ByteCount
@@ -95,6 +95,10 @@ public enum RegistryError: Error, Equatable, Sendable, CustomStringConvertible,
     case nonCanonicalEmbeddedJSON(field: String)
     case invalidCertificateFieldType
     case pushDropFailure
+    case invalidSignatureEncoding
+    case lockingKeyNotLinkedToOperator
+    case invalidSignature
+    case walletIdentityIsNotRegistryOperator
 
     public var description: String {
         switch self {
@@ -117,6 +121,12 @@ public enum RegistryError: Error, Equatable, Sendable, CustomStringConvertible,
         case .nonCanonicalEmbeddedJSON(let field): "registry \(field) JSON is not canonical"
         case .invalidCertificateFieldType: "registry certificate field type is invalid"
         case .pushDropFailure: "registry PushDrop script is invalid"
+        case .invalidSignatureEncoding: "registry token signature is not canonical DER"
+        case .lockingKeyNotLinkedToOperator:
+            "registry token locking key is not linked to its operator"
+        case .invalidSignature: "registry token signature is invalid"
+        case .walletIdentityIsNotRegistryOperator:
+            "wallet identity key is not the definition's registry operator"
         }
     }
 
@@ -129,18 +139,23 @@ public enum RegistryDefinitionKind: String, CaseIterable, Hashable, Sendable {
     case `protocol` = "protocol"
     case certificate
 
+    /// The BRC-43 protocol that locks and signs this kind of token:
+    /// `[1, "basketmap"]`, `[1, "protomap"]` or `[1, "certmap"]`, as in
+    /// TypeScript `registry/registryTokenValidation.ts` and `RegistryClient.ts`.
     public func walletProtocolID() throws -> WalletProtocolID {
         switch self {
         case .basket:
-            try WalletProtocolID(
-                securityLevel: .everyAppAndCounterparty, name: "basketmap")
+            try WalletProtocolID(securityLevel: .everyApp, name: "basketmap")
         case .protocol:
-            try WalletProtocolID(
-                securityLevel: .everyAppAndCounterparty, name: "protomap")
+            try WalletProtocolID(securityLevel: .everyApp, name: "protomap")
         case .certificate:
-            try WalletProtocolID(
-                securityLevel: .everyAppAndCounterparty, name: "certmap")
+            try WalletProtocolID(securityLevel: .everyApp, name: "certmap")
         }
+    }
+
+    /// The number of data fields before the trailing operator signature.
+    public var dataFieldCount: Int {
+        self == .certificate ? 7 : 6
     }
 
     public var basketName: String {

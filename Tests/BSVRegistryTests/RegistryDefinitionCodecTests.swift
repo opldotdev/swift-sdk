@@ -1,4 +1,5 @@
 import BSVCore
+import BSVCrypto
 import BSVKeys
 import BSVRegistry
 import BSVScript
@@ -13,24 +14,169 @@ final class RegistryDefinitionCodecTests: XCTestCase {
         XCTAssertEqual(RegistryDefinitionKind.certificate.basketName, "certmap")
         XCTAssertEqual(try RegistryDefinitionKind.basket.topic().rawValue, "tm_basketmap")
         XCTAssertEqual(try RegistryDefinitionKind.protocol.service().rawValue, "ls_protomap")
+        // TypeScript registry/registryTokenValidation.ts:13-17 and
+        // RegistryClient.ts:792-801 use security level 1 for all three.
+        XCTAssertEqual(
+            try RegistryDefinitionKind.basket.walletProtocolID(),
+            try WalletProtocolID(securityLevel: .everyApp, name: "basketmap"))
+        XCTAssertEqual(
+            try RegistryDefinitionKind.protocol.walletProtocolID(),
+            try WalletProtocolID(securityLevel: .everyApp, name: "protomap"))
         XCTAssertEqual(
             try RegistryDefinitionKind.certificate.walletProtocolID(),
-            try WalletProtocolID(securityLevel: .everyAppAndCounterparty, name: "certmap"))
+            try WalletProtocolID(securityLevel: .everyApp, name: "certmap"))
+        XCTAssertEqual(RegistryDefinitionKind.basket.dataFieldCount, 6)
+        XCTAssertEqual(RegistryDefinitionKind.protocol.dataFieldCount, 6)
+        XCTAssertEqual(RegistryDefinitionKind.certificate.dataFieldCount, 7)
     }
 
-    func testBasketFieldsAndCompatibilityScriptRoundTrip() throws {
+    func testBasketDataFieldsKeepTypeScriptOrder() throws {
         let definition = RegistryDefinition.basket(try basketDefinition())
         let fields = try RegistryDefinitionCodec.fields(for: definition)
         XCTAssertEqual(fields.count, 6)
         XCTAssertEqual(String(decoding: fields[0], as: UTF8.self), "basket.id")
         XCTAssertEqual(String(decoding: fields[2], as: UTF8.self), "")
-
-        let script = try RegistryDefinitionCodec.lockingScript(
-            for: definition,
-            publicKey: try fixturePublicKey())
         XCTAssertEqual(
-            try RegistryDefinitionCodec.decode(script, kind: .basket),
+            try RegistryDefinitionCodec.definition(kind: .basket, fields: fields),
             definition)
+    }
+
+    /// Hand-built from the TypeScript layout: data fields from
+    /// RegistryClient.ts:688-722, operator key last; locked and signed by
+    /// `pushdrop.lock(fields, [1, "basketmap"], "1", "anyone", true)`
+    /// (RegistryClient.ts:320, PushDrop.ts:148-204); checked by
+    /// registryTokenValidation.ts:20-52.
+    func testDecodesHandBuiltTypeScriptBasketToken() throws {
+        let operatorKey = try operatorPrivateKey()
+        let operatorHex = Hex.encode(operatorKey.publicKey.compressedBytes)
+        let text = [
+            "basket.id", "Example", "https://icon.example/i.png", "description",
+            "https://docs.example/", operatorHex,
+        ]
+        let fields = text.map { Array($0.utf8) }
+        let lockingKey = try linkedPrivateKey(operatorKey, invoice: "1-basketmap-1")
+        let signature = try lockingKey.sign(digest: BSVHashing.sha256(Array(fields.joined())))
+
+        var bytes: [UInt8] = [0x21] + lockingKey.publicKey.compressedBytes + [0xac]
+        for field in fields { bytes += [UInt8(field.count)] + field }
+        bytes += [UInt8(signature.derBytes.count)] + signature.derBytes
+        bytes += [0x6d, 0x6d, 0x6d, 0x75]
+        let script = try Script(bytes: bytes, maximumByteCount: 10_000)
+
+        let expected = RegistryDefinition.basket(
+            try RegistryBasketDefinition(
+                basketID: "basket.id",
+                metadata: try RegistryMetadata(
+                    name: "Example", iconURL: "https://icon.example/i.png",
+                    description: "description", documentationURL: "https://docs.example/"),
+                registryOperator: try RegistryOperator(compressedHex: operatorHex)))
+        XCTAssertEqual(try RegistryDefinitionCodec.decode(script, kind: .basket), expected)
+    }
+
+    func testWalletLockMatchesTypeScriptAndRoundTrips() async throws {
+        let operatorKey = try operatorPrivateKey()
+        let wallet = ProtoWallet(rootKey: operatorKey)
+        let registryOperator = RegistryOperator(publicKey: operatorKey.publicKey)
+        let metadata = try RegistryMetadata(
+            name: "Example", iconURL: "https://icon.example/i.png",
+            description: "description", documentationURL: "https://docs.example/")
+        let definitions: [RegistryDefinition] = [
+            .basket(
+                try RegistryBasketDefinition(
+                    basketID: "basket.id", metadata: metadata, registryOperator: registryOperator)),
+            .protocolDefinition(
+                try RegistryProtocolDefinition(
+                    protocolID: try WalletProtocolID(securityLevel: .everyApp, name: "example value"),
+                    metadata: metadata,
+                    registryOperator: registryOperator)),
+            .certificate(
+                try RegistryCertificateDefinition(
+                    type: "example certificate", metadata: metadata,
+                    fields: ["a": try descriptor("aye"), "z": try descriptor("zee")],
+                    registryOperator: registryOperator)),
+        ]
+        let invoices = ["1-basketmap-1", "1-protomap-1", "1-certmap-1"]
+        for (definition, invoice) in zip(definitions, invoices) {
+            let script = try await RegistryDefinitionCodec.lockingScript(
+                for: definition, using: wallet)
+            let decoded = try PushDrop.decode(script, lockPosition: .beforeCompatibility)
+            XCTAssertEqual(decoded.fields.count, definition.kind.dataFieldCount + 1)
+            XCTAssertEqual(
+                decoded.publicKey,
+                try linkedPrivateKey(operatorKey, invoice: invoice).publicKey)
+            XCTAssertEqual(
+                Array(decoded.fields.dropLast()),
+                try RegistryDefinitionCodec.fields(for: definition))
+            XCTAssertEqual(
+                try RegistryDefinitionCodec.decode(script, kind: definition.kind), definition)
+        }
+
+        // An empty field is written as OP_0 and read back as [0], so its
+        // signature could never verify (TypeScript PushDrop.ts:103-107).
+        do {
+            _ = try await RegistryDefinitionCodec.lockingScript(
+                for: .basket(try basketDefinition(registryOperator: registryOperator)),
+                using: wallet)
+            XCTFail("expected an empty-field error")
+        } catch {
+            XCTAssertEqual(error as? RegistryError, .emptyField(name: "definitionField"))
+        }
+
+        let other = ProtoWallet(rootKey: try PrivateKey(Array(repeating: 0, count: 31) + [0x44]))
+        do {
+            _ = try await RegistryDefinitionCodec.lockingScript(for: definitions[0], using: other)
+            XCTFail("expected an operator mismatch")
+        } catch {
+            XCTAssertEqual(error as? RegistryError, .walletIdentityIsNotRegistryOperator)
+        }
+    }
+
+    func testRejectsTokensTypeScriptRejects() throws {
+        let operatorKey = try operatorPrivateKey()
+        let definition = RegistryDefinition.basket(
+            try basketDefinition(
+                registryOperator: RegistryOperator(publicKey: operatorKey.publicKey)))
+        let fields = try RegistryDefinitionCodec.fields(for: definition)
+        let linked = try linkedPrivateKey(operatorKey, invoice: "1-basketmap-1")
+
+        // The previous Swift shape: six unsigned fields.
+        let unsigned = try PushDrop.lockingScript(
+            fields: fields, publicKey: linked.publicKey, lockPosition: .beforeCompatibility)
+        XCTAssertThrowsError(try RegistryDefinitionCodec.decode(unsigned, kind: .basket)) { error in
+            XCTAssertEqual(
+                error as? RegistryError,
+                .unexpectedFieldCount(kind: .basket, actual: 6, expected: 7))
+        }
+
+        // Signed under the previous Swift protocol level, [2, "basketmap"].
+        let levelTwo = try linkedPrivateKey(operatorKey, invoice: "2-basketmap-1")
+        XCTAssertThrowsError(
+            try RegistryDefinitionCodec.decode(
+                try signedScript(fields: fields, key: levelTwo), kind: .basket)
+        ) { error in
+            XCTAssertEqual(error as? RegistryError, .lockingKeyNotLinkedToOperator)
+        }
+
+        // Locked to the operator key itself.
+        XCTAssertThrowsError(
+            try RegistryDefinitionCodec.decode(
+                try signedScript(fields: fields, key: operatorKey), kind: .basket)
+        ) { error in
+            XCTAssertEqual(error as? RegistryError, .lockingKeyNotLinkedToOperator)
+        }
+
+        // Linked key, but the signature covers other bytes.
+        XCTAssertThrowsError(
+            try RegistryDefinitionCodec.decode(
+                try signedScript(fields: fields, key: linked, signedSuffix: [1]), kind: .basket)
+        ) { error in
+            XCTAssertEqual(error as? RegistryError, .invalidSignature)
+        }
+
+        // A basket token is not a protocol token.
+        XCTAssertThrowsError(
+            try RegistryDefinitionCodec.decode(
+                try signedScript(fields: fields, key: linked), kind: .protocol))
     }
 
     func testProtocolCanonicalJSONRoundTrip() throws {
@@ -109,16 +255,35 @@ final class RegistryDefinitionCodecTests: XCTestCase {
             XCTAssertEqual(error as? RegistryError, .nonCanonicalEmbeddedJSON(field: "protocolID"))
         }
 
-        fields = try RegistryDefinitionCodec.fields(for: .certificate(try certificateDefinition()))
+    }
+
+    /// TypeScript writes `JSON.stringify(data.fields)` in caller order and
+    /// reads it with `JSON.parse` (RegistryClient.ts:711, 765), so any key
+    /// order or spacing is valid. Unknown descriptor keys are rejected, as
+    /// RegistryClient.ts:131-134 does.
+    func testCertificateFieldsJSONAcceptsAnyOrder() throws {
+        let canonical = try certificateDefinition()
+        var fields = try RegistryDefinitionCodec.fields(for: .certificate(canonical))
         fields[5] = Array(
-            "{\"z\":{\"friendlyName\":\"zee\",\"description\":\"description\",\"type\":\"text\",\"fieldIcon\":\"icon\"},\"a\":{\"friendlyName\":\"aye\",\"description\":\"description\",\"type\":\"text\",\"fieldIcon\":\"icon\"}}"
+            "{\"z\":{\"type\":\"text\",\"fieldIcon\":\"icon\",\"friendlyName\":\"zee\",\"description\":\"description\"}, \"a\": {\"friendlyName\":\"aye\",\"description\":\"description\",\"type\":\"text\",\"fieldIcon\":\"icon\"}}"
+                .utf8)
+        XCTAssertEqual(
+            try RegistryDefinitionCodec.definition(kind: .certificate, fields: fields),
+            .certificate(canonical))
+
+        fields[5] = Array(
+            "{\"a\":{\"friendlyName\":\"aye\",\"description\":\"d\",\"type\":\"text\",\"fieldIcon\":\"icon\",\"extra\":\"x\"}}"
                 .utf8)
         XCTAssertThrowsError(
             try RegistryDefinitionCodec.definition(kind: .certificate, fields: fields)
         ) { error in
             XCTAssertEqual(
-                error as? RegistryError, .nonCanonicalEmbeddedJSON(field: "certificateFields"))
+                error as? RegistryError, .malformedEmbeddedJSON(field: "certificateFields"))
         }
+
+        fields[5] = Array("{\"a\":{\"friendlyName\":\"aye\"}}".utf8)
+        XCTAssertThrowsError(
+            try RegistryDefinitionCodec.definition(kind: .certificate, fields: fields))
     }
 
     func testExplicitLimitsApplyBeforeMaterialization() throws {
@@ -133,7 +298,7 @@ final class RegistryDefinitionCodecTests: XCTestCase {
             maximumTokenBEEFByteCount: 16,
             maximumTokenLockingScriptByteCount: 16,
             pushDropLimits: try PushDropLimits(
-                maximumFieldCount: 7,
+                maximumFieldCount: 8,
                 maximumFieldByteCount: 16,
                 maximumScriptByteCount: 256))
         XCTAssertThrowsError(try basketDefinition(limits: limits))
@@ -162,7 +327,7 @@ final class RegistryDefinitionCodecTests: XCTestCase {
             maximumTokenBEEFByteCount: 16,
             maximumTokenLockingScriptByteCount: 16,
             pushDropLimits: try PushDropLimits(
-                maximumFieldCount: 7,
+                maximumFieldCount: 8,
                 maximumFieldByteCount: 128,
                 maximumScriptByteCount: 256))
         XCTAssertThrowsError(
@@ -228,21 +393,48 @@ final class RegistryDefinitionCodecTests: XCTestCase {
     }
 
     private func basketDefinition(
-        limits: RegistryLimits = .standard
+        limits: RegistryLimits = .standard,
+        registryOperator: RegistryOperator? = nil
     ) throws -> RegistryBasketDefinition {
         try RegistryBasketDefinition(
             basketID: "basket.id",
             metadata: try fixtureMetadata(limits: limits),
-            registryOperator: try fixtureOperator(),
+            registryOperator: try registryOperator ?? fixtureOperator(),
             limits: limits)
     }
 
-    private func certificateDefinition() throws -> RegistryCertificateDefinition {
+    private func certificateDefinition(
+        registryOperator: RegistryOperator? = nil
+    ) throws -> RegistryCertificateDefinition {
         try RegistryCertificateDefinition(
             type: "example certificate",
             metadata: try fixtureMetadata(),
             fields: ["a": try descriptor("aye"), "z": try descriptor("zee")],
-            registryOperator: try fixtureOperator())
+            registryOperator: try registryOperator ?? fixtureOperator())
+    }
+
+    private func operatorPrivateKey() throws -> PrivateKey {
+        try PrivateKey(Array(repeating: 0, count: 31) + [0x33])
+    }
+
+    /// The operator's BRC-42 child with the anyone key (scalar 1) as the
+    /// other party, which is what TypeScript locks and signs with.
+    private func linkedPrivateKey(_ key: PrivateKey, invoice: String) throws -> PrivateKey {
+        let anyone = try PrivateKey(Array(repeating: 0, count: 31) + [1])
+        return try key.derivedChild(with: anyone.publicKey, invoiceNumber: invoice)
+    }
+
+    private func signedScript(
+        fields: [[UInt8]],
+        key: PrivateKey,
+        signedSuffix: [UInt8] = []
+    ) throws -> Script {
+        let signature = try key.sign(
+            digest: BSVHashing.sha256(Array(fields.joined()) + signedSuffix))
+        return try PushDrop.lockingScript(
+            fields: fields + [signature.derBytes],
+            publicKey: key.publicKey,
+            lockPosition: .beforeCompatibility)
     }
 
     private func fixtureMetadata(
@@ -273,13 +465,6 @@ final class RegistryDefinitionCodecTests: XCTestCase {
             compressedHex: "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
     }
 
-    private func fixturePublicKey() throws -> PublicKey {
-        try PublicKey(
-            Hex.decode(
-                "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-                maximumDecodedByteCount: 33))
-    }
-
     private func recordLimits() throws -> RegistryLimits {
         try RegistryLimits(
             maximumDefinitionTextUTF8ByteCount: 16,
@@ -292,7 +477,7 @@ final class RegistryDefinitionCodecTests: XCTestCase {
             maximumTokenBEEFByteCount: 16,
             maximumTokenLockingScriptByteCount: 16,
             pushDropLimits: try PushDropLimits(
-                maximumFieldCount: 7,
+                maximumFieldCount: 8,
                 maximumFieldByteCount: 16,
                 maximumScriptByteCount: 256))
     }

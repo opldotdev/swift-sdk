@@ -104,11 +104,11 @@ let package = Package(
         ),
         .target(
             name: "BSVKVStore",
-            dependencies: ["BSVKeys", "BSVScript"]
+            dependencies: ["BSVCrypto", "BSVKeys", "BSVScript", "BSVWallet"]
         ),
         .target(
             name: "BSVStorage",
-            dependencies: ["BSVCore", "BSVCrypto", "BSVKeys"]
+            dependencies: ["BSVCore", "BSVCrypto", "BSVKeys", "BSVScript"]
         ),
         .target(
             name: "BSVTransaction",
@@ -141,7 +141,9 @@ let package = Package(
         ),
         .target(
             name: "BSVRegistry",
-            dependencies: ["BSVCore", "BSVKeys", "BSVOverlay", "BSVScript", "BSVTransaction", "BSVWallet"]
+            dependencies: [
+                "BSVCore", "BSVCrypto", "BSVKeys", "BSVOverlay", "BSVScript", "BSVTransaction", "BSVWallet",
+            ]
         ),
         .target(
             name: "BSVWallet",
@@ -207,11 +209,11 @@ let package = Package(
         ),
         .testTarget(
             name: "BSVKVStoreTests",
-            dependencies: ["BSVKVStore", "BSVKeys", "BSVScript"]
+            dependencies: ["BSVKVStore", "BSVCore", "BSVCrypto", "BSVKeys", "BSVScript", "BSVWallet"]
         ),
         .testTarget(
             name: "BSVStorageTests",
-            dependencies: ["BSVStorage", "BSVCore", "BSVCrypto", "BSVKeys"]
+            dependencies: ["BSVStorage", "BSVCore", "BSVCrypto", "BSVKeys", "BSVScript"]
         ),
         .testTarget(
             name: "BSVTransactionTests",
@@ -235,7 +237,7 @@ let package = Package(
             name: "BSVNetworkTests",
             dependencies: [
                 "BSVNetwork", "BSVTransaction", "BSVSPV", "BSVCore", "BSVOverlay", "BSVScript",
-                "BSVStorage", "BSVKeys",
+                "BSVStorage", "BSVKeys", "BSVCrypto",
             ],
             exclude: ["README.md"]
         ),
@@ -246,8 +248,8 @@ let package = Package(
         .testTarget(
             name: "BSVRegistryTests",
             dependencies: [
-                "BSVRegistry", "BSVCore", "BSVKeys", "BSVOverlay", "BSVScript", "BSVTransaction",
-                "BSVWallet",
+                "BSVRegistry", "BSVCore", "BSVCrypto", "BSVKeys", "BSVOverlay", "BSVScript",
+                "BSVTransaction", "BSVWallet",
             ]
         ),
         .testTarget(
@@ -266,6 +268,7 @@ let package = Package(
             name: "BSVIdentityTests",
             dependencies: [
                 "BSVIdentity", "BSVWallet", "BSVTransaction", "BSVScript", "BSVKeys", "BSVCore",
+                "BSVCrypto",
             ]
         ),
         .testTarget(

@@ -1,4 +1,5 @@
 import BSVCore
+import BSVCrypto
 import BSVKeys
 import BSVOverlay
 import BSVScript
@@ -58,9 +59,12 @@ struct UHRPDownloaderTests {
             ])
         let question = try #require(await resolver.lastQuestion())
         #expect(question.service.rawValue == "ls_uhrp")
+        // TypeScript storage/StorageDownloader.ts:69-76 sends
+        // { uhrpUrl, limit: 100, offset: 0 }.
         #expect(
             question.query
-                == Array("{\"uhrpUrl\":\"\(identifier.encoded)\"}".utf8)
+                == Array(
+                    "{\"uhrpUrl\":\"\(identifier.encoded)\",\"limit\":100,\"offset\":0}".utf8)
         )
     }
 
@@ -68,15 +72,10 @@ struct UHRPDownloaderTests {
     func hostileAdvertisements() async throws {
         let identifier = try UHRPURL(fileBytes: [4, 5, 6])
         let other = try UHRPURL(fileBytes: [7, 8, 9])
+        // Each output below breaks one rule of
+        // storage/UHRPAdvertisementValidation.ts (TypeScript 4.1.1).
         let limits = try beefLimits()
         let outputs = try [
-            advertisement(
-                identifier: identifier,
-                advertisedIdentifier: other,
-                host: "https://wrong-id.example/file",
-                expiry: 1_001,
-                beefLimits: limits
-            ),
             advertisement(
                 identifier: identifier,
                 advertisedHash: other.hash.bytes,
@@ -118,9 +117,22 @@ struct UHRPDownloaderTests {
             ),
             advertisement(
                 identifier: identifier,
-                host: "https://extra-field.example/file",
+                host: "https://unlinked.example/file",
                 expiry: 1_001,
-                extraFields: [[1]],
+                linkedLock: false,
+                beefLimits: limits
+            ),
+            advertisement(
+                identifier: identifier,
+                host: "https://unsigned.example/file",
+                expiry: 1_001,
+                signed: false,
+                beefLimits: limits
+            ),
+            previousSwiftAdvertisement(
+                identifier: identifier,
+                host: "https://four-field.example/file",
+                expiry: 1_001,
                 beefLimits: limits
             ),
             try OutputListItem(beef: [1], outputIndex: 0),
@@ -331,30 +343,72 @@ struct UHRPDownloaderTests {
         }
     }
 
+    /// Builds the six-field signed advertisement that TypeScript hosts
+    /// publish (storage/UHRPAdvertisementValidation.ts:37-112): host key,
+    /// hash, URL, expiry, size, then a signature over fields 0-4 by the key
+    /// linked to the host under "2-uhrp advertisement-1" and the anyone key.
     private func advertisement(
         identifier: UHRPURL,
-        advertisedIdentifier: UHRPURL? = nil,
         advertisedHash: [UInt8]? = nil,
         host: String,
         expiry: UInt64,
         expiryBytes: [UInt8]? = nil,
-        extraFields: [[UInt8]] = [],
+        linkedLock: Bool = true,
+        signed: Bool = true,
+        beefLimits: BEEFLimits
+    ) throws -> OutputListItem {
+        let hostKey = try PrivateKey([UInt8](repeating: 0, count: 31) + [7])
+        let anyone = try PrivateKey([UInt8](repeating: 0, count: 31) + [1])
+        let lockingKey = linkedLock
+            ? try hostKey.derivedChild(
+                with: anyone.publicKey,
+                invoiceNumber: "2-uhrp advertisement-1"
+            )
+            : hostKey
+        let fields = [
+            hostKey.publicKey.compressedBytes,
+            advertisedHash ?? identifier.hash.bytes,
+            Array(host.utf8),
+            expiryBytes ?? CompactSize.encode(expiry),
+            CompactSize.encode(4_096),
+        ]
+        let signedBytes = Array(fields.joined()) + (signed ? [] : [0])
+        let signature = try lockingKey.sign(digest: BSVHashing.sha256(signedBytes))
+        let script = try PushDrop.lockingScript(
+            fields: fields + [signature.derBytes],
+            publicKey: lockingKey.publicKey,
+            lockPosition: .beforeCompatibility,
+            limits: .standard
+        )
+        return try outputListItem(script, beefLimits: beefLimits)
+    }
+
+    /// The unsigned four-field shape Swift used before it matched TypeScript.
+    private func previousSwiftAdvertisement(
+        identifier: UHRPURL,
+        host: String,
+        expiry: UInt64,
         beefLimits: BEEFLimits
     ) throws -> OutputListItem {
         let key = try PrivateKey([UInt8](repeating: 0, count: 31) + [1])
-        var fields = [
-            advertisedHash ?? identifier.hash.bytes,
-            Array((advertisedIdentifier ?? identifier).encoded.utf8),
-            Array(host.utf8),
-            expiryBytes ?? CompactSize.encode(expiry),
-        ]
-        fields.append(contentsOf: extraFields)
         let script = try PushDrop.lockingScript(
-            fields: fields,
+            fields: [
+                identifier.hash.bytes,
+                Array(identifier.encoded.utf8),
+                Array(host.utf8),
+                CompactSize.encode(expiry),
+            ],
             publicKey: key.publicKey,
             lockPosition: .beforeCompatibility,
             limits: .standard
         )
+        return try outputListItem(script, beefLimits: beefLimits)
+    }
+
+    private func outputListItem(
+        _ script: Script,
+        beefLimits: BEEFLimits
+    ) throws -> OutputListItem {
         let transaction = Transaction(
             outputs: [TransactionOutput(satoshis: 1, lockingScript: script)]
         )

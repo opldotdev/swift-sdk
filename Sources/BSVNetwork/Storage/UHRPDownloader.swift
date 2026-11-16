@@ -39,7 +39,6 @@ public enum UHRPDownloadError: Error, Equatable, Sendable, CustomStringConvertib
 /// Explicit limits and timeouts for UHRP discovery and download.
 public struct UHRPDownloadConfiguration: Hashable, Sendable {
     public let beefLimits: BEEFLimits
-    public let pushDropLimits: PushDropLimits
     public let overlayLimits: OverlayLimits
     public let uhrpLimits: UHRPLimits
     public let maximumAdvertisementCount: Int
@@ -49,7 +48,6 @@ public struct UHRPDownloadConfiguration: Hashable, Sendable {
 
     public init(
         beefLimits: BEEFLimits,
-        pushDropLimits: PushDropLimits = .standard,
         overlayLimits: OverlayLimits = .standard,
         uhrpLimits: UHRPLimits = .standard,
         maximumAdvertisementCount: Int = 256,
@@ -67,7 +65,6 @@ public struct UHRPDownloadConfiguration: Hashable, Sendable {
             throw UHRPDownloadError.invalidConfiguration
         }
         self.beefLimits = beefLimits
-        self.pushDropLimits = pushDropLimits
         self.overlayLimits = overlayLimits
         self.uhrpLimits = uhrpLimits
         self.maximumAdvertisementCount = maximumAdvertisementCount
@@ -79,8 +76,9 @@ public struct UHRPDownloadConfiguration: Hashable, Sendable {
 
 /// A bounded UHRP downloader with injected overlay discovery.
 ///
-/// The downloader queries `ls_uhrp`, validates each four-field PushDrop
-/// advertisement, and makes at most one GET request to each valid HTTPS host.
+/// The downloader queries `ls_uhrp`, authenticates each six-field signed
+/// advertisement with `UHRPAdvertisement`, and makes at most one GET request
+/// to each valid HTTPS host.
 /// It has no implicit tracker, retry, proxy, cookie, cache, or persistence
 /// policy.
 public struct UHRPDownloader: UHRPContentProvider, Sendable {
@@ -129,7 +127,10 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
             )
             question = try LookupQuestion(
                 service: service,
-                query: Self.query(for: identifier),
+                query: Self.query(
+                    for: identifier,
+                    maximumAdvertisementCount: configuration.maximumAdvertisementCount
+                ),
                 limits: configuration.overlayLimits
             )
         } catch {
@@ -206,9 +207,17 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
         throw UHRPDownloadError.allHostsFailed
     }
 
-    private static func query(for identifier: UHRPURL) -> [UInt8] {
-        Array("{\"uhrpUrl\":\"\(identifier.encoded)\"}".utf8)
+    /// The `ls_uhrp` query that `@bsv/sdk` 4.1.1 sends
+    /// (`storage/StorageDownloader.ts`): the bare Base58Check identifier,
+    /// one page of at most 100 results, starting at offset zero.
+    private static func query(for identifier: UHRPURL, maximumAdvertisementCount: Int) -> [UInt8] {
+        let limit = min(maximumLookupResultCount, maximumAdvertisementCount)
+        return Array(
+            "{\"uhrpUrl\":\"\(identifier.encoded)\",\"limit\":\(limit),\"offset\":0}".utf8
+        )
     }
+
+    private static let maximumLookupResultCount = 100
 
     private static func host(
         from output: OutputListItem,
@@ -216,52 +225,22 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
         currentTime: UInt64,
         configuration: UHRPDownloadConfiguration
     ) -> URL? {
+        // One malformed or hostile advertisement must not hide valid hosts,
+        // so every failure here skips the output, as TypeScript does.
         guard
             let transaction = try? overlayLookupTransaction(
                 for: output,
                 beefLimits: configuration.beefLimits
             ),
             Int(output.outputIndex) < transaction.outputs.count,
-            let decoded = try? PushDrop.decode(
-                transaction.outputs[Int(output.outputIndex)].lockingScript,
-                lockPosition: .beforeCompatibility,
-                limits: configuration.pushDropLimits
+            let advertisement = try? UHRPAdvertisement.decode(
+                transaction.outputs[Int(output.outputIndex)].lockingScript
             ),
-            decoded.fields.count == 4,
-            decoded.fields[0] == identifier.hash.bytes,
-            let advertisedIdentifierText = String(
-                bytes: decoded.fields[1],
-                encoding: .utf8
-            ),
-            let advertisedIdentifier = try? UHRPURL(
-                parsing: advertisedIdentifierText,
-                limits: configuration.uhrpLimits
-            ),
-            advertisedIdentifier == identifier,
-            let expiry = try? CompactSize.decode(
-                decoded.fields[3],
-                canonicality: .required
-            ).value,
-            expiry >= currentTime,
-            let hostText = String(bytes: decoded.fields[2], encoding: .utf8),
-            hostText.utf8.count <= configuration.uhrpLimits.maximumURLUTF8ByteCount,
-            isValidHTTPText(hostText),
-            let components = URLComponents(string: hostText),
-            components.scheme?.lowercased() == "https",
-            components.host?.isEmpty == false,
-            components.user == nil,
-            components.password == nil,
-            components.fragment == nil,
-            let host = components.url
+            advertisement.hash == identifier.hash,
+            advertisement.expiryTime >= currentTime
         else {
             return nil
         }
-        return host
-    }
-
-    private static func isValidHTTPText(_ value: String) -> Bool {
-        !value.unicodeScalars.contains { scalar in
-            scalar.value < 0x20 || scalar.value == 0x7f
-        }
+        return advertisement.hostedFileLocation
     }
 }
