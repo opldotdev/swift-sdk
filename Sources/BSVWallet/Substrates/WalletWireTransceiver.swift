@@ -15,13 +15,15 @@ public struct WalletWireTransceiver:
     private let beefLimits: BEEFLimits
     private let certificateLimits: CertificateLimits
     private let wireLimits: WalletWireLimits
+    private let listOutputsEncoding: WalletWireListOutputsEncoding
 
     public init(
         transport: any WalletWireTransport,
         originator: String,
         beefLimits: BEEFLimits,
         certificateLimits: CertificateLimits,
-        wireLimits: WalletWireLimits
+        wireLimits: WalletWireLimits,
+        listOutputsEncoding: WalletWireListOutputsEncoding = .legacy
     ) throws {
         let count = originator.utf8.count
         let maximum = min(
@@ -49,6 +51,7 @@ public struct WalletWireTransceiver:
         )
         self.certificateLimits = certificateLimits
         self.wireLimits = wireLimits
+        self.listOutputsEncoding = listOutputsEncoding
     }
 
     public func createAction(
@@ -303,6 +306,7 @@ public struct WalletWireTransceiver:
         let frame = try WalletWireCodec.encodeActionRequest(
             request,
             originator: originator,
+            listOutputsEncoding: listOutputsEncoding,
             beefLimits: beefLimits,
             limits: wireLimits
         )
@@ -310,6 +314,8 @@ public struct WalletWireTransceiver:
         return try WalletWireCodec.decodeActionResult(
             response,
             expectedCall: request.call,
+            request: request,
+            listOutputsEncoding: listOutputsEncoding,
             beefLimits: beefLimits,
             limits: wireLimits
         )

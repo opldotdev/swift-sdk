@@ -33,7 +33,7 @@ struct WalletWireCertificateAdversarialTests {
         }
     }
 
-    @Test func rejectsNoncanonicalCountsHostileCountsAndUnsortedMaps() throws {
+    @Test func rejectsNoncanonicalCountsHostileCountsAndDuplicateMapNames() throws {
         #expect(throws: WalletWireError.noncanonicalCompactSize) {
             try WalletWireCodec.decodeCertificateRequest(
                 [WalletCall.discoverByAttributes.rawValue, 0, 0xfd, 0, 0]
@@ -48,6 +48,9 @@ struct WalletWireCertificateAdversarialTests {
             )
         }
 
+        // `@bsv/sdk` writes maps in insertion order
+        // (packages/sdk/src/wallet/substrates/WalletWireTransceiver.ts:1962 iterates
+        // `Object.keys(args.attributes)`), so unsorted names are accepted.
         var unsorted = WalletWireWriter()
         unsorted.writeCompactSize(2)
         try unsorted.writeString("zeta")
@@ -57,11 +60,28 @@ struct WalletWireCertificateAdversarialTests {
         unsorted.writeOptionalUInt32(nil)
         unsorted.writeOptionalUInt32(nil)
         unsorted.writeOptionalBoolean(nil)
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "unsorted or duplicate certificate attributes"
-        )) {
+        let decoded = try WalletWireCodec.decodeCertificateRequest(
+            [WalletCall.discoverByAttributes.rawValue, 0] + unsorted.bytes
+        )
+        guard case .discoverByAttributes(let attributes) = decoded.request else {
+            Issue.record("expected discoverByAttributes")
+            return
+        }
+        #expect(attributes.attributes.count == 2)
+
+        // A repeated name has no map value and is still rejected.
+        var duplicate = WalletWireWriter()
+        duplicate.writeCompactSize(2)
+        try duplicate.writeString("alpha")
+        try duplicate.writeString("first")
+        try duplicate.writeString("alpha")
+        try duplicate.writeString("second")
+        duplicate.writeOptionalUInt32(nil)
+        duplicate.writeOptionalUInt32(nil)
+        duplicate.writeOptionalBoolean(nil)
+        #expect(throws: WalletWireError.self) {
             try WalletWireCodec.decodeCertificateRequest(
-                [WalletCall.discoverByAttributes.rawValue, 0] + unsorted.bytes
+                [WalletCall.discoverByAttributes.rawValue, 0] + duplicate.bytes
             )
         }
     }

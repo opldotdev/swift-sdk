@@ -36,12 +36,17 @@ final class WalletWireAdversarialTests: XCTestCase {
     func testCounterpartyAndSignatureDiscriminatorsAreStrict() throws {
         let commonPrefix = [UInt8](arrayLiteral: 0, 5) + Array("wire1".utf8) + [1, 0x6B]
         let commonSuffix = [UInt8](arrayLiteral: 0, 0xFF)
-        let payload = commonPrefix + [0] + commonSuffix + [0, 0]
-        XCTAssertThrowsError(try WalletWireCodec.decodeKeyQueryRequest([15, 0] + payload)) { error in
-            XCTAssertEqual(
-                error as? WalletWireError,
-                .invalidDiscriminator(kind: "counterparty", value: 0)
-            )
+        // 0x00 is the omitted counterparty `@bsv/sdk` writes
+        // (WalletWireTransceiver.ts encodes `undefined` as 0), so it decodes to
+        // the call's default. Every byte other than 0, 2, 3, 11 and 12 is invalid.
+        for discriminator in [UInt8(1), 4, 10, 13, 255] {
+            let payload = commonPrefix + [discriminator] + commonSuffix + [0, 0]
+            XCTAssertThrowsError(try WalletWireCodec.decodeKeyQueryRequest([15, 0] + payload)) { error in
+                XCTAssertEqual(
+                    error as? WalletWireError,
+                    .invalidDiscriminator(kind: "counterparty", value: discriminator)
+                )
+            }
         }
 
         let validCommon = commonPrefix + [0x0B] + commonSuffix
@@ -117,12 +122,19 @@ final class WalletWireAdversarialTests: XCTestCase {
     }
 
     func testNonRoundTrippableFalseAndEmptyVerifyDataAreRejected() throws {
-        XCTAssertThrowsError(try WalletWireCodec.encodeKeyQueryResult(
-            .verifyHMAC(WalletVerifyHMACResult(valid: false))
-        ))
-        XCTAssertThrowsError(try WalletWireCodec.encodeKeyQueryResult(
-            .verifySignature(WalletVerifySignatureResult(valid: false))
-        ))
+        // A false verification is the error frame `@bsv/sdk` 4.1.1 sends
+        // (ProtoWallet.ts throws "HMAC is not valid" / "Signature is not valid",
+        // WalletWireProcessor.ts writes it as code 1 with an empty stack).
+        XCTAssertEqual(
+            try WalletWireCodec.encodeKeyQueryResult(.verifyHMAC(WalletVerifyHMACResult(valid: false))),
+            [1, 17] + Array("HMAC is not valid".utf8) + [0]
+        )
+        XCTAssertEqual(
+            try WalletWireCodec.encodeKeyQueryResult(
+                .verifySignature(WalletVerifySignatureResult(valid: false))
+            ),
+            [1, 22] + Array("Signature is not valid".utf8) + [0]
+        )
         XCTAssertThrowsError(try WalletWireCodec.encodeKeyQueryResult(
             .waitForAuthentication(WalletAuthenticatedResult(authenticated: false))
         ))

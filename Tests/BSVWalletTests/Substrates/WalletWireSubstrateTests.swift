@@ -73,12 +73,15 @@ struct WalletWireSubstrateTests {
             limits: limits
         )
 
-        await #expect(throws: WalletWireError.trailingBytes) {
-            try await processor.transmit(
-                malformed,
-                maximumResponseByteCount: limits.maximumFrameByteCount
-            )
-        }
+        // `@bsv/sdk` 4.1.1 answers a malformed request in-band:
+        // WalletWireProcessor.ts:2478 throws, its catch writes code 1 with
+        // "Wallet Wire getHeight request contains trailing data".
+        let response = try await processor.transmit(
+            malformed,
+            maximumResponseByteCount: limits.maximumFrameByteCount
+        )
+        let message = "Wallet Wire getHeight request contains trailing data"
+        #expect(response == [1, UInt8(message.utf8.count)] + Array(message.utf8) + [0])
         #expect(await recorder.snapshot().isEmpty)
     }
 
@@ -383,15 +386,18 @@ struct WalletWireSubstrateTests {
         let defaultDiscovery = WalletRequest.certificate(.discoverByIdentityKey(.init(
             identityKey: identityKey
         )))
+        // BRC-100 discovery defaults seekPermission to true, as every other
+        // call does (packages/sdk/src/wallet/Wallet.interfaces.ts:1021 and
+        // :1041 declare `seekPermission?: BooleanDefaultTrue`; W8).
         #expect(defaultDiscovery.rawSeekPermission == nil)
-        #expect(defaultDiscovery.effectiveSeekPermission == false)
+        #expect(defaultDiscovery.effectiveSeekPermission == true)
 
         let explicitDiscovery = WalletRequest.certificate(.discoverByAttributes(try .init(
             attributes: [:],
-            seekPermission: true
+            seekPermission: false
         )))
-        #expect(explicitDiscovery.rawSeekPermission == true)
-        #expect(explicitDiscovery.effectiveSeekPermission == true)
+        #expect(explicitDiscovery.rawSeekPermission == false)
+        #expect(explicitDiscovery.effectiveSeekPermission == false)
 
         let notApplicable: [WalletRequest] = [
             .action(.abortAction(WalletAbortActionRequest(

@@ -58,13 +58,31 @@ public struct WalletWireDecodedActionRequest:
     Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     public let originator: String
     public let request: WalletWireActionRequest
+    /// The `listOutputs` response layout the caller asked for.
+    public let listOutputsEncoding: WalletWireListOutputsEncoding
 
-    public init(originator: String, request: WalletWireActionRequest) {
+    public init(
+        originator: String,
+        request: WalletWireActionRequest,
+        listOutputsEncoding: WalletWireListOutputsEncoding = .legacy
+    ) {
         self.originator = originator
         self.request = request
+        self.listOutputsEncoding = listOutputsEncoding
     }
 
     public var description: String { "<redacted decoded wallet-wire action request>" }
     public var debugDescription: String { description }
     public var customMirror: Mirror { Mirror(self, children: ["call": request.call.rawValue]) }
+}
+
+/// The `listOutputs` response layout a transceiver asks for.
+///
+/// `.legacy` is the deployed SDK 2/3 layout, which cannot carry an unspendable
+/// output. `.spendable` appends the one-byte request extension `01` and reads
+/// the response with an explicit spendable flag per output (TypeScript
+/// `WalletWireTransceiver` option `listOutputsEncoding: 'spendable'`).
+public enum WalletWireListOutputsEncoding: Hashable, Sendable {
+    case legacy
+    case spendable
 }

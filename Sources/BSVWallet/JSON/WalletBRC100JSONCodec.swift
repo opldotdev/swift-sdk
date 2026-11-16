@@ -178,7 +178,7 @@ public protocol WalletJSONFailureMapping: Sendable {
 public struct WalletJSONRedactingFailureMapper: WalletJSONFailureMapping, Sendable {
     public init() {}
     public func payload(for error: any Error, call: WalletCall) -> WalletJSONErrorPayload {
-        WalletJSONErrorPayload(name: "WERR_UNKNOWN", message: "Wallet request failed")
+        WalletJSONErrorPayload(name: "WERR_UNKNOWN", message: "Wallet request failed", code: 1)
     }
 }
 
@@ -215,7 +215,8 @@ public struct WalletBRC100JSONProcessor: Sendable {
                     call: route.call,
                     body: (try? codec.encodeError(.init(
                         name: "WERR_UNKNOWN",
-                        message: "Wallet returned a mismatched result"
+                        message: "Wallet returned a mismatched result",
+                        code: 1
                     ))) ?? []
                 )
             }

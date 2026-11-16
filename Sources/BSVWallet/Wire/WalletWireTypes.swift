@@ -10,7 +10,7 @@ public struct WalletWireLimits: Hashable, Sendable {
         originator: 255,
         payload: 8_388_608,
         text: 2_000,
-        remoteMessage: 2_000,
+        remoteMessage: 4_096,
         remoteStack: 8_192,
         abi: .standard,
         crypto: .standard
@@ -30,7 +30,7 @@ public struct WalletWireLimits: Hashable, Sendable {
         maximumOriginatorUTF8ByteCount: Int = 255,
         maximumPayloadByteCount: Int = 8_388_608,
         maximumTextUTF8ByteCount: Int = 2_000,
-        maximumRemoteMessageUTF8ByteCount: Int = 2_000,
+        maximumRemoteMessageUTF8ByteCount: Int = 4_096,
         maximumRemoteStackUTF8ByteCount: Int = 8_192,
         abiLimits: WalletABILimits = .standard,
         cryptoLimits: WalletCryptoLimits = .standard

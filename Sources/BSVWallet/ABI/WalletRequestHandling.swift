@@ -75,9 +75,9 @@ public enum WalletRequest:
         case .action(.listOutputs(let value)):
             return makeSeekPermissionMetadata(rawValue: value.seekPermission, defaultValue: true)
         case .certificate(.discoverByIdentityKey(let value)):
-            return makeSeekPermissionMetadata(rawValue: value.seekPermission, defaultValue: false)
+            return makeSeekPermissionMetadata(rawValue: value.seekPermission, defaultValue: true)
         case .certificate(.discoverByAttributes(let value)):
-            return makeSeekPermissionMetadata(rawValue: value.seekPermission, defaultValue: false)
+            return makeSeekPermissionMetadata(rawValue: value.seekPermission, defaultValue: true)
         case .keyQuery(.getPublicKey(let value)):
             return makeSeekPermissionMetadata(rawValue: value.access.seekPermission, defaultValue: true)
         case .keyQuery(.encrypt(let value)):

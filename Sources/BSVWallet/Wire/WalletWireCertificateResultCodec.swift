@@ -1,3 +1,4 @@
+import BSVCore
 import BSVKeys
 
 extension WalletWireCodec {
@@ -14,6 +15,8 @@ extension WalletWireCodec {
             )
             return try encodeResultFrame(.success(payload), limits: limits)
         } catch let error as WalletWireError {
+            throw error
+        } catch let error as WalletWireResultRejection {
             throw error
         } catch let error as WalletABIError {
             throw walletWireMapABIError(error)
@@ -40,6 +43,8 @@ extension WalletWireCodec {
                     limits: limits
                 )
             } catch let error as WalletWireError {
+                throw error
+            } catch let error as WalletWireResultRejection {
                 throw error
             } catch let error as WalletABIError {
                 throw walletWireMapABIError(error)
@@ -116,12 +121,11 @@ extension WalletWireCodec {
                 limits: nestedLimits
             ))
         case .listCertificates(let value):
-            guard let count = UInt32(exactly: value.certificates.count),
-                  value.totalCertificates == count else {
-                throw WalletWireError.nonRoundTrippableValue(
-                    kind: "total certificates mismatch"
-                )
-            }
+            try walletWireRequirePage(
+                records: value.certificates.count,
+                total: UInt64(value.totalCertificates),
+                call: "listCertificates"
+            )
             guard value.certificates.count <= limits.abiLimits.maximumCollectionCount else {
                 throw WalletWireError.countLimitExceeded(
                     kind: "certificates",
@@ -162,12 +166,7 @@ extension WalletWireCodec {
                 } else {
                     writer.writeByte(0)
                 }
-                try walletWireWriteLinkageBytes(
-                    item.verifier,
-                    kind: "certificate verifier",
-                    to: &writer,
-                    limits: limits
-                )
+                try walletWireWriteCertificateVerifier(item.verifier, to: &writer)
             }
         case .proveCertificate(let value):
             try walletWireWriteKeyring(
@@ -323,14 +322,16 @@ private extension WalletWireCodec {
         certificateLimits: CertificateLimits,
         limits: WalletWireLimits
     ) throws -> WalletListCertificatesResult {
-        let count = try reader.readCount(
-            maximum: limits.abiLimits.maximumCollectionCount,
-            kind: "certificates"
-        )
-        guard let total = UInt32(exactly: count) else { throw WalletWireError.uint32Overflow }
+        // @bsv/sdk writes the total, then records until the end of the frame.
+        let totalRaw = try reader.readCompactSize()
+        guard let total = UInt32(exactly: totalRaw) else { throw WalletWireError.uint32Overflow }
         var certificates: [WalletCertificateResult] = []
-        certificates.reserveCapacity(min(count, reader.remainingCount / 2))
-        for _ in 0..<count {
+        while !reader.isAtEnd {
+            try walletWireRequirePageCapacity(
+                certificates.count,
+                limit: limits.abiLimits.maximumCollectionCount,
+                call: "listCertificates"
+            )
             let certificateBytes = try reader.readVarBytes(
                 maximum: certificateLimits.maximumBinaryByteCount,
                 kind: "certificate"
@@ -360,10 +361,7 @@ private extension WalletWireCodec {
                     value: flag
                 )
             }
-            let verifier = try reader.readVarBytes(
-                maximum: limits.abiLimits.maximumBytePayloadCount,
-                kind: "certificate verifier"
-            )
+            let verifier = try walletWireReadCertificateVerifier(from: &reader)
             certificates.append(try WalletCertificateResult(
                 certificate: certificate,
                 keyring: keyring,
@@ -371,6 +369,9 @@ private extension WalletWireCodec {
                 limits: limits.abiLimits
             ))
         }
+        try walletWireRequirePage(
+            records: certificates.count, total: totalRaw, call: "listCertificates"
+        )
         return try WalletListCertificatesResult(
             totalCertificates: total,
             certificates: certificates,
@@ -384,12 +385,11 @@ private extension WalletWireCodec {
         certificateLimits: CertificateLimits,
         limits: WalletWireLimits
     ) throws {
-        guard let count = UInt32(exactly: value.certificates.count),
-              value.totalCertificates == count else {
-            throw WalletWireError.nonRoundTrippableValue(
-                kind: "total discovered certificates mismatch"
-            )
-        }
+        try walletWireRequirePage(
+            records: value.certificates.count,
+            total: UInt64(value.totalCertificates),
+            call: "discoverCertificates"
+        )
         guard value.certificates.count <= limits.abiLimits.maximumCollectionCount else {
             throw WalletWireError.countLimitExceeded(
                 kind: "discovered certificates",
@@ -413,20 +413,24 @@ private extension WalletWireCodec {
         certificateLimits: CertificateLimits,
         limits: WalletWireLimits
     ) throws -> WalletDiscoverCertificatesResult {
-        let count = try reader.readCount(
-            maximum: limits.abiLimits.maximumCollectionCount,
-            kind: "discovered certificates"
-        )
-        guard let total = UInt32(exactly: count) else { throw WalletWireError.uint32Overflow }
+        let totalRaw = try reader.readCompactSize()
+        guard let total = UInt32(exactly: totalRaw) else { throw WalletWireError.uint32Overflow }
         var certificates: [WalletIdentityCertificate] = []
-        certificates.reserveCapacity(min(count, reader.remainingCount / 2))
-        for _ in 0..<count {
+        while !reader.isAtEnd {
+            try walletWireRequirePageCapacity(
+                certificates.count,
+                limit: limits.abiLimits.maximumCollectionCount,
+                call: "discoverCertificates"
+            )
             certificates.append(try decodeIdentityCertificate(
                 from: &reader,
                 certificateLimits: certificateLimits,
                 limits: limits
             ))
         }
+        try walletWireRequirePage(
+            records: certificates.count, total: totalRaw, call: "discoverCertificates"
+        )
         return try WalletDiscoverCertificatesResult(
             totalCertificates: total,
             certificates: certificates,
@@ -602,4 +606,41 @@ private func walletWireNestedCertificateLimits(
         ),
         maximumJSONByteCount: source.maximumJSONByteCount
     )
+}
+
+/// The list-result verifier is a public key hex string in the ABI (as in JSON).
+/// On the wire @bsv/sdk writes its 33 decoded bytes, or length 0 when absent.
+func walletWireWriteCertificateVerifier(
+    _ verifier: [UInt8],
+    to writer: inout WalletWireWriter
+) throws {
+    guard !verifier.isEmpty else {
+        writer.writeCompactSize(0)
+        return
+    }
+    guard let text = String(bytes: verifier, encoding: .utf8),
+          let key = try? decodeWalletJSONPublicKey(text) else {
+        throw WalletWireResultRejection(
+            message: "Invalid listCertificates verifier: expected a compressed public key in hex"
+        )
+    }
+    try writer.writeVarBytes(key.compressedBytes)
+}
+
+func walletWireReadCertificateVerifier(from reader: inout WalletWireReader) throws -> [UInt8] {
+    let length = try reader.readCompactSize()
+    if length == 0 { return [] }
+    guard length == 33 else {
+        throw WalletWireResultRejection(
+            message: "Invalid listCertificates verifier length: expected 33 bytes, received \(length)"
+        )
+    }
+    let bytes = try reader.readBytes(count: 33)
+    do {
+        let key = try PublicKey(bytes)
+        guard key.compressedBytes == bytes else { throw WalletWireError.invalidPublicKey }
+    } catch {
+        throw WalletWireError.invalidPublicKey
+    }
+    return Array(Hex.encode(bytes).utf8)
 }

@@ -208,11 +208,26 @@ public enum WalletWireCodec {
         )
     }
 
+    /// Encodes a key or query result frame. A false verification result is the
+    /// error frame `@bsv/sdk` 4.1.1 sends: code 1, "HMAC is not valid" or
+    /// "Signature is not valid".
     public static func encodeKeyQueryResult(
         _ result: WalletWireKeyQueryResult,
         limits: WalletWireLimits = .standard
     ) throws -> [UInt8] {
-        try encodeResultFrame(.success(encodeResultPayload(result, limits: limits)), limits: limits)
+        let refusal: String?
+        switch result {
+        case .verifyHMAC(let value) where !value.valid: refusal = WalletWireFailureText.invalidHMAC
+        case .verifySignature(let value) where !value.valid:
+            refusal = WalletWireFailureText.invalidSignature
+        default: refusal = nil
+        }
+        if let refusal {
+            return try encodeResultFrame(.failure(WalletWireRemoteError(
+                code: WalletWireErrorCode.unknownError, message: refusal, stack: "", limits: limits
+            )), limits: limits)
+        }
+        return try encodeResultFrame(.success(encodeResultPayload(result, limits: limits)), limits: limits)
     }
 
     public static func decodeKeyQueryResult(
@@ -248,7 +263,8 @@ public enum WalletWireCodec {
                     to: &writer,
                     limits: limits
                 )
-                writer.writeOptionalBoolean(forSelf)
+                // @bsv/sdk writes -1 for an omitted forSelf, and false is its default.
+                writer.writeOptionalBoolean(forSelf ? true : nil)
             }
             writer.writeOptionalBoolean(value.access.seekPermission)
         case .encrypt(let value):
@@ -331,7 +347,7 @@ public enum WalletWireCodec {
                 counterparty: value.counterparty, access: value.access,
                 to: &writer, limits: limits
             )
-            writer.writeOptionalBoolean(value.forSelf)
+            writer.writeOptionalBoolean(value.forSelf ? true : nil)
             try writer.writeVarBytes(value.signature.derBytes)
             switch value.payload {
             case .data(let bytes):
@@ -448,7 +464,10 @@ public enum WalletWireCodec {
                 access: try walletWireAccessWithSeek(key.access, seek: seek)
             ))
         case .createSignature:
-            let key = try walletWireDecodeKeyParameters(from: &reader, limits: limits)
+            // An omitted counterparty means `anyone` for createSignature (BRC-100).
+            let key = try walletWireDecodeKeyParameters(
+                from: &reader, defaultCounterparty: .anyone, limits: limits
+            )
             let payload = try decodeSignaturePayload(
                 from: &reader,
                 rejectEmptyData: false,

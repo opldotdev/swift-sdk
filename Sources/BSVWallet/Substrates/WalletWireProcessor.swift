@@ -47,6 +47,12 @@ public struct WalletWireProcessor:
         self.wireLimits = wireLimits
     }
 
+    /// Answers one request frame.
+    ///
+    /// Every malformed or unsupported request gets an in-band error frame, as a
+    /// `@bsv/sdk` 4.1.1 processor sends: code 1 and a short message, with an
+    /// empty stack. Only a bad `maximumResponseByteCount`, cancellation, or a
+    /// response larger than the caller allows throw out of band.
     public func transmit(
         _ request: [UInt8],
         maximumResponseByteCount: Int
@@ -59,22 +65,18 @@ public struct WalletWireProcessor:
         }
         let responseLimits = try limitedResponseLimits(maximumResponseByteCount)
         try Task.checkCancellation()
-        let frame = try WalletWireCodec.decodeRequestFrame(request, limits: wireLimits)
-
+        let call = request.first.flatMap(WalletCall.init(rawValue:))
         let response: [UInt8]
-        switch frame.call {
-        case .createAction, .signAction, .abortAction, .listActions,
-             .internalizeAction, .listOutputs, .relinquishOutput:
-            response = try await processAction(request, responseLimits: responseLimits)
-        case .revealCounterpartyKeyLinkage, .revealSpecificKeyLinkage,
-             .acquireCertificate, .listCertificates, .proveCertificate,
-             .relinquishCertificate, .discoverByIdentityKey, .discoverByAttributes:
-            response = try await processCertificate(request, responseLimits: responseLimits)
-        case .getPublicKey, .encrypt, .decrypt, .createHMAC, .verifyHMAC,
-             .createSignature, .verifySignature, .isAuthenticated,
-             .waitForAuthentication, .getHeight, .getHeaderForHeight,
-             .getNetwork, .getVersion:
-            response = try await processKeyQuery(request, responseLimits: responseLimits)
+        do {
+            response = try await process(request, responseLimits: responseLimits)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            response = try failureFrame(
+                code: WalletWireErrorCode.unknownError,
+                message: walletWireRequestFailureMessage(error, call: call),
+                limits: responseLimits
+            )
         }
         guard response.count <= maximumResponseByteCount else {
             throw WalletWireError.byteLimitExceeded(
@@ -84,6 +86,30 @@ public struct WalletWireProcessor:
             )
         }
         return response
+    }
+
+    private func process(
+        _ request: [UInt8],
+        responseLimits: WalletWireLimits
+    ) async throws -> [UInt8] {
+        // Call 29 is the @bsv/sdk 4.1 certificate compatibility profile. This
+        // processor answers it as an older processor does, with exactly the
+        // error a TypeScript transceiver downgrades on (see COMP-050).
+        let frame = try WalletWireCodec.decodeRequestFrame(request, limits: wireLimits)
+        switch frame.call {
+        case .createAction, .signAction, .abortAction, .listActions,
+             .internalizeAction, .listOutputs, .relinquishOutput:
+            return try await processAction(request, responseLimits: responseLimits)
+        case .revealCounterpartyKeyLinkage, .revealSpecificKeyLinkage,
+             .acquireCertificate, .listCertificates, .proveCertificate,
+             .relinquishCertificate, .discoverByIdentityKey, .discoverByAttributes:
+            return try await processCertificate(request, responseLimits: responseLimits)
+        case .getPublicKey, .encrypt, .decrypt, .createHMAC, .verifyHMAC,
+             .createSignature, .verifySignature, .isAuthenticated,
+             .waitForAuthentication, .getHeight, .getHeaderForHeight,
+             .getNetwork, .getVersion:
+            return try await processKeyQuery(request, responseLimits: responseLimits)
+        }
     }
 
     private func processAction(
@@ -123,11 +149,15 @@ public struct WalletWireProcessor:
         }
         try Task.checkCancellation()
         let responseBEEFLimits = try limitedBEEFLimits(responseLimits.maximumPayloadByteCount)
-        return try WalletWireCodec.encodeActionResult(
-            result,
-            beefLimits: responseBEEFLimits,
-            limits: responseLimits
-        )
+        return try encodeResult(call: decoded.request.call, limits: responseLimits) {
+            try WalletWireCodec.encodeActionResult(
+                result,
+                request: decoded.request,
+                listOutputsEncoding: decoded.listOutputsEncoding,
+                beefLimits: responseBEEFLimits,
+                limits: responseLimits
+            )
+        }
     }
 
     private func processCertificate(
@@ -166,11 +196,13 @@ public struct WalletWireProcessor:
             return try encodeFailure(error, call: decoded.request.call, limits: responseLimits)
         }
         try Task.checkCancellation()
-        return try WalletWireCodec.encodeCertificateResult(
-            result,
-            certificateLimits: certificateLimits,
-            limits: responseLimits
-        )
+        return try encodeResult(call: decoded.request.call, limits: responseLimits) {
+            try WalletWireCodec.encodeCertificateResult(
+                result,
+                certificateLimits: certificateLimits,
+                limits: responseLimits
+            )
+        }
     }
 
     private func processKeyQuery(
@@ -205,7 +237,32 @@ public struct WalletWireProcessor:
             return try encodeFailure(error, call: decoded.request.call, limits: responseLimits)
         }
         try Task.checkCancellation()
-        return try WalletWireCodec.encodeKeyQueryResult(result, limits: responseLimits)
+        return try encodeResult(call: decoded.request.call, limits: responseLimits) {
+            try WalletWireCodec.encodeKeyQueryResult(result, limits: responseLimits)
+        }
+    }
+
+    /// Encodes a wallet result, answering in-band when it has no wire encoding.
+    private func encodeResult(
+        call: WalletCall,
+        limits: WalletWireLimits,
+        _ encode: () throws -> [UInt8]
+    ) throws -> [UInt8] {
+        do {
+            return try encode()
+        } catch let rejection as WalletWireResultRejection {
+            return try failureFrame(
+                code: WalletWireErrorCode.clamped(rejection.code),
+                message: rejection.message,
+                limits: limits
+            )
+        } catch {
+            return try failureFrame(
+                code: WalletWireErrorCode.unknownError,
+                message: walletWireResultFailureMessage(error, call: call),
+                limits: limits
+            )
+        }
     }
 
     private func encodeFailure(
@@ -214,6 +271,28 @@ public struct WalletWireProcessor:
         limits: WalletWireLimits
     ) throws -> [UInt8] {
         let remote = failureMapper.remoteError(for: error, call: call)
+        return try failureFrame(
+            code: WalletWireErrorCode.clamped(remote.code),
+            message: remote.message,
+            limits: limits
+        )
+    }
+
+    /// An error frame with an empty stack: stacks disclose implementation details.
+    private func failureFrame(
+        code: UInt8,
+        message: String,
+        limits: WalletWireLimits
+    ) throws -> [UInt8] {
+        let remote = try WalletWireRemoteError(
+            code: code,
+            message: walletWireTruncatedMessage(
+                message,
+                maximum: limits.maximumRemoteMessageUTF8ByteCount
+            ),
+            stack: "",
+            limits: limits
+        )
         return try WalletWireCodec.encodeResultFrame(.failure(remote), limits: limits)
     }
 
