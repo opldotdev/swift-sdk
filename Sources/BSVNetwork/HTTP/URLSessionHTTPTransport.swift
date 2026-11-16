@@ -261,8 +261,11 @@ extension URLSessionRequestOperation: URLSessionDataDelegate {
         task: URLSessionTask,
         didCompleteWithError error: (any Error)?
     ) {
-        if let error = normalizedError(error) {
-            finish(.failure(error))
+        if let normalized = normalizedError(error) {
+            if normalized != .cancelled {
+                logFailure(normalized, task: task, underlying: error)
+            }
+            finish(.failure(normalized))
             return
         }
         let response: HTTPResponse? = lock.withLock {
@@ -274,9 +277,28 @@ extension URLSessionRequestOperation: URLSessionDataDelegate {
             )
         }
         guard let response else {
+            logFailure(.nonHTTPResponse, task: task, underlying: nil)
             finish(.failure(NetworkServiceError.nonHTTPResponse))
             return
         }
         finish(.success(response))
+    }
+
+    /// Logs what the normalized error drops: the host and path, and URLSession's own domain,
+    /// code and text. The underlying error is not reflected, because its user info holds the
+    /// full URL with any query string.
+    private func logFailure(
+        _ normalized: NetworkServiceError,
+        task: URLSessionTask,
+        underlying: (any Error)?
+    ) {
+        let method = task.originalRequest?.httpMethod ?? ""
+        let location = task.originalRequest?.url.map { NetworkLog.location($0) } ?? ""
+        var line = "URLSession \(method) \(location) failed as \(normalized)"
+        if let underlying {
+            let nsError = underlying as NSError
+            line += "; underlying \(nsError.domain) \(nsError.code): \(nsError.localizedDescription)"
+        }
+        NetworkLog.error(line)
     }
 }

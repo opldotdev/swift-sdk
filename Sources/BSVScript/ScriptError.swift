@@ -24,6 +24,9 @@ public enum ScriptError: Error, Equatable, Sendable {
     case invalidASMToken(index: Int)
     /// Invalid hexadecimal data at a zero-based, space-delimited token index.
     case invalidASMData(index: Int, TextEncodingError)
+    /// An `OP_PUSHDATA1/2/4 <length> <hex>` length token, at a zero-based
+    /// token index, that is not the decimal byte count of its data.
+    case invalidASMPushDataLength(index: Int)
     case asmOutputTooLarge(actual: Int, maximum: Int)
     case nonDataOperationInFalseReturn(index: Int, Opcode)
 }

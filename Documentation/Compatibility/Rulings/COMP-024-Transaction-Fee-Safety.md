@@ -21,7 +21,10 @@ Change markers and unsigned-script estimates are construction metadata. They
 do not alter transaction wire bytes, equality, hashing, or the transaction ID.
 Equal distribution is atomic. If the available remainder cannot give every
 change output one satoshi, change outputs are removed and the remainder is
-paid as additional miner fee. Division dust is also additional fee. A
+paid as additional miner fee. Otherwise the division remainder goes to the
+last change output, as @bsv/sdk 4.x does, rather than becoming fee as in Go.
+@bsv/sdk keeps zero-valued change outputs when change is smaller than their
+count; Swift does not create them. A
 transaction with no marked change output is left unchanged once it is proven
 to pay at least the required fee.
 

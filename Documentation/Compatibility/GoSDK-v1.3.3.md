@@ -694,8 +694,10 @@ Public:
 
 - Immutable, bounded `KVStoreLimits`, `KVStoreLocator`, `KVStoreToken`, and
   `KVStoreTokenCodec` values.
-- Strict one-field PushDrop encoding and decoding in the pinned Go
-  `beforeCompatibility` layout; raw byte values remain raw bytes.
+- Strict two-field signed PushDrop encoding and decoding (value and
+  signature) in the `beforeCompatibility` layout, as TypeScript 4.1.1
+  `LocalKVStore` reads; raw byte values remain raw bytes. The pinned Go
+  one-field token is no longer read or written (COMP-056).
 
 Edges: keys, PushDrop.
 

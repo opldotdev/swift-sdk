@@ -235,7 +235,8 @@ broadcaster.
 - Wallet-backed administration-token construction or spending. (Future)
 - Transport-neutral identity core. (Accepted)
 - Transport-neutral registry core. (Accepted)
-- Transport-neutral one-field key-value token core. (Accepted)
+- Transport-neutral two-field signed key-value token core, TypeScript 4.1.1
+  `LocalKVStore` format. (Accepted)
 - Transport-neutral UHRP identifier and content core. (Accepted)
 - Bounded UHRP overlay discovery and verified HTTPS download. (Accepted)
 - Registry lookup transport, discovery, wallet publication, and revocation.

@@ -303,7 +303,8 @@ private actor RecordingChainTracker: ChainTracker {
     }
 
     func currentHeight() -> UInt32 {
-        acceptedRoots.keys.max() ?? 0
+        // Deep enough that a coinbase proof (offset 0) is mature.
+        (acceptedRoots.keys.max() ?? 0) + 100
     }
 
     func requests() -> [RootRequest] {
