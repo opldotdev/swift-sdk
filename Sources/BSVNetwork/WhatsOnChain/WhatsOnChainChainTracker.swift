@@ -68,9 +68,14 @@ public struct WhatsOnChainChainTracker: ChainTracker, Sendable {
               let rootText = object["merkleroot"] as? String,
               let displayBytes = parseHash256Hex(rootText)
         else {
+            logUnreadable("isValidRoot", path: "block/\(blockHeight)/header", response: response)
             throw NetworkServiceError.malformedResponse
         }
         guard returnedHeight == blockHeight else {
+            NetworkLog.error(
+                "WhatsOnChainChainTracker.isValidRoot: asked for block \(blockHeight), "
+                    + "WhatsOnChain answered block \(returnedHeight)"
+            )
             throw NetworkServiceError.inconsistentResponse
         }
         return root.bytes == displayBytes.reversed()
@@ -82,6 +87,7 @@ public struct WhatsOnChainChainTracker: ChainTracker, Sendable {
         guard let object = tryJSONObject(response.body),
               let blocks = strictUInt32(object["blocks"])
         else {
+            logUnreadable("currentHeight", path: "chain/info", response: response)
             throw NetworkServiceError.malformedResponse
         }
         return blocks
@@ -107,6 +113,16 @@ public struct WhatsOnChainChainTracker: ChainTracker, Sendable {
                     nextBackoff = doubledBackoff(nextBackoff)
                     continue
                 }
+                // A 404 is an answer here: the block is not known.
+                if !(200...299).contains(response.statusCode), response.statusCode != 404 {
+                    NetworkLog.failure(
+                        "WhatsOnChainChainTracker",
+                        request: request,
+                        statusCode: response.statusCode,
+                        body: response.body,
+                        reason: "attempt \(attempt) of \(policy.maximumAttempts)"
+                    )
+                }
                 return response
             } catch is CancellationError {
                 throw NetworkServiceError.cancelled
@@ -119,9 +135,18 @@ public struct WhatsOnChainChainTracker: ChainTracker, Sendable {
                 }
                 throw error
             } catch {
+                NetworkLog.failure("WhatsOnChainChainTracker", request: request, underlying: error)
                 throw NetworkServiceError.transport(code: nil)
             }
         }
+    }
+
+    private func logUnreadable(_ operation: String, path: String, response: HTTPResponse) {
+        let body = sanitizedProviderText(response.body, maximumUTF8ByteCount: 2_000) ?? "(empty)"
+        NetworkLog.error(
+            "WhatsOnChainChainTracker.\(operation): WhatsOnChain's \(path) answer (HTTP \(response.statusCode)) "
+                + "could not be read; \(response.body.count) bytes: \(body)"
+        )
     }
 
     private func sleep(_ duration: Duration) async throws {
