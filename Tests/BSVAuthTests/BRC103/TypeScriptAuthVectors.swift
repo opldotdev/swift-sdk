@@ -92,4 +92,32 @@ enum TypeScriptAuthVectors {
     /// `AuthFetch.serializeRequest` with headers sorted by `localeCompare` (`AuthFetch.ts:740`).
     static let serializedHeaderOrder =
         "070707070707070707070707070707070707070707070707070707070707070704504f5354022f68ffffffffffffffffff070c636f6e74656e742d74797065106170706c69636174696f6e2f6a736f6e09782d6273762d615f62013409782d6273762d612d62013309782d6273762d612e62013508782d6273762d616201320b782d6273762d757070657201360a782d6273762d7a6574610131027b7d"
+
+    /// A TS `AuthFetch` client whose wallet holds a certificate, against a Swift server
+    /// (nonce 48 bytes of 0x61) whose policy is `serverPolicyFields` of
+    /// `serverPolicyCertificateType`: its handshake body, the initialResponse the server
+    /// was expected to send, the certificateResponse `AuthFetch` then posted on its own
+    /// (`clients/AuthFetch.ts:496-511`), and the headers of the GET it sent next.
+    static let policyInitialRequest =
+        #"{"version":"0.1","messageType":"initialRequest","identityKey":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","initialNonce":"36fQZMGI/qb/BJPvo+duptf66NmajaSKzY+nFdekqQKx8HuzckGbNzYeZaLUngtF","requestedCertificates":{"certifiers":[],"types":{}}}"#
+    static let policyInitialResponse =
+        #"{"version":"0.1","messageType":"initialResponse","identityKey":"025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc","nonce":"YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFh","initialNonce":"YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFh","yourNonce":"36fQZMGI/qb/BJPvo+duptf66NmajaSKzY+nFdekqQKx8HuzckGbNzYeZaLUngtF","signature":[48,68,2,32,18,168,85,75,185,246,163,31,25,219,164,3,230,34,53,221,209,189,71,70,166,188,110,76,131,122,138,154,90,176,148,57,2,32,89,213,47,207,125,157,87,52,54,192,154,54,21,16,159,155,171,175,221,192,55,147,188,5,143,173,59,245,54,94,1,65],"requestedCertificates":{"certifiers":["03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb"],"types":{"kZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZE=":["Zip","age"]}}}"#
+    static let policyCertificateResponse =
+        #"{"version":"0.1","messageType":"certificateResponse","identityKey":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","nonce":"ZcYuVyYvt7LGT0vvaiE9oXvFp8gHY4FxsmJlMS1tXGE=","initialNonce":"36fQZMGI/qb/BJPvo+duptf66NmajaSKzY+nFdekqQKx8HuzckGbNzYeZaLUngtF","yourNonce":"YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFh","certificates":[{"type":"kZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZE=","serialNumber":"kpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpKSkpI=","subject":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","certifier":"03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb","revocationOutpoint":"0000000000000000000000000000000000000000000000000000000000000000.0","fields":{"Zip":"8KmA6si+bMmJh2RJed/DOO9FsexeLfHRXCHSJMUTmz2VYOgI4TrHQ4GQH8VzfzbNjNhUEug=","age":"/rrSNdKw7TfgKrUwWI/sFIYyJSc2c0HiK+jE/nz0dy5zaul1Pd0aXcZQn6+Enxk37Z4=","name":"MiS9uFUxPaCux3KnrE6Cg4kko3O7EiyH/gefcemOwVaxb+VkpNdekJF8XNryXtJepnEA"},"signature":"3044022056fc9bf64fa53f8f4aaaaa7c642cf6443d616abea8b0637d04ee748299665fcd02203a1333189d62a31668df783955f9031faa8caa6b9f2cfc4822798dd10ceb1c25","keyring":{"Zip":"IzNeGjHj7EZ2Fx2ExLIz2zhV3lQE6sYhDwd23PCTPB8wKp5suoKsK0DKJ0Wm8dPiyCjDaOrtnFbZz7x4YDj4cLsIVjNclpaXXNFiVOTflaM=","age":"JweQlOfF3/TLY7Zj6/H7pWm9PoH0mG473RA1Hbsevft33G5jaurUx4EuAbtk0DJcEO0hoEtSAYkepyMkOoWQqjwCE9T8lY1HEfPMcojEI+0="}}],"signature":[48,68,2,32,127,35,170,65,228,215,109,175,147,12,176,205,7,52,139,113,32,45,204,31,244,50,24,52,66,43,102,155,73,45,239,102,2,32,77,251,251,32,28,24,21,175,30,51,2,41,89,105,158,15,107,153,111,0,133,45,60,215,71,234,36,41,143,67,38,162]}"#
+    static let policyGetPath = "/b"
+    static let policyGetHeaders: [(name: String, value: String)] = [
+        ("x-bsv-auth-identity-key", "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"),
+        ("x-bsv-auth-nonce", "rFP4AInEyQUDjXTLfc0gkyOH0fxgzJmB9Ln/F5Ow/Qg="),
+        ("x-bsv-auth-request-id", "WBZAIUmmGV+LHdLdlgWVytR0CvIWuxMT5Xq1DVBEx18="),
+        ("x-bsv-auth-signature", "3045022100bcc0c3b34372b50742a0929ee519c008ff2d93b507da2725a121ceb20df451be022074fdf6d0f4383c170c4856b1aced314b87b1e61fb874e1c05cd197341c2a942e"),
+        ("x-bsv-auth-version", "0.1"),
+        ("x-bsv-auth-your-nonce", "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFh"),
+    ]
+    static let serverPolicyCertificateType = [UInt8](repeating: 0x91, count: 32)
+    static let serverPolicyFields = ["Zip", "age"]
+    static let serverPolicyPlaintext: [(name: String, value: String)] = [
+        ("Zip", "73301"),
+        ("age", "41"),
+        ("name", "Bob"),
+    ]
 }

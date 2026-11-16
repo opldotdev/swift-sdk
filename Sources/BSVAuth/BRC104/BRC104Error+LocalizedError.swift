@@ -1,27 +1,29 @@
 import Foundation
 
 /// Plain sentences an app can show when an authenticated HTTP request or
-/// response cannot be built or read.
+/// response cannot be built or read. They hold whether the app is the client
+/// or the server.
 ///
 /// The cases stay typed for callers that branch on them, and
-/// `String(reflecting:)` still gives the case for a log.
+/// `String(reflecting:)` still gives the case for a log. When a framing error
+/// stands for a more detailed one, the detail is written to `AuthLog`.
 extension BRC104Error: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .invalidRequestID:
             "The response does not belong to this request."
         case .invalidMethod:
-            "The request method is not one the server accepts."
+            "The request method is not one that authenticated HTTP allows."
         case .invalidPath:
             "The request address is not valid or is too long."
         case .invalidStatus:
-            "The response status is not one an authenticated server may send."
+            "The response status is not one that authenticated HTTP allows."
         case .invalidHeader, .duplicateHeader:
             "The request or response has a header that is not valid."
         case .headerNotPermitted:
             "The request or response has a header that cannot be signed."
         case .resourceLimit:
-            "The request or response is larger than the app can handle."
+            "The request or response is too large."
         case .malformedPayload, .trailingData:
             "The signed request or response could not be read."
         }
@@ -34,18 +36,18 @@ extension BRC104HTTPFramingError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .invalidFrame:
-            "The request or response is not one an authenticated server accepts."
+            "The request or response is not one that authenticated HTTP allows."
         case .invalidAuthenticationHeader, .duplicateAuthenticationHeader,
             .unknownAuthenticationHeader:
-            "The server's authentication headers are not valid."
+            "The authentication headers are not valid."
         case .missingAuthenticationHeader:
-            "The server's response is missing its authentication headers."
+            "The request or response is missing authentication headers."
         case .certificateExchangeUnavailable:
-            "The server asked for certificates in a way this app does not support."
+            "Certificates cannot be sent with an HTTP request or response."
         case .requestIDMismatch:
             "The response does not belong to this request."
         case .resourceLimit:
-            "The request or response is larger than the app can handle."
+            "The request or response is too large."
         }
     }
 }

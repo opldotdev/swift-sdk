@@ -141,9 +141,12 @@ public struct AuthReceivedCertificateResponse:
     Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible,
     CustomReflectable
 {
-    /// The peer response signature is valid. Call
-    /// `AuthCertificateExchange.validate` before you trust the certificates or
-    /// disclosed fields.
+    /// Certificates the peer sent for `requested`. From a certificateResponse
+    /// message, the peer's message signature over them is valid. From an
+    /// `initialResponse`, they are not covered by any message signature
+    /// (`Peer.ts:912-915`). In both cases call `AuthCertificateExchange.validate`
+    /// or `validateSubset` before you trust the certificates or disclosed
+    /// fields.
     public let sessionID: AuthSessionID
     public let peer: PublicKey
     public let requested: AuthRequestedCertificateSet
@@ -338,21 +341,26 @@ public enum AuthError: Error, Equatable, Sendable, LocalizedError {
         peerMismatch, notAuthenticated, certificateExchangeUnavailable, invalidCertificateRequest,
         certificateValidationFailed, resourceLimit, handshakeTimedOut, randomGenerationFailed
 
+    /// A short sentence that does not assume which side the app is on. The
+    /// case, and any detail logged with it, identify the cause.
     public var errorDescription: String? {
         switch self {
         case .notAuthenticated:
-            "Not authenticated with the storage server."
+            "The connection has not been authenticated yet."
         case .sessionNotFound:
-            "The storage session is no longer valid."
+            "The authenticated session is no longer valid."
         case .resourceLimit:
-            "The storage session reached its message limit."
+            "The authenticated session reached one of its limits."
         case .handshakeTimedOut:
-            "Authentication with the storage server timed out."
+            "Authentication timed out."
         case .invalidSignature, .replay, .peerMismatch:
-            "The storage server could not be verified."
-        case .invalidMessage, .invalidNonce, .unexpectedMessage, .invalidCertificateRequest,
-            .certificateValidationFailed, .certificateExchangeUnavailable:
-            "The storage server sent an invalid authentication message."
+            "The other side could not be verified."
+        case .invalidMessage, .invalidNonce, .unexpectedMessage, .invalidCertificateRequest:
+            "An authentication message was not valid."
+        case .certificateValidationFailed:
+            "The certificates do not match what was requested or could not be verified."
+        case .certificateExchangeUnavailable:
+            "Certificates cannot be exchanged this way."
         case .randomGenerationFailed:
             "A secure random value could not be generated."
         }

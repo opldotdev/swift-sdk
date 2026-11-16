@@ -81,6 +81,43 @@ struct TypeScriptInteropTests {
         }
         #expect(validated.first?.disclosedFields == expected)
 
+        // A wider request: `validate` needs every type and field, while
+        // `validateSubset` accepts what was disclosed, as
+        // `validateCertificates.ts:23-29` does.
+        let wider = try AuthRequestedCertificateSet(
+            certifiers: [certifier],
+            certificateTypes: [
+                try CertificateTypeID(TypeScriptAuthVectors.certificateType): [
+                    try field("userName"), try field("profilePhoto"), try field("a&b<c>"),
+                    try field("email"),
+                ],
+                try CertificateTypeID([UInt8](repeating: 0x6a, count: 32)): [try field("age")],
+            ])
+        let log = AuthLogLines()
+        await log.record {
+            await #expect(throws: AuthError.certificateValidationFailed) {
+                try await AuthCertificateExchange.validate(
+                    received.certificates, from: typeScript, requested: wider, using: swiftWallet)
+            }
+        }
+        #expect(log.lines.first?.contains("does not reveal exactly the requested fields") == true)
+        let subset = try await AuthCertificateExchange.validateSubset(
+            received.certificates, from: typeScript, requested: wider, using: swiftWallet)
+        #expect(subset.first?.disclosedFields == expected)
+        #expect(
+            try await AuthCertificateExchange.validateSubset(
+                [], from: typeScript, requested: wider, using: swiftWallet
+            ).isEmpty)
+        let narrower = try AuthRequestedCertificateSet(
+            certifiers: [certifier],
+            certificateTypes: [
+                try CertificateTypeID(TypeScriptAuthVectors.certificateType): [try field("userName")]
+            ])
+        await #expect(throws: AuthError.certificateValidationFailed) {
+            try await AuthCertificateExchange.validateSubset(
+                received.certificates, from: typeScript, requested: narrower, using: swiftWallet)
+        }
+
         // `Peer.ts:453` signs the policy in insertion order: 0x02… before 0x01….
         let tsRequest = try decode(TypeScriptAuthVectors.certificateRequest)
         let requestResult = try await client.receive(tsRequest)
@@ -226,6 +263,64 @@ struct TypeScriptInteropTests {
         #expect(wire.contains(#""requestedCertificates":{"certifiers":[],"types":{}}"#))
         // Nothing is pending, so another request may follow.
         _ = try await client.makeCertificateRequest(empty, using: start.sessionID)
+    }
+
+    @Test("a TS AuthFetch client answers a Swift server's certificate policy")
+    func serverPolicyAnsweredByAuthFetch() async throws {
+        let typeScript = try key(3).publicKey
+        let type = try CertificateTypeID(TypeScriptAuthVectors.serverPolicyCertificateType)
+        let policy = try AuthRequestedCertificateSet(
+            certifiers: [try key(11).publicKey],
+            certificateTypes: [type: try TypeScriptAuthVectors.serverPolicyFields.map(field)])
+        let serverWallet = ProtoWallet(rootKey: try key(7))
+        let server = PeerAuthenticator(
+            wallet: serverWallet, randomSource: CountingRandomSource(seed: 0x60),
+            certificatesToRequest: policy)
+
+        // `Peer.ts:867-876`: the responder's policy travels in initialResponse.
+        let actions = try await server.receive(try decode(TypeScriptAuthVectors.policyInitialRequest))
+        #expect(actions.count == 1)
+        let initialResponse = try sent(actions)
+        #expect(initialResponse.requestedCertificates == policy)
+        #expect(initialResponse == (try decode(TypeScriptAuthVectors.policyInitialResponse)))
+
+        // `AuthFetch` answered it on its own (`clients/AuthFetch.ts:496-511`).
+        let answer = try await server.receive(
+            try decode(TypeScriptAuthVectors.policyCertificateResponse))
+        #expect(answer.count == 1)
+        guard case .certificateResponse(let received) = answer.first else {
+            Issue.record("the certificateResponse was not surfaced")
+            return
+        }
+        #expect(received.peer == typeScript)
+        #expect(received.requested == policy)
+        let validated = try await AuthCertificateExchange.validate(
+            received.certificates, from: typeScript, requested: policy, using: serverWallet)
+        var expected: [CertificateFieldName: String] = [:]
+        for item in TypeScriptAuthVectors.serverPolicyPlaintext
+        where TypeScriptAuthVectors.serverPolicyFields.contains(item.name) {
+            expected[try field(item.name)] = item.value
+        }
+        #expect(validated.first?.disclosedFields == expected)
+
+        // Its next request is delivered as usual.
+        let frame = try BRC104HTTPRequestFrame(
+            method: "GET", path: TypeScriptAuthVectors.policyGetPath,
+            headers: TypeScriptAuthVectors.policyGetHeaders.map {
+                BRC104Header(name: $0.name, value: $0.value)
+            })
+        let delivered = try await server.receive(try BRC104HTTPFrameCodec.decodeRequest(frame))
+        guard case .deliver(let message) = delivered.first else {
+            Issue.record("the GET was not delivered")
+            return
+        }
+        #expect(try BRC104Codec.decodeRequest(message.payload).path == "/b")
+        #expect((await server.session(message.sessionID))?.state == .authenticated)
+
+        // A second answer to the same policy is not expected.
+        await #expect(throws: AuthError.self) {
+            try await server.receive(try decode(TypeScriptAuthVectors.policyCertificateResponse))
+        }
     }
 
     // MARK: TypeScript `AuthFetch` client, Swift server

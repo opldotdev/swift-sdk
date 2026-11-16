@@ -246,7 +246,7 @@ public enum BRC104Codec {
             let name = header.name.lowercased()
             guard validToken(name), name.utf8.count <= limits.maximumHeaderNameBytes,
                 header.value.utf8.count <= limits.maximumValueBytes(forHeader: name, kind: kind),
-                safeText(header.value), permitted(name, kind: kind)
+                signableValue(header.value), permitted(name, kind: kind)
             else { throw BRC104Error.invalidHeader }
             guard names.insert(name).inserted else { throw BRC104Error.duplicateHeader }
             let (fieldBytes, fieldOverflow) = name.utf8.count.addingReportingOverflow(
@@ -290,7 +290,10 @@ public enum BRC104Codec {
     }
 
     static func permitted(_ name: String, kind: HeaderKind) -> Bool {
-        if name.hasPrefix("x-bsv-auth-") { return false }
+        // `@bsv/sdk` leaves every name that starts with `x-bsv-auth` unsigned,
+        // `x-bsv-authority` included (`AuthFetch.ts:727`, middleware
+        // `index.ts:2095`).
+        if name.hasPrefix("x-bsv-auth") { return false }
         if name.hasPrefix("x-bsv-") { return true }
         switch kind {
         case .request: return name == "authorization" || name == "content-type"
@@ -319,6 +322,15 @@ public enum BRC104Codec {
                 (48...57).contains(b) || (65...90).contains(b) || (97...122).contains(b)
                     || "!#$%&'*+-.^_`|~".utf8.contains(b)
             }
+    }
+    /// A header value that reaches the other side unchanged. `fetch` trims
+    /// leading and trailing white space and reads other bytes as Latin-1
+    /// before `@bsv/sdk` rebuilds the signed payload
+    /// (`SimplifiedFetchTransport.ts:263-283`), so only printable ASCII with
+    /// no space at either end is signed.
+    static func signableValue(_ value: String) -> Bool {
+        value.utf8.allSatisfy { (0x20...0x7E).contains($0) }
+            && value.utf8.first != 0x20 && value.utf8.last != 0x20
     }
     static func safeText(_ value: String) -> Bool {
         value.utf8.allSatisfy { $0 >= 0x20 && $0 != 0x7f }

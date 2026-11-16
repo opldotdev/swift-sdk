@@ -143,6 +143,47 @@ struct CertificateFieldOrderTests {
         #expect(try await certificate.verifySignatureInEitherFieldOrder(limits: .standard))
     }
 
+    @Test("non-ASCII field names are refused at issue and still verify in byte order")
+    func nonASCIIFieldNames() async throws {
+        // ICU root collation is not emulated past ASCII (COMP-041), so a
+        // certificate whose TS signature order could not be predicted is not issued.
+        let fields = [
+            try CertificateFieldName("été"): "summer", try CertificateFieldName("age"): "30",
+        ]
+        let log = AuthLogLines()
+        let error = await log.record {
+            await #expect(throws: (any Error).self) {
+                try await CertificateEngine.issue(
+                    type: try CertificateTypeID([UInt8](repeating: 0x24, count: 32)),
+                    subject: .publicKey(try key(7).publicKey),
+                    plaintextFields: fields,
+                    using: ProtoWallet(rootKey: try key(11)))
+            }
+        }
+        #expect(
+            error?.localizedDescription
+                == "Certificate field names must use only plain ASCII letters, digits, spaces and symbols.")
+        #expect(log.lines.contains { $0.contains("field name") })
+
+        let unsigned = try Certificate(
+            type: try CertificateTypeID([UInt8](repeating: 0x25, count: 32)),
+            serialNumber: try CertificateSerialNumber([UInt8](repeating: 0x26, count: 32)),
+            subject: try key(7).publicKey,
+            certifier: try key(11).publicKey,
+            revocationOutpoint: CertificateEngine.disabledRevocationOutpoint,
+            fields: [
+                try CertificateFieldName("été"): try CertificateCiphertext([1]),
+                try CertificateFieldName("age"): try CertificateCiphertext([2]),
+            ])
+        await #expect(throws: (any Error).self) {
+            try await unsigned.signedInLocaleOrder(
+                using: ProtoWallet(rootKey: try key(11)), limits: .standard)
+        }
+        // A Go-style byte-order signature over such names is still accepted.
+        let byteOrder = try await unsigned.signed(using: ProtoWallet(rootKey: try key(11)))
+        #expect(try await byteOrder.verifySignatureInEitherFieldOrder(limits: .standard))
+    }
+
     @Test("certificates signed in byte order still verify")
     func byteOrderSignatureStillVerifies() async throws {
         let unsigned = try Certificate(

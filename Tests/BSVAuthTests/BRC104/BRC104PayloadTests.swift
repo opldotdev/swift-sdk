@@ -141,6 +141,36 @@ struct BRC104PayloadTests {
         }
     }
 
+    @Test("refuses header values and names that @bsv/sdk would not sign as given")
+    func unsignableHeaders() throws {
+        let requestID = [UInt8](repeating: 4, count: 32)
+        // `fetch` trims values and reads bytes as Latin-1
+        // (`SimplifiedFetchTransport.ts:263-283`).
+        for value in [" leading", "trailing ", "caf\u{E9}", "\u{1F600}"] {
+            #expect(throws: BRC104Error.invalidHeader) {
+                try BRC104Request(
+                    requestID: requestID, method: "GET", path: "/",
+                    headers: [.init(name: "x-bsv-note", value: value)])
+            }
+            #expect(throws: BRC104Error.invalidHeader) {
+                try BRC104Response(
+                    requestID: requestID, status: 200,
+                    headers: [.init(name: "x-bsv-note", value: value)])
+            }
+        }
+        #expect(
+            try BRC104Request(
+                requestID: requestID, method: "GET", path: "/",
+                headers: [.init(name: "x-bsv-note", value: "inner space, ~!")]
+            ).headers.first?.value == "inner space, ~!")
+        // `@bsv/sdk` signs no name starting with `x-bsv-auth` (`AuthFetch.ts:727`).
+        #expect(throws: BRC104Error.invalidHeader) {
+            try BRC104Request(
+                requestID: requestID, method: "GET", path: "/",
+                headers: [.init(name: "x-bsv-authority", value: "1")])
+        }
+    }
+
     @Test("response correlation is exact")
     func responseCorrelation() throws {
         let requestID = [UInt8](repeating: 1, count: 32)

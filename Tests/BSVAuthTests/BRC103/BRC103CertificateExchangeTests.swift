@@ -190,6 +190,147 @@ struct BRC103CertificateExchangeTests {
         }
     }
 
+    @Test("several certificate requests may be open at once, as in Peer.ts")
+    func severalOpenRequests() async throws {
+        let requesterKey = try key(3)
+        let peerKey = try key(7)
+        let certifierKey = try key(11)
+        let requester = PeerAuthenticator(wallet: ProtoWallet(rootKey: requesterKey))
+        let peer = PeerAuthenticator(wallet: ProtoWallet(rootKey: peerKey))
+        let session = try await authenticate(requester, peer, peerKey: peerKey.publicKey)
+        let nameType = try CertificateTypeID([UInt8](repeating: 0x31, count: 32))
+        let ageType = try CertificateTypeID([UInt8](repeating: 0x32, count: 32))
+        let name = try CertificateFieldName("name")
+        let age = try CertificateFieldName("age")
+        let first = try AuthRequestedCertificateSet(
+            certifiers: [certifierKey.publicKey], certificateTypes: [nameType: [name]])
+        let second = try AuthRequestedCertificateSet(
+            certifiers: [certifierKey.publicKey], certificateTypes: [ageType: [age]])
+
+        // `Peer.ts:474-478` keys each request by nonce; neither replaces the other.
+        for request in [first, second] {
+            let message = try sent(
+                try await requester.makeCertificateRequest(request, using: session.requester))
+            guard case .certificateRequest(let received) = try await peer.receive(message).first
+            else {
+                Issue.record("missing certificate request")
+                return
+            }
+            #expect(received.request == request)
+        }
+
+        // Answered out of order: each response settles the request it fits
+        // (`Peer.ts:1236-1240`).
+        let ageCertificate = try fixtureCertificate(
+            subject: peerKey.publicKey, certifier: certifierKey.publicKey, type: ageType,
+            field: age)
+        let nameCertificate = try fixtureCertificate(
+            subject: peerKey.publicKey, certifier: certifierKey.publicKey, type: nameType,
+            field: name)
+        let ageResponse = try sent(
+            try await peer.makeCertificateResponse([ageCertificate], using: session.peer))
+        let nameResponse = try sent(
+            try await peer.makeCertificateResponse([nameCertificate], using: session.peer))
+        guard case .certificateResponse(let ageAnswer) = try await requester.receive(ageResponse).first,
+            case .certificateResponse(let nameAnswer) = try await requester.receive(nameResponse).first
+        else {
+            Issue.record("missing certificate response")
+            return
+        }
+        #expect(ageAnswer.requested == second)
+        #expect(nameAnswer.requested == first)
+
+        // Both are settled, so nothing more is awaited on either side.
+        await #expect(throws: AuthError.notAuthenticated) {
+            try await peer.makeCertificateResponse([], using: session.peer)
+        }
+        let late = try sent(
+            try await requester.makeCertificateRequest(first, using: session.requester))
+        _ = try await peer.receive(late)
+        let decline = try sent(try await peer.makeCertificateResponse([], using: session.peer))
+        guard case .certificateResponse(let declined) = try await requester.receive(decline).first
+        else {
+            Issue.record("missing certificate response")
+            return
+        }
+        #expect(declined.requested == first)
+    }
+
+    @Test("an empty answer declines the oldest open request; at most 16 are open")
+    func openRequestOrderAndLimit() async throws {
+        let requesterKey = try key(3)
+        let peerKey = try key(7)
+        let certifierKey = try key(11)
+        let requester = PeerAuthenticator(wallet: ProtoWallet(rootKey: requesterKey))
+        let peer = PeerAuthenticator(wallet: ProtoWallet(rootKey: peerKey))
+        let session = try await authenticate(requester, peer, peerKey: peerKey.publicKey)
+        var requests: [AuthRequestedCertificateSet] = []
+        for index in 0..<16 {
+            let request = try AuthRequestedCertificateSet(
+                certifiers: [certifierKey.publicKey],
+                certificateTypes: [
+                    try CertificateTypeID([UInt8](repeating: UInt8(0x40 + index), count: 32)):
+                        [try CertificateFieldName("name")]
+                ])
+            requests.append(request)
+            _ = try await peer.receive(
+                try sent(try await requester.makeCertificateRequest(request, using: session.requester)))
+        }
+        await #expect(throws: AuthError.resourceLimit) {
+            try await requester.makeCertificateRequest(requests[0], using: session.requester)
+        }
+
+        let decline = try sent(try await peer.makeCertificateResponse([], using: session.peer))
+        guard case .certificateResponse(let declined) = try await requester.receive(decline).first
+        else {
+            Issue.record("missing certificate response")
+            return
+        }
+        #expect(declined.requested == requests[0])
+        #expect(declined.certificates.isEmpty)
+        // One slot is free again.
+        _ = try await requester.makeCertificateRequest(requests[0], using: session.requester)
+    }
+
+    @Test("a response can name the request it answers")
+    func answeringNamedRequest() async throws {
+        let requesterKey = try key(3)
+        let peerKey = try key(7)
+        let certifierKey = try key(11)
+        let requester = PeerAuthenticator(wallet: ProtoWallet(rootKey: requesterKey))
+        let peer = PeerAuthenticator(wallet: ProtoWallet(rootKey: peerKey))
+        let session = try await authenticate(requester, peer, peerKey: peerKey.publicKey)
+        let type = try CertificateTypeID([UInt8](repeating: 0x31, count: 32))
+        let other = try CertificateTypeID([UInt8](repeating: 0x32, count: 32))
+        let name = try CertificateFieldName("name")
+        let first = try AuthRequestedCertificateSet(
+            certifiers: [certifierKey.publicKey], certificateTypes: [type: [name]])
+        let second = try AuthRequestedCertificateSet(
+            certifiers: [certifierKey.publicKey], certificateTypes: [other: [name], type: [name]])
+        for request in [first, second] {
+            _ = try await peer.receive(
+                try sent(try await requester.makeCertificateRequest(request, using: session.requester)))
+        }
+        let certificate = try fixtureCertificate(
+            subject: peerKey.publicKey, certifier: certifierKey.publicKey, type: type, field: name)
+        let unasked = try AuthRequestedCertificateSet(
+            certifiers: [certifierKey.publicKey], certificateTypes: [other: [name]])
+        await #expect(throws: AuthError.unexpectedMessage) {
+            try await peer.makeCertificateResponse(
+                [certificate], using: session.peer, answering: unasked)
+        }
+        // The certificate fits both; `answering` settles the second.
+        _ = try await peer.makeCertificateResponse(
+            [certificate], using: session.peer, answering: second)
+        let left = try sent(try await peer.makeCertificateResponse([certificate], using: session.peer))
+        guard case .certificateResponse(let received) = try await requester.receive(left).first
+        else {
+            Issue.record("missing certificate response")
+            return
+        }
+        #expect(received.requested == first)
+    }
+
     @Test("wallet preparation and validation are exact and all-or-nothing")
     func walletPreparationAndValidation() async throws {
         let certifierKey = try key(13)

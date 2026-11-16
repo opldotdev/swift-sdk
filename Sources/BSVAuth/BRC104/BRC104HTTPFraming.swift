@@ -186,10 +186,8 @@ public enum BRC104HTTPFrameCodec {
         let request: BRC104Request
         do {
             request = try BRC104Codec.decodeRequest(payload, limits: limits.payloadLimits)
-        } catch BRC104Error.resourceLimit {
-            throw BRC104HTTPFramingError.resourceLimit
         } catch {
-            throw BRC104HTTPFramingError.invalidFrame
+            throw framingError(for: error, in: "BRC104HTTPFrameCodec.encodeRequest")
         }
         let authentication = try authenticationHeaders(
             for: message,
@@ -230,19 +228,15 @@ public enum BRC104HTTPFrameCodec {
                 body: frame.body,
                 limits: limits.payloadLimits
             )
-        } catch BRC104Error.resourceLimit {
-            throw BRC104HTTPFramingError.resourceLimit
         } catch {
-            throw BRC104HTTPFramingError.invalidFrame
+            throw framingError(for: error, in: "BRC104HTTPFrameCodec.decodeRequest")
         }
         let payload: [UInt8]
         do {
             payload = try BRC104Codec.encode(
                 request, applyingClientBodyDefault: false, limits: limits.payloadLimits)
-        } catch BRC104Error.resourceLimit {
-            throw BRC104HTTPFramingError.resourceLimit
         } catch {
-            throw BRC104HTTPFramingError.invalidFrame
+            throw framingError(for: error, in: "BRC104HTTPFrameCodec.decodeRequest")
         }
         return try makeMessage(authentication: authentication, payload: payload, limits: limits)
     }
@@ -258,10 +252,8 @@ public enum BRC104HTTPFrameCodec {
         let response: BRC104Response
         do {
             response = try BRC104Codec.decodeResponse(payload, limits: limits.payloadLimits)
-        } catch BRC104Error.resourceLimit {
-            throw BRC104HTTPFramingError.resourceLimit
         } catch {
-            throw BRC104HTTPFramingError.invalidFrame
+            throw framingError(for: error, in: "BRC104HTTPFrameCodec.encodeResponse")
         }
         let authentication = try authenticationHeaders(
             for: message,
@@ -299,18 +291,14 @@ public enum BRC104HTTPFrameCodec {
                 body: frame.body,
                 limits: limits.payloadLimits
             )
-        } catch BRC104Error.resourceLimit {
-            throw BRC104HTTPFramingError.resourceLimit
         } catch {
-            throw BRC104HTTPFramingError.invalidFrame
+            throw framingError(for: error, in: "BRC104HTTPFrameCodec.decodeResponse")
         }
         let payload: [UInt8]
         do {
             payload = try BRC104Codec.encode(response, limits: limits.payloadLimits)
-        } catch BRC104Error.resourceLimit {
-            throw BRC104HTTPFramingError.resourceLimit
         } catch {
-            throw BRC104HTTPFramingError.invalidFrame
+            throw framingError(for: error, in: "BRC104HTTPFrameCodec.decodeResponse")
         }
         return try makeMessage(authentication: authentication, payload: payload, limits: limits)
     }
@@ -417,10 +405,8 @@ public enum BRC104HTTPFrameCodec {
                 kind: kind,
                 limits: limits.payloadLimits
             )
-        } catch BRC104Error.resourceLimit {
-            throw BRC104HTTPFramingError.resourceLimit
         } catch {
-            throw BRC104HTTPFramingError.invalidFrame
+            throw framingError(for: error, in: "BRC104HTTPFrameCodec.split")
         }
         return SplitHeaders(authentication: authentication, signed: signed)
     }
@@ -518,11 +504,31 @@ public enum BRC104HTTPFrameCodec {
                 try AuthJSONParser.parse(Array(value.utf8)),
                 limits: limits.authLimits
             )
-        } catch AuthError.resourceLimit {
-            throw BRC104HTTPFramingError.resourceLimit
         } catch {
-            throw BRC104HTTPFramingError.invalidAuthenticationHeader
+            throw authenticationError(
+                for: error, in: "BRC104HTTPFrameCodec.parseRequestedCertificates")
         }
+    }
+
+    /// Reports a payload failure as a framing error and logs the detail.
+    private static func framingError(for error: any Error, in operation: String)
+        -> BRC104HTTPFramingError
+    {
+        let reported: BRC104HTTPFramingError =
+            error as? BRC104Error == .resourceLimit ? .resourceLimit : .invalidFrame
+        AuthLog.reported(operation, error, as: reported)
+        return reported
+    }
+
+    /// Reports an authentication-message failure as a header error and logs
+    /// the detail.
+    private static func authenticationError(for error: any Error, in operation: String)
+        -> BRC104HTTPFramingError
+    {
+        let reported: BRC104HTTPFramingError =
+            error as? AuthError == .resourceLimit ? .resourceLimit : .invalidAuthenticationHeader
+        AuthLog.reported(operation, error, as: reported)
+        return reported
     }
 
     private static func authenticationHeaders(
@@ -574,12 +580,8 @@ public enum BRC104HTTPFrameCodec {
         )
         do {
             try AuthMessageCodec.validate(message, limits: limits.authLimits)
-        } catch AuthError.resourceLimit {
-            throw BRC104HTTPFramingError.resourceLimit
-        } catch AuthError.certificateExchangeUnavailable {
-            throw BRC104HTTPFramingError.certificateExchangeUnavailable
         } catch {
-            throw BRC104HTTPFramingError.invalidAuthenticationHeader
+            throw authenticationError(for: error, in: "BRC104HTTPFrameCodec.makeMessage")
         }
         return message
     }
@@ -593,12 +595,8 @@ public enum BRC104HTTPFrameCodec {
         }
         do {
             try AuthMessageCodec.validate(message, limits: limits.authLimits)
-        } catch AuthError.resourceLimit {
-            throw BRC104HTTPFramingError.resourceLimit
-        } catch AuthError.certificateExchangeUnavailable {
-            throw BRC104HTTPFramingError.certificateExchangeUnavailable
         } catch {
-            throw BRC104HTTPFramingError.invalidAuthenticationHeader
+            throw authenticationError(for: error, in: "BRC104HTTPFrameCodec.validateGeneral")
         }
     }
 }

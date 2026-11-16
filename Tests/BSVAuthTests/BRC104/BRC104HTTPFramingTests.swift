@@ -294,6 +294,41 @@ struct BRC104HTTPFramingTests {
                 .path == path)
     }
 
+    @Test("a framing error keeps the detailed cause in the log")
+    func detailedCauseIsLogged() async throws {
+        let fixture = try await makeHTTPFixture()
+        let message = fixture.requestMessage
+        let malformed = AuthMessage(
+            messageType: .general, identityKey: message.identityKey, nonce: message.nonce,
+            yourNonce: message.yourNonce, payload: [1, 2, 3], signature: message.signature)
+        let log = AuthLogLines()
+        await log.record {
+            #expect(throws: BRC104HTTPFramingError.invalidFrame) {
+                try BRC104HTTPFrameCodec.encodeRequest(malformed)
+            }
+        }
+        let line = try #require(log.lines.first)
+        #expect(line.hasPrefix("BRC104HTTPFrameCodec.encodeRequest: BRC104Error: "))
+        #expect(line.hasSuffix("reported as BSVAuth.BRC104HTTPFramingError.invalidFrame"))
+
+        let plain = try BRC104HTTPFrameCodec.encodeResponse(fixture.responseMessage)
+        let headerLog = AuthLogLines()
+        await headerLog.record {
+            #expect(throws: BRC104HTTPFramingError.invalidAuthenticationHeader) {
+                try BRC104HTTPFrameCodec.decodeResponse(
+                    try responseFrame(
+                        basedOn: plain,
+                        headers: plain.headers + [
+                            .init(name: BRC104HTTPHeaderName.requestedCertificates, value: "[]")
+                        ]),
+                    expectedRequestID: fixture.requestID)
+            }
+        }
+        #expect(
+            headerLog.lines.first?.hasPrefix(
+                "BRC104HTTPFrameCodec.parseRequestedCertificates: AuthError: ") == true)
+    }
+
     @Test("frames and messages do not disclose HTTP or authentication data")
     func redaction() async throws {
         let fixture = try await makeHTTPFixture()
