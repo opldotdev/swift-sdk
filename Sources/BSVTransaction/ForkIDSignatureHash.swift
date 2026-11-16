@@ -88,10 +88,30 @@ public extension Transaction {
         scriptCode: Script,
         limits: TransactionLimits
     ) throws -> Hash256 {
+        try forkIDSignatureHash(
+            inputIndex: inputIndex,
+            rawHashType: rawHashType,
+            scriptCodeBytes: scriptCode.bytes,
+            limits: limits
+        )
+    }
+
+    /// Returns the ForkID digest over raw script-code bytes.
+    ///
+    /// The interpreter builds script code that is not itself one script, such
+    /// as an unlocking script followed by its locking script under Chronicle
+    /// rules. The only size bound is `limits.maximumScriptByteCount`, which
+    /// fails with ``TransactionError/scriptTooLarge(actual:maximum:)``.
+    package func forkIDSignatureHash(
+        inputIndex: Int,
+        rawHashType: UInt8,
+        scriptCodeBytes: [UInt8],
+        limits: TransactionLimits
+    ) throws -> Hash256 {
         BSVHashing.sha256d(try forkIDSignaturePreimage(
             inputIndex: inputIndex,
             rawHashType: rawHashType,
-            scriptCode: scriptCode,
+            scriptCodeBytes: scriptCodeBytes,
             limits: limits
         ))
     }
@@ -100,6 +120,20 @@ public extension Transaction {
         inputIndex: Int,
         rawHashType: UInt8,
         scriptCode: Script?,
+        limits: TransactionLimits
+    ) throws -> [UInt8] {
+        try forkIDSignaturePreimage(
+            inputIndex: inputIndex,
+            rawHashType: rawHashType,
+            scriptCodeBytes: scriptCode?.bytes,
+            limits: limits
+        )
+    }
+
+    private func forkIDSignaturePreimage(
+        inputIndex: Int,
+        rawHashType: UInt8,
+        scriptCodeBytes: [UInt8]?,
         limits: TransactionLimits
     ) throws -> [UInt8] {
         guard inputs.indices.contains(inputIndex) else {
@@ -112,10 +146,10 @@ public extension Transaction {
         // This validates every collection/script against caller-selected
         // bounds before any aggregate serialization or hashing begins.
         _ = try serializedByteCount(limits: limits)
-        let committedScript = scriptCode ?? sourceOutput.lockingScript
-        guard UInt64(committedScript.byteCount) <= limits.maximumScriptByteCount else {
+        let committedScript = scriptCodeBytes ?? sourceOutput.lockingScript.bytes
+        guard UInt64(committedScript.count) <= limits.maximumScriptByteCount else {
             throw TransactionError.scriptTooLarge(
-                actual: UInt64(committedScript.byteCount),
+                actual: UInt64(committedScript.count),
                 maximum: limits.maximumScriptByteCount
             )
         }
@@ -165,7 +199,7 @@ public extension Transaction {
             hashOutputs = zeroHash
         }
 
-        let scriptLength = committedScript.byteCount
+        let scriptLength = committedScript.count
         let (fixedAndPrefix, fixedOverflow) = 156.addingReportingOverflow(
             CompactSize.encodedLength(of: UInt64(scriptLength))
         )
@@ -178,7 +212,7 @@ public extension Transaction {
         writer.write(hashPreviousOutputs)
         writer.write(hashSequences)
         writer.write(inputs[inputIndex].previousOutput.wireBytes)
-        writer.writeVarBytes(committedScript.bytes)
+        writer.writeVarBytes(committedScript)
         writer.writeUInt64LE(sourceOutput.satoshis)
         writer.writeUInt32LE(inputs[inputIndex].sequence)
         writer.write(hashOutputs)

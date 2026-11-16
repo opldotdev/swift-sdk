@@ -42,7 +42,7 @@ struct ScriptInterpreterTests {
         #expect(result.stack == [[0x2a], [1]])
     }
 
-    @Test("alternative stack boundary behavior matches ordinary and early-return transitions")
+    @Test("each script starts with an empty alternate stack, also after an early return")
     func altStackBoundaries() throws {
         #expect(throws: ScriptExecutionError.consensus(.altStackUnderflow)) {
             try execute(
@@ -51,16 +51,22 @@ struct ScriptInterpreterTests {
             )
         }
 
-        let earlyReturn = try execute(
-            unlocking: [
-                Opcode.one.rawValue,
-                Opcode.toAltStack.rawValue,
-                Opcode.return.rawValue,
-            ],
-            locking: [Opcode.fromAltStack.rawValue],
-            era: .afterGenesis
-        )
-        #expect(earlyReturn.stack == [[1]])
+        // SV Node evaluates each script with a fresh alternate stack
+        // (interpreter.cpp EvalScript), so `1 TOALTSTACK RETURN` followed by
+        // `FROMALTSTACK` fails in every era where RETURN ends the script.
+        for era in [ScriptExecutionEra.afterGenesis, .afterChronicle] {
+            #expect(throws: ScriptExecutionError.consensus(.altStackUnderflow)) {
+                try execute(
+                    unlocking: [
+                        Opcode.one.rawValue,
+                        Opcode.toAltStack.rawValue,
+                        Opcode.return.rawValue,
+                    ],
+                    locking: [Opcode.fromAltStack.rawValue],
+                    era: era
+                )
+            }
+        }
     }
 
     @Test("conditionals execute only the selected branch")
@@ -580,7 +586,7 @@ struct ScriptInterpreterTests {
         #expect(result.stack == [[1]])
     }
 
-    @Test("byte shifts preserve width and after-Chronicle numeric shifts are arithmetic")
+    @Test("byte shifts preserve width and after-Chronicle numeric right shifts round toward zero")
     func shifts() throws {
         for scriptHex in [
             "021234549802234087",
@@ -593,9 +599,10 @@ struct ScriptInterpreterTests {
             ).stack == [[1]])
         }
 
+        // -3 >> 1 == -1: SV Node shifts the magnitude (OpenSSL BN_rshift).
         #expect(try execute(
             unlocking: [],
-            locking: Hex.decode("538f51b701829c", maximumDecodedByteCount: 100),
+            locking: Hex.decode("538f51b701819c", maximumDecodedByteCount: 100),
             era: .afterChronicle
         ).stack == [[1]])
     }
@@ -742,7 +749,11 @@ struct ScriptInterpreterTests {
 
         var malformed = unsigned
         malformed.inputs[0].unlockingScript = try pushedScript([0x01])
-        #expect(throws: ScriptExecutionError.consensus(.evaluatedFalse)) {
+        // SV Node applies NULLFAIL to every non-empty signature that fails,
+        // including one rejected before the ECDSA check
+        // (interpreter.cpp, OP_CHECKSIG: `if (!fSuccess && (flags &
+        // SCRIPT_VERIFY_NULLFAIL) && vchSig.size())`).
+        #expect(throws: ScriptExecutionError.consensus(.nullFail)) {
             try executeTransaction(
                 malformed,
                 spentOutput: spentOutput,

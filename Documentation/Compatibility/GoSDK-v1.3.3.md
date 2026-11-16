@@ -275,7 +275,7 @@ Public:
 - `Debugger` lifecycle hooks.
 - `ScriptNumber`: construction, sign-magnitude bytes, arithmetic/comparisons, integer conversions.
 - `CheckMinimalDataEncoding`, `MinimallyEncode`, external signature-verifier injection.
-- Era/limit constants: pre-Genesis op/stack/script/element/number/pubkey limits and 32 MiB Chronicle number limit.
+- Era/limit constants: pre-Genesis op/stack/script/element/number/pubkey limits and 32 MiB Chronicle number limit. Swift uses the SV Node limit of 32,000,000 bytes instead (COMP-064).
 
 Edges: EC/hash, script, transaction, sighash, `x/crypto/ripemd160`.
 
@@ -893,7 +893,10 @@ License warning: these live under the Open BSV-licensed upstream. Use the Go ora
 5. Era boundaries:
    - pre-Genesis number length 4 and classic script/stack/op limits,
    - post-Genesis number ceiling 750,000 bytes,
-   - post-Chronicle number ceiling 32 MiB,
+   - post-Chronicle number ceiling 32,000,000 bytes (SV Node
+     `MAX_SCRIPT_NUM_LENGTH_AFTER_CHRONICLE`; Go uses 32 MiB, see COMP-064),
+   - post-Chronicle `OP_RSHIFTNUM` rounds a negative value toward zero, as
+     SV Node does; Go floors it (COMP-064),
    - Chronicle reactivates/version-gates `VER`, `VERIF`, `VERNOTIF`, `2MUL`, `2DIV`, `SUBSTR`, `LEFT`, `RIGHT`, numeric shifts.
 6. Minimal-push is checked at numeric evaluation/policy-dependent points, not indiscriminately for every unevaluated push.
 7. Legacy `SIGHASH_SINGLE` out-of-range “hash of 1” bug is consensus.
