@@ -133,6 +133,7 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
                 limits: configuration.overlayLimits
             )
         } catch {
+            NetworkLog.error("UHRPDownloader.hosts: lookup question not built: \(type(of: error)): \(String(reflecting: error))")
             throw UHRPDownloadError.invalidConfiguration
         }
 
@@ -180,25 +181,42 @@ public struct UHRPDownloader: UHRPContentProvider, Sendable {
 
         for host in hosts {
             try Task.checkCancellation()
+            // Each host is one try; a failed one is logged and the next host is tried.
+            let request = HTTPRequest(method: .get, url: host)
             do {
                 let response = try await transport.send(
-                    HTTPRequest(method: .get, url: host),
+                    request,
                     maximumResponseBodyByteCount: configuration.uhrpLimits.maximumContentByteCount
                 )
                 try Task.checkCancellation()
-                guard (200...299).contains(response.statusCode) else { continue }
+                guard (200...299).contains(response.statusCode) else {
+                    NetworkLog.failure(
+                        "UHRPDownloader.content",
+                        request: request,
+                        statusCode: response.statusCode,
+                        body: response.body
+                    )
+                    continue
+                }
                 let content = try StorageContent(
                     bytes: [UInt8](response.body),
                     mimeType: response.headerValue(for: "Content-Type") ?? "",
                     limits: configuration.uhrpLimits
                 )
-                guard content.matches(identifier) else { continue }
+                guard content.matches(identifier) else {
+                    NetworkLog.error(
+                        "UHRPDownloader.content: \(NetworkLog.location(host)) sent \(response.body.count) bytes "
+                            + "that do not hash to the requested content"
+                    )
+                    continue
+                }
                 return content
             } catch is CancellationError {
                 throw CancellationError()
             } catch NetworkServiceError.cancelled {
                 throw CancellationError()
             } catch {
+                NetworkLog.failure("UHRPDownloader.content", request: request, underlying: error)
                 continue
             }
         }

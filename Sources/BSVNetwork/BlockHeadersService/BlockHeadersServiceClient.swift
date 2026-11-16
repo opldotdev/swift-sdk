@@ -170,6 +170,16 @@ public struct BlockHeadersServiceClient: ChainTracker, Sendable,
                     nextBackoff = doubledBackoff(nextBackoff)
                     continue
                 }
+                if !(200...299).contains(response.statusCode) {
+                    NetworkLog.failure(
+                        "BlockHeadersServiceClient",
+                        request: request,
+                        statusCode: response.statusCode,
+                        body: response.body,
+                        redacting: [configuration.apiKey],
+                        reason: "attempt \(attempt) of \(policy.maximumAttempts)"
+                    )
+                }
                 return response
             } catch is CancellationError {
                 throw NetworkServiceError.cancelled
@@ -182,14 +192,15 @@ public struct BlockHeadersServiceClient: ChainTracker, Sendable,
                 }
                 throw error
             } catch {
-                let error = NetworkServiceError.transport(code: nil)
+                NetworkLog.failure("BlockHeadersServiceClient", request: request, underlying: error)
+                let normalized = NetworkServiceError.transport(code: nil)
                 if attempt < policy.maximumAttempts {
                     try await sleep(nextBackoff)
                     attempt += 1
                     nextBackoff = doubledBackoff(nextBackoff)
                     continue
                 }
-                throw error
+                throw normalized
             }
         }
     }
