@@ -15,6 +15,10 @@ package struct ScriptMachine {
     private let configuration: ScriptExecutionConfiguration
     private let consensusLimits: ScriptConsensusLimits
     private let context: ScriptExecutionContext?
+    /// SV Node `EnforceNonMalleability` for this spend.
+    private let enforcesNonMalleability: Bool
+    /// MINIMALDATA after the Chronicle malleability relaxation.
+    private let requiresMinimalData: Bool
     private(set) var mainStack: ScriptStack
     private var altStack: ScriptStack
     private let debugState: ScriptDebugState?
@@ -32,6 +36,12 @@ package struct ScriptMachine {
         self.configuration = configuration
         self.context = context
         consensusLimits = .forEra(configuration.era)
+        let enforcesNonMalleability = configuration.enforcesNonMalleability(
+            transactionVersion: context?.transaction.version
+        )
+        self.enforcesNonMalleability = enforcesNonMalleability
+        requiresMinimalData = configuration.flags.contains(.minimalData)
+            && enforcesNonMalleability
         let debugState = debugSession.map(ScriptDebugState.init(session:))
         self.debugState = debugState
         mainStack = ScriptStack(debugState: debugState, debugStack: .main)
@@ -40,6 +50,12 @@ package struct ScriptMachine {
 
     mutating func execute(_ script: Script, phase: ScriptPhase) throws {
         try checkScriptSize(script.byteCount)
+        // SV Node evaluates every script with a fresh alternate stack, so
+        // nothing left there by an early-returning unlocking script reaches
+        // the locking script.
+        if altStack.count > 0 {
+            altStack.removeAll()
+        }
         operationsInCurrentScript = 0
         conditions.removeAll(keepingCapacity: true)
         elseSeen.removeAll(keepingCapacity: true)
@@ -98,7 +114,7 @@ package struct ScriptMachine {
             }
 
             if let data = instruction.data {
-                if configuration.flags.contains(.minimalData),
+                if requiresMinimalData,
                    !isMinimalPush(opcode: opcode, data: data) {
                     throw ScriptExecutionError.consensus(.nonMinimalPush)
                 }
@@ -461,26 +477,7 @@ package struct ScriptMachine {
                 }
             case Opcode.leftShiftNumber.rawValue, Opcode.rightShiftNumber.rawValue:
                 if configuration.era == .afterChronicle {
-                    let shift = try popNativeNumber()
-                    guard shift >= 0 else {
-                        throw ScriptExecutionError.consensus(.invalidShiftAmount(shift))
-                    }
-                    let value = try popScriptNumber()
-                    let consensusMaximumBits = 32 * 1_024 * 1_024 * 8
-                    let boundedShift = min(shift, Int64(consensusMaximumBits))
-                    let shifted = try performBigNumberOperation { budget in
-                        if opcode == .rightShiftNumber {
-                            return try value.value.shiftedRight(
-                                by: Int(boundedShift),
-                                budget: budget
-                            )
-                        }
-                        return try value.value.shiftedLeft(
-                            by: Int(boundedShift),
-                            budget: budget
-                        )
-                    }
-                    try pushScriptNumber(shifted)
+                    try executeNumericShift(opcode)
                     break
                 }
                 if configuration.flags.contains(.discourageUpgradeableNops) {
@@ -572,7 +569,7 @@ package struct ScriptMachine {
             let state: ConditionalState
             if outerExecuting, mayEvaluateCondition {
                 let encoded = try mainStack.pop()
-                if configuration.flags.contains(.minimalIf),
+                if configuration.flags.contains(.minimalIf), enforcesNonMalleability,
                    encoded != [] && encoded != [1] {
                     throw ScriptExecutionError.consensus(.minimalIf)
                 }
@@ -689,13 +686,78 @@ package struct ScriptMachine {
                     consensusLimits.maximumScriptNumberByteCount,
                     configuration.resourceLimits.maximumScriptNumberByteCount
                 ),
-                requireMinimal: configuration.flags.contains(.minimalData)
+                requireMinimal: requiresMinimalData
             )
         } catch ScriptNumberError.nonMinimalEncoding {
             throw ScriptExecutionError.consensus(.nonMinimalNumber)
         } catch let error as ScriptNumberError {
             throw ScriptExecutionError.scriptNumber(error)
         }
+    }
+
+    /// Reads a CHECKMULTISIG key or signature count. SV Node parses both with
+    /// `CScriptNum::MAXIMUM_ELEMENT_SIZE` (four bytes) in every era.
+    private mutating func popCountNumber() throws -> Int64 {
+        let encoded = try mainStack.pop()
+        let maximum = ScriptNumber.beforeGenesisMaximumByteCount
+        guard encoded.count <= maximum else {
+            throw ScriptExecutionError.consensus(.numberTooLarge(
+                actual: encoded.count,
+                maximum: maximum
+            ))
+        }
+        do {
+            return try ScriptNumber(
+                encoded: encoded,
+                maximumByteCount: maximum,
+                requireMinimal: requiresMinimalData
+            ).int64Clamped()
+        } catch ScriptNumberError.nonMinimalEncoding {
+            throw ScriptExecutionError.consensus(.nonMinimalNumber)
+        } catch let error as ScriptNumberError {
+            throw ScriptExecutionError.scriptNumber(error)
+        }
+    }
+
+    /// Reads an OP_SUBSTR, OP_LEFT or OP_RIGHT operand the way SV Node v1.2.3
+    /// does (`CScriptNum` without big-integer mode, `deserialize<int64_t>`
+    /// and `getint()`): the era length limit, the minimal-encoding check, a
+    /// nine-byte ceiling, the signed 64-bit range, then saturation to Int32.
+    private mutating func popSpliceOperand() throws -> Int64 {
+        let encoded = try mainStack.pop()
+        try checkNumberSize(encoded.count)
+        if requiresMinimalData, !ScriptNumber.isMinimallyEncoded(encoded) {
+            throw ScriptExecutionError.consensus(.nonMinimalNumber)
+        }
+        guard let last = encoded.last else { return 0 }
+        guard encoded.count <= 9 else {
+            throw ScriptExecutionError.consensus(.scriptNumberOverflow)
+        }
+        let isNegative = last & 0x80 != 0
+        var magnitude: UInt64 = 0
+        if encoded.count == 9 {
+            // The ninth byte may only carry the sign.
+            guard last & 0x7f == 0 else {
+                throw ScriptExecutionError.consensus(.scriptNumberOverflow)
+            }
+            for (index, byte) in encoded.prefix(8).enumerated() {
+                magnitude |= UInt64(byte) << (8 * index)
+            }
+        } else {
+            for (index, byte) in encoded.enumerated() {
+                let digit = index == encoded.count - 1 ? byte & 0x7f : byte
+                magnitude |= UInt64(digit) << (8 * index)
+            }
+        }
+        let value: Int64
+        if magnitude <= UInt64(Int64.max) {
+            value = isNegative ? -Int64(magnitude) : Int64(magnitude)
+        } else if isNegative, magnitude == UInt64(Int64.max) + 1 {
+            value = .min
+        } else {
+            throw ScriptExecutionError.consensus(.scriptNumberOverflow)
+        }
+        return min(max(value, Int64(Int32.min)), Int64(Int32.max))
     }
 
     private func checkNumberSize(_ count: Int) throws {
@@ -845,10 +907,54 @@ package struct ScriptMachine {
         return result
     }
 
+    /// OP_LSHIFTNUM and OP_RSHIFTNUM as SV Node v1.2.3 evaluates them with
+    /// big Script numbers (`CScriptNum::operator<<=` and `operator>>=`).
+    private mutating func executeNumericShift(_ opcode: Opcode) throws {
+        let shift = try popScriptNumber()
+        guard !shift.isNegative else {
+            throw ScriptExecutionError.consensus(.invalidShiftAmount(shift.int64Clamped()))
+        }
+        let value = try popScriptNumber()
+        let shiftCount = shift.int64Clamped()
+
+        if opcode == .rightShiftNumber {
+            // `bsv::bint::operator>>=` rejects a count above INT_MAX.
+            guard shiftCount <= Int64(Int32.max) else {
+                throw ScriptExecutionError.consensus(.invalidShiftAmount(shiftCount))
+            }
+            // OpenSSL BN_rshift shifts the magnitude and keeps the sign, so a
+            // negative value rounds toward zero: -3 >> 1 is -1, -1 >> 1 is 0.
+            let magnitude = value.value.magnitude
+            guard shiftCount < Int64(magnitude.bitWidth) else {
+                mainStack.push([])
+                return
+            }
+            let shifted = try performBigNumberOperation { budget in
+                try magnitude.shiftedRight(by: Int(shiftCount), budget: budget)
+            }
+            try pushScriptNumber(BigSigned(sign: value.value.sign, magnitude: shifted))
+            return
+        }
+
+        // The node rejects the shift when the operand's minimal size plus the
+        // whole bytes shifted exceeds the era number limit, whatever the
+        // value, and again when the shifted result is too large.
+        let bitWidth = value.value.magnitude.bitWidth
+        let currentSize = bitWidth == 0 ? 0 : bitWidth / 8 + 1
+        let projectedSize = Int64(currentSize) + shiftCount / 8
+        try checkNumberSize(Int(clamping: projectedSize))
+        let shifted = try performBigNumberOperation { budget in
+            try value.value.shiftedLeft(by: Int(shiftCount), budget: budget)
+        }
+        let shiftedWidth = shifted.magnitude.bitWidth
+        try checkNumberSize(shiftedWidth == 0 ? 0 : shiftedWidth / 8 + 1)
+        try pushScriptNumber(shifted)
+    }
+
     private mutating func executeAfterChronicleSlice(_ opcode: Opcode) throws {
-        let length = try popNativeNumber()
+        let length = try popSpliceOperand()
         if opcode == .substring {
-            let offset = try popNativeNumber()
+            let offset = try popSpliceOperand()
             let data = try mainStack.pop()
             guard offset >= 0, length >= 0,
                   offset < Int64(data.count),
@@ -887,26 +993,24 @@ package struct ScriptMachine {
         try mainStack.require(2)
         let publicKeyBytes = try mainStack.pop()
         let signatureWithHashType = try mainStack.pop()
-        guard let rawHashType = signatureWithHashType.last else {
-            return false
+
+        // SV Node checks the signature encoding (an empty signature passes)
+        // and then the public-key encoding before it checks the signature.
+        let signature = try checkSignatureEncoding(signatureWithHashType)
+        try checkPublicKeyEncoding(publicKeyBytes)
+        guard let rawHashType = signatureWithHashType.last,
+              let signature,
+              let publicKey = try? PublicKey(publicKeyBytes)
+        else {
+            return try signatureFailure(signatureWithHashType)
         }
 
-        try checkHashTypeEncoding(rawHashType)
-        let signatureBytes = Array(signatureWithHashType.dropLast())
-        let signature = try parseScriptSignature(signatureBytes)
-        try checkPublicKeyEncoding(publicKeyBytes)
-        guard let signature else { return false }
-        guard let publicKey = try? PublicKey(publicKeyBytes) else { return false }
-
-        var transaction = context.transaction
-        transaction.inputs[context.inputIndex].sourceOutput = context.spentOutput
-        let cleansLegacyScript = !configuration.flags.contains(.enableForkID)
-            || rawHashType & ForkIDSignatureHashType.forkIDMask == 0
-        let scriptCode = try signatureScriptCode(
+        let transaction = signingTransaction(context)
+        let scriptCode = signatureScriptCode(
             script: script,
             phase: phase,
             codeSeparatorOffset: codeSeparatorOffset,
-            signaturesToRemove: cleansLegacyScript ? [signatureWithHashType] : []
+            signatures: [signatureWithHashType]
         )
         let digest = try signatureDigest(
             transaction: transaction,
@@ -914,8 +1018,9 @@ package struct ScriptMachine {
             rawHashType: rawHashType,
             scriptCode: scriptCode
         )
-        let valid = signature.verifiesInScript(publicKey: publicKey, digest: digest)
-        if !valid { return try signatureFailure(signatureBytes) }
+        guard signature.verifiesInScript(publicKey: publicKey, digest: digest) else {
+            return try signatureFailure(signatureWithHashType)
+        }
         return true
     }
 
@@ -935,7 +1040,7 @@ package struct ScriptMachine {
             throw ScriptExecutionError.missingExecutionContext(opcode: opcode)
         }
 
-        let rawPublicKeyCount = try popNativeNumber()
+        let rawPublicKeyCount = try popCountNumber()
         let maximumPublicKeys = configuration.era == .beforeGenesis ? 20 : Int64(Int32.max)
         guard rawPublicKeyCount >= 0, rawPublicKeyCount <= maximumPublicKeys else {
             throw ScriptExecutionError.consensus(.invalidPublicKeyCount(rawPublicKeyCount))
@@ -947,7 +1052,7 @@ package struct ScriptMachine {
         publicKeys.reserveCapacity(publicKeyCount)
         for _ in 0..<publicKeyCount { publicKeys.append(try mainStack.pop()) }
 
-        let rawSignatureCount = try popNativeNumber()
+        let rawSignatureCount = try popCountNumber()
         guard rawSignatureCount >= 0, rawSignatureCount <= rawPublicKeyCount else {
             throw ScriptExecutionError.consensus(.invalidSignatureCount(rawSignatureCount))
         }
@@ -959,26 +1064,18 @@ package struct ScriptMachine {
             signatures.append(MultiSignatureInfo(bytes: try mainStack.pop()))
         }
         let dummy = try mainStack.pop()
-        if configuration.flags.contains(.strictMultiSignatureDummy), !dummy.isEmpty {
+        if configuration.flags.contains(.strictMultiSignatureDummy), enforcesNonMalleability,
+           !dummy.isEmpty {
             throw ScriptExecutionError.consensus(.nullDummy)
         }
 
-        let signaturesToRemove = signatures.compactMap { info -> [UInt8]? in
-            let hasForkID = info.bytes.last.map {
-                $0 & ForkIDSignatureHashType.forkIDMask != 0
-            } ?? false
-            return !configuration.flags.contains(.enableForkID) || !hasForkID
-                ? info.bytes
-                : nil
-        }
-        let scriptCode = try signatureScriptCode(
+        let scriptCode = signatureScriptCode(
             script: script,
             phase: phase,
             codeSeparatorOffset: codeSeparatorOffset,
-            signaturesToRemove: signaturesToRemove
+            signatures: signatures.map(\.bytes)
         )
-        var transaction = context.transaction
-        transaction.inputs[context.inputIndex].sourceOutput = context.spentOutput
+        let transaction = signingTransaction(context)
 
         var remainingSignatures = signatureCount
         // The early-impossibility check counts the key selected in the current
@@ -999,18 +1096,18 @@ package struct ScriptMachine {
             let rawSignature = signatures[signatureIndex].bytes
             let publicKeyBytes = publicKeys[publicKeyIndex]
             publicKeyIndex += 1
-            guard let rawHashType = rawSignature.last else { continue }
 
+            // The node checks both encodings on every comparison, including
+            // for an empty signature.
             if !signatures[signatureIndex].didParse {
-                try checkHashTypeEncoding(rawHashType)
-                signatures[signatureIndex].parsed = try parseScriptSignature(
-                    Array(rawSignature.dropLast())
-                )
+                signatures[signatureIndex].parsed = try checkSignatureEncoding(rawSignature)
                 signatures[signatureIndex].didParse = true
             }
-            guard let signature = signatures[signatureIndex].parsed else { continue }
             try checkPublicKeyEncoding(publicKeyBytes)
-            guard let publicKey = try? PublicKey(publicKeyBytes) else { continue }
+            guard let rawHashType = rawSignature.last,
+                  let signature = signatures[signatureIndex].parsed,
+                  let publicKey = try? PublicKey(publicKeyBytes)
+            else { continue }
 
             let digest: Hash256
             if let cached = cachedDigests[rawHashType] {
@@ -1030,57 +1127,63 @@ package struct ScriptMachine {
             }
         }
 
-        if !success, configuration.flags.contains(.nullFail),
+        if !success, configuration.flags.contains(.nullFail), enforcesNonMalleability,
            signatures.contains(where: { !$0.bytes.isEmpty }) {
             throw ScriptExecutionError.consensus(.nullFail)
         }
         return success
     }
 
-    private func checkHashTypeEncoding(_ rawHashType: UInt8) throws {
-        guard configuration.flags.contains(.strictEncoding) else { return }
-        var normalized = rawHashType & ~ForkIDSignatureHashType.anyoneCanPayMask
-        if configuration.flags.contains(.bip143SignatureHash) {
-            normalized ^= ForkIDSignatureHashType.forkIDMask
-            guard rawHashType & ForkIDSignatureHashType.forkIDMask != 0 else {
-                throw ScriptExecutionError.consensus(.invalidSignatureHashType(rawHashType))
-            }
-        }
-        if normalized & ForkIDSignatureHashType.forkIDMask == 0 {
-            guard (1...3).contains(normalized) else {
-                throw ScriptExecutionError.consensus(.invalidSignatureHashType(rawHashType))
-            }
-            return
-        }
-        guard (0x41...0x43).contains(normalized) else {
-            throw ScriptExecutionError.consensus(.invalidSignatureHashType(rawHashType))
-        }
-        let hasForkID = rawHashType & ForkIDSignatureHashType.forkIDMask != 0
-        guard configuration.flags.contains(.enableForkID) == hasForkID else {
-            throw ScriptExecutionError.consensus(.illegalForkID(rawHashType))
-        }
-    }
-
-    private func parseScriptSignature(_ bytes: [UInt8]) throws -> ECDSASignature? {
+    /// SV Node `CheckSignatureEncoding`: DER, then low S, then the hash type.
+    /// Returns the parsed signature, or `nil` for an empty signature or one
+    /// that does not parse when no DER rule applies.
+    private func checkSignatureEncoding(_ signatureWithHashType: [UInt8]) throws -> ECDSASignature? {
+        guard let rawHashType = signatureWithHashType.last else { return nil }
         let requiresStrictDER = configuration.flags.contains(.strictEncoding)
             || configuration.flags.contains(.derSignatures)
             || configuration.flags.contains(.lowS)
-        let signature: ECDSASignature
+        var signature: ECDSASignature?
         do {
             signature = try ECDSASignature(
-                scriptBytes: bytes,
+                scriptBytes: Array(signatureWithHashType.dropLast()),
                 strict: requiresStrictDER
             )
         } catch {
             if requiresStrictDER {
                 throw ScriptExecutionError.consensus(.invalidSignatureEncoding)
             }
-            return nil
+            signature = nil
         }
-        if configuration.flags.contains(.lowS), !signature.isLowS {
+        if configuration.flags.contains(.lowS), enforcesNonMalleability,
+           let signature, !signature.isLowS {
             throw ScriptExecutionError.consensus(.invalidSignatureEncoding)
         }
+        try checkHashTypeEncoding(rawHashType)
         return signature
+    }
+
+    /// SV Node `CheckSignatureEncoding` hash-type rules under STRICTENC.
+    private func checkHashTypeEncoding(_ rawHashType: UInt8) throws {
+        guard configuration.flags.contains(.strictEncoding) else { return }
+        let hasForkID = rawHashType & Self.forkIDBit != 0
+        let hasChronicle = rawHashType & Self.chronicleBit != 0
+        if configuration.flags.contains(.bip143SignatureHash), !hasForkID {
+            throw ScriptExecutionError.consensus(.invalidSignatureHashType(rawHashType))
+        }
+        let baseType = rawHashType & ~(Self.chronicleBit | Self.forkIDBit | Self.anyoneCanPayBit)
+        guard (1...3).contains(baseType) else {
+            throw ScriptExecutionError.consensus(.invalidSignatureHashType(rawHashType))
+        }
+        let forkIDEnabled = configuration.flags.contains(.enableForkID)
+        if !forkIDEnabled, hasForkID {
+            throw ScriptExecutionError.consensus(.illegalForkID(rawHashType))
+        }
+        if !configuration.flags.contains(.chronicle), hasChronicle {
+            throw ScriptExecutionError.consensus(.illegalChronicle(rawHashType))
+        }
+        if forkIDEnabled, !hasForkID {
+            throw ScriptExecutionError.consensus(.illegalForkID(rawHashType))
+        }
     }
 
     private func checkPublicKeyEncoding(_ bytes: [UInt8]) throws {
@@ -1092,25 +1195,46 @@ package struct ScriptMachine {
         }
     }
 
+    private static let chronicleBit: UInt8 = 0x20
+    private static let forkIDBit: UInt8 = ForkIDSignatureHashType.forkIDMask
+    private static let anyoneCanPayBit: UInt8 = ForkIDSignatureHashType.anyoneCanPayMask
+
+    private func signingTransaction(_ context: ScriptExecutionContext) -> Transaction {
+        var transaction = context.transaction
+        transaction.inputs[context.inputIndex].sourceOutput = context.spentOutput
+        return transaction
+    }
+
+    /// SV Node `SignatureHash`: the BIP143 digest only when ForkID is enabled
+    /// and the hash type has FORKID without CHRONICLE; otherwise the original
+    /// transaction digest (OTDA) over the node's script-code walk.
     private func signatureDigest(
         transaction: Transaction,
         context: ScriptExecutionContext,
         rawHashType: UInt8,
-        scriptCode: Script
+        scriptCode: [UInt8]
     ) throws -> Hash256 {
+        let usesBIP143 = configuration.flags.contains(.enableForkID)
+            && rawHashType & Self.forkIDBit != 0
+            && rawHashType & Self.chronicleBit == 0
         do {
-            if rawHashType & ForkIDSignatureHashType.forkIDMask != 0 {
+            if usesBIP143 {
                 return try transaction.forkIDSignatureHash(
                     inputIndex: context.inputIndex,
                     rawHashType: rawHashType,
-                    scriptCode: scriptCode,
+                    scriptCode: try Script(
+                        bytes: scriptCode,
+                        maximumByteCount: configuration.resourceLimits.maximumScriptByteCount
+                    ),
                     limits: context.transactionLimits
                 )
             }
+            let original = Self.originalDigestScriptCode(scriptCode)
             return try transaction.legacySignatureHash(
                 inputIndex: context.inputIndex,
                 rawHashType: rawHashType,
-                scriptCode: scriptCode,
+                scriptCodeBytes: original.bytes,
+                encodedScriptCodeLength: original.encodedLength,
                 limits: context.transactionLimits
             )
         } catch let error as TransactionError {
@@ -1118,58 +1242,138 @@ package struct ScriptMachine {
         }
     }
 
+    /// The script code a signature commits to, before digest-specific
+    /// serialization: the current script from the last OP_CODESEPARATOR,
+    /// followed under Chronicle rules by the locking script when the check
+    /// runs in the unlocking script, with each signature removed by
+    /// `FindAndDelete` unless ForkID is enabled and that signature uses it
+    /// (SV Node `CleanupScriptCode`).
     private func signatureScriptCode(
         script: Script,
         phase: ScriptPhase,
         codeSeparatorOffset: Int,
-        signaturesToRemove: [[UInt8]]
-    ) throws -> Script {
-        let bytes = Array(script.bytes[codeSeparatorOffset...])
-        guard !signaturesToRemove.isEmpty else {
-            return try Script(
-                bytes: bytes,
-                maximumByteCount: configuration.resourceLimits.maximumScriptByteCount
-            )
+        signatures: [[UInt8]]
+    ) -> [UInt8] {
+        var bytes = Array(script.bytes[codeSeparatorOffset...])
+        if phase == .unlocking, configuration.flags.contains(.chronicle), let context {
+            bytes += context.spentOutput.lockingScript.bytes
+        }
+        let forkIDEnabled = configuration.flags.contains(.enableForkID)
+        for signature in signatures {
+            let hasForkID = (signature.last ?? 0) & Self.forkIDBit != 0
+            guard !forkIDEnabled || !hasForkID else { continue }
+            bytes = Self.findAndDelete(bytes, pattern: Self.pushEncoding(signature))
+        }
+        return bytes
+    }
+
+    /// `CScript(vchSig)`: the data push SV Node builds for `FindAndDelete`.
+    static func pushEncoding(_ data: [UInt8]) -> [UInt8] {
+        let count = data.count
+        var result: [UInt8]
+        if count < Int(Opcode.pushData1.rawValue) {
+            result = [UInt8(count)]
+        } else if count <= 0xff {
+            result = [Opcode.pushData1.rawValue, UInt8(count)]
+        } else if count <= 0xffff {
+            result = [Opcode.pushData2.rawValue,
+                      UInt8(truncatingIfNeeded: count),
+                      UInt8(truncatingIfNeeded: count >> 8)]
+        } else {
+            result = [Opcode.pushData4.rawValue,
+                      UInt8(truncatingIfNeeded: count),
+                      UInt8(truncatingIfNeeded: count >> 8),
+                      UInt8(truncatingIfNeeded: count >> 16),
+                      UInt8(truncatingIfNeeded: count >> 24)]
+        }
+        result += data
+        return result
+    }
+
+    /// SV Node `CScript::GetOp2` over raw bytes. Returns the opcode, or `nil`
+    /// at the end or on a truncated push; on a truncated push `position` is
+    /// left where the node leaves it (after the opcode and any complete
+    /// length field).
+    private static func nodeNextOpcode(_ bytes: [UInt8], _ position: inout Int) -> UInt8? {
+        guard position < bytes.count else { return nil }
+        let opcode = bytes[position]
+        position += 1
+        guard opcode <= Opcode.pushData4.rawValue else { return opcode }
+        var size = 0
+        switch opcode {
+        case Opcode.pushData1.rawValue:
+            guard bytes.count - position >= 1 else { return nil }
+            size = Int(bytes[position])
+            position += 1
+        case Opcode.pushData2.rawValue:
+            guard bytes.count - position >= 2 else { return nil }
+            size = Int(bytes[position]) | Int(bytes[position + 1]) << 8
+            position += 2
+        case Opcode.pushData4.rawValue:
+            guard bytes.count - position >= 4 else { return nil }
+            size = Int(bytes[position])
+                | Int(bytes[position + 1]) << 8
+                | Int(bytes[position + 2]) << 16
+                | Int(bytes[position + 3]) << 24
+            position += 4
+        default:
+            size = Int(opcode)
+        }
+        guard bytes.count - position >= size else { return nil }
+        position += size
+        return opcode
+    }
+
+    /// SV Node `CScript::FindAndDelete`: removes every occurrence of
+    /// `pattern` that starts at an instruction boundary. A truncated final
+    /// instruction ends the walk and its bytes are kept.
+    static func findAndDelete(_ bytes: [UInt8], pattern: [UInt8]) -> [UInt8] {
+        guard !pattern.isEmpty else { return bytes }
+        var result: [UInt8] = []
+        var found = 0
+        var position = 0
+        var kept = 0
+        repeat {
+            result += bytes[kept..<position]
+            while bytes.count - position >= pattern.count,
+                  bytes[position..<(position + pattern.count)].elementsEqual(pattern) {
+                position += pattern.count
+                found += 1
+            }
+            kept = position
+        } while nodeNextOpcode(bytes, &position) != nil
+        guard found > 0 else { return bytes }
+        result += bytes[kept...]
+        return result
+    }
+
+    /// SV Node `CTransactionSignatureSerializer::SerializeScriptCode`: drops
+    /// every OP_CODESEPARATOR found by the instruction walk, stops at a
+    /// truncated push after writing what the walk consumed, and declares the
+    /// script size minus the separators found as the CompactSize length.
+    static func originalDigestScriptCode(
+        _ bytes: [UInt8]
+    ) -> (bytes: [UInt8], encodedLength: Int) {
+        var position = 0
+        var separators = 0
+        while let opcode = nodeNextOpcode(bytes, &position) {
+            if opcode == Opcode.codeSeparator.rawValue { separators += 1 }
         }
 
         var result: [UInt8] = []
         result.reserveCapacity(bytes.count)
-        var offset = 0
-        while offset < bytes.count {
-            let start = offset
-            let instruction = try ScriptInstructionDecoder.next(
-                bytes: bytes,
-                offset: &offset,
-                phase: phase,
-                maximumConsensusPushByteCount: consensusLimits.maximumPushDataByteCount,
-                maximumResourcePushByteCount: configuration.resourceLimits.maximumPushDataByteCount
-            )
-            if instruction.opcode == .codeSeparator { continue }
-            let candidate = instruction.data ?? []
-            let removesInstruction = isCanonicalSignatureRemovalCandidate(instruction)
-                && signaturesToRemove.contains { candidate.containsSubsequence($0) }
-            if !removesInstruction { result.append(contentsOf: bytes[start..<offset]) }
+        position = 0
+        var segmentStart = 0
+        while let opcode = nodeNextOpcode(bytes, &position) {
+            if opcode == Opcode.codeSeparator.rawValue {
+                result += bytes[segmentStart..<(position - 1)]
+                segmentStart = position
+            }
         }
-        return try Script(
-            bytes: result,
-            maximumByteCount: configuration.resourceLimits.maximumScriptByteCount
-        )
-    }
-
-    private func isCanonicalSignatureRemovalCandidate(
-        _ instruction: DecodedScriptInstruction
-    ) -> Bool {
-        let opcode = instruction.opcode.rawValue
-        let data = instruction.data ?? []
-        if opcode > Opcode.sixteen.rawValue { return true }
-        if opcode > Opcode.zero.rawValue, opcode < Opcode.pushData1.rawValue,
-           data.count == 1, data[0] <= 16 { return false }
-        if opcode == Opcode.pushData1.rawValue, data.count < Int(Opcode.pushData1.rawValue) {
-            return false
+        if segmentStart != bytes.count {
+            result += bytes[segmentStart..<position]
         }
-        if opcode == Opcode.pushData2.rawValue, data.count <= 0xff { return false }
-        if opcode == Opcode.pushData4.rawValue, data.count <= 0xffff { return false }
-        return true
+        return (result, bytes.count - separators)
     }
 
     private func executeCheckLockTime(_ opcode: Opcode) throws {
@@ -1238,7 +1442,7 @@ package struct ScriptMachine {
             return try ScriptNumber(
                 encoded: encoded,
                 maximumByteCount: consensusMaximum,
-                requireMinimal: configuration.flags.contains(.minimalData)
+                requireMinimal: requiresMinimalData
             ).int64Clamped()
         } catch ScriptNumberError.nonMinimalEncoding {
             throw ScriptExecutionError.consensus(.nonMinimalNumber)
@@ -1247,8 +1451,10 @@ package struct ScriptMachine {
         }
     }
 
-    private func signatureFailure(_ nonemptySignature: [UInt8]) throws -> Bool {
-        if configuration.flags.contains(.nullFail), !nonemptySignature.isEmpty {
+    /// NULLFAIL applies to the whole signature element, hash-type byte included.
+    private func signatureFailure(_ signatureWithHashType: [UInt8]) throws -> Bool {
+        if configuration.flags.contains(.nullFail), enforcesNonMalleability,
+           !signatureWithHashType.isEmpty {
             throw ScriptExecutionError.consensus(.nullFail)
         }
         return false
@@ -1345,19 +1551,5 @@ package struct ScriptMachine {
         default:
             false
         }
-    }
-}
-
-private extension Array where Element == UInt8 {
-    func containsSubsequence(_ needle: [UInt8]) -> Bool {
-        guard !needle.isEmpty else { return true }
-        guard needle.count <= count else { return false }
-        if needle.count == count { return self == needle }
-        for start in 0...(count - needle.count) {
-            if self[start..<(start + needle.count)].elementsEqual(needle) {
-                return true
-            }
-        }
-        return false
     }
 }

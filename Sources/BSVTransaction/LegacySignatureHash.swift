@@ -95,6 +95,29 @@ public extension Transaction {
         return Self.digestLegacySignatureMaterial(material)
     }
 
+    /// Returns the legacy digest over script-code bytes whose declared
+    /// CompactSize length may differ from the bytes written.
+    ///
+    /// SV Node's original digest declares the script size minus its
+    /// OP_CODESEPARATORs but writes only the bytes its instruction walk
+    /// consumed, so a truncated final push yields fewer bytes than declared.
+    /// The interpreter computes that walk and passes both values here.
+    package func legacySignatureHash(
+        inputIndex: Int,
+        rawHashType: UInt8,
+        scriptCodeBytes: [UInt8],
+        encodedScriptCodeLength: Int,
+        limits: TransactionLimits
+    ) throws -> Hash256 {
+        let material = try legacySignatureMaterial(
+            inputIndex: inputIndex,
+            rawHashType: rawHashType,
+            committedScript: (scriptCodeBytes, encodedScriptCodeLength),
+            limits: limits
+        )
+        return Self.digestLegacySignatureMaterial(material)
+    }
+
     private static func digestLegacySignatureMaterial(
         _ material: LegacySignatureMaterial
     ) -> Hash256 {
@@ -129,12 +152,33 @@ public extension Transaction {
         guard let sourceOutput = inputs[inputIndex].sourceOutput else {
             throw TransactionError.missingSourceOutput(inputIndex: inputIndex)
         }
+        let committedScript = scriptCode ?? sourceOutput.lockingScript
+        return try legacySignatureMaterial(
+            inputIndex: inputIndex,
+            rawHashType: rawHashType,
+            committedScript: (committedScript.bytes, committedScript.byteCount),
+            limits: limits
+        )
+    }
+
+    private func legacySignatureMaterial(
+        inputIndex: Int,
+        rawHashType: UInt8,
+        committedScript: (bytes: [UInt8], encodedLength: Int),
+        limits: TransactionLimits
+    ) throws -> LegacySignatureMaterial {
+        guard inputs.indices.contains(inputIndex) else {
+            throw TransactionError.invalidInputIndex(inputIndex)
+        }
+        guard inputs[inputIndex].sourceOutput != nil else {
+            throw TransactionError.missingSourceOutput(inputIndex: inputIndex)
+        }
         _ = try serializedByteCount(limits: limits)
 
-        let committedScript = scriptCode ?? sourceOutput.lockingScript
-        guard UInt64(committedScript.byteCount) <= limits.maximumScriptByteCount else {
+        let committedByteCount = max(committedScript.bytes.count, committedScript.encodedLength)
+        guard UInt64(committedByteCount) <= limits.maximumScriptByteCount else {
             throw TransactionError.scriptTooLarge(
-                actual: UInt64(committedScript.byteCount),
+                actual: UInt64(committedByteCount),
                 maximum: limits.maximumScriptByteCount
             )
         }
@@ -157,7 +201,12 @@ public extension Transaction {
         for index in inputIndices {
             let input = inputs[index]
             writer.write(input.previousOutput.wireBytes)
-            writer.writeVarBytes(index == inputIndex ? committedScript.bytes : [])
+            if index == inputIndex {
+                writer.writeCompactSize(UInt64(committedScript.encodedLength))
+                writer.write(committedScript.bytes)
+            } else {
+                writer.writeVarBytes([])
+            }
             let sequence = outputMode != .all && index != inputIndex
                 ? UInt32.zero
                 : input.sequence

@@ -22,6 +22,10 @@ public enum ScriptConsensusFailure: Error, Equatable, Sendable {
     case invalidSplitPosition(position: Int64, byteCount: Int)
     case numberTooLarge(actual: Int, maximum: Int)
     case nonMinimalNumber
+    /// An operand read as a node int64 Script number (the OP_SUBSTR, OP_LEFT
+    /// and OP_RIGHT operands) is longer than nine bytes or outside the signed
+    /// 64-bit range.
+    case scriptNumberOverflow
     case impossibleNumericEncoding(targetByteCount: Int, minimumByteCount: Int)
     case divisionByZero
     case invalidShiftAmount(Int64)
@@ -42,6 +46,8 @@ public enum ScriptConsensusFailure: Error, Equatable, Sendable {
     case invalidPublicKeyEncoding
     case invalidSignatureHashType(UInt8)
     case illegalForkID(UInt8)
+    /// A `SIGHASH_CHRONICLE` signature outside Chronicle rules under strict encoding.
+    case illegalChronicle(UInt8)
     case invalidPublicKeyCount(Int64)
     case invalidSignatureCount(Int64)
     case nullDummy

@@ -30,6 +30,21 @@ public struct ScriptVerificationFlags: OptionSet, Hashable, Sendable {
     public static let strictEncoding = Self(rawValue: 1 << 12)
     public static let bip143SignatureHash = Self(rawValue: 1 << 13)
     public static let minimalIf = Self(rawValue: 1 << 14)
+
+    /// The spending transaction is validated under Chronicle block rules
+    /// (SV Node `SCRIPT_CHRONICLE`).
+    ///
+    /// This is separate from the ``ScriptExecutionEra``, which describes when
+    /// the spent output was created: an output created before Chronicle can be
+    /// spent in a Chronicle block. The flag allows `SIGHASH_CHRONICLE`
+    /// signatures, appends the locking script to the signature script code of
+    /// a signature check in the unlocking script, and stops enforcing the
+    /// malleability rules (`minimalData`, `lowS`, `strictMultiSignatureDummy`,
+    /// `signaturePushOnly`, `cleanStack`, `minimalIf` and `nullFail`) when the
+    /// spending transaction's version, read as a signed 32-bit value, is
+    /// greater than one. ``ScriptExecutionEra/afterChronicle`` always implies
+    /// this flag.
+    public static let chronicle = Self(rawValue: 1 << 15)
 }
 
 /// Caller-owned work and memory ceilings.
@@ -113,10 +128,26 @@ public struct ScriptExecutionConfiguration: Hashable, Sendable {
         }
 
         self.era = era
-        self.flags = flags.contains(.enableForkID)
-            ? flags.union(.strictEncoding)
-            : flags
+        var effectiveFlags = flags
+        if flags.contains(.enableForkID) {
+            effectiveFlags.insert(.strictEncoding)
+        }
+        // An output created after Chronicle can only be spent in a Chronicle block.
+        if era == .afterChronicle {
+            effectiveFlags.insert(.chronicle)
+        }
+        self.flags = effectiveFlags
         self.resourceLimits = resourceLimits
+    }
+
+    /// SV Node `EnforceNonMalleability`: the malleability rules apply unless
+    /// Chronicle rules are active and the spending transaction version, as a
+    /// signed 32-bit value, is greater than one. Without a transaction the
+    /// node's checker reports version zero.
+    package func enforcesNonMalleability(transactionVersion: UInt32?) -> Bool {
+        guard flags.contains(.chronicle) else { return true }
+        let version = transactionVersion.map { Int32(bitPattern: $0) } ?? 0
+        return version <= 1
     }
 }
 
@@ -151,7 +182,9 @@ package struct ScriptConsensusLimits: Sendable {
                 maximumPushDataByteCount: Int(Int32.max),
                 maximumStackItemCount: Int(Int32.max),
                 maximumOperationCountPerScript: Int(Int32.max),
-                maximumScriptNumberByteCount: 32 * 1_024 * 1_024
+                // SV Node MAX_SCRIPT_NUM_LENGTH_AFTER_CHRONICLE is 32 * ONE_MEGABYTE,
+                // where ONE_MEGABYTE is 1,000,000 bytes.
+                maximumScriptNumberByteCount: 32_000_000
             )
         }
     }

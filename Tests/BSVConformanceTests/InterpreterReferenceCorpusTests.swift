@@ -880,13 +880,9 @@ private func generatedDifferentialCases() -> [InterpreterGeneratedCase] {
                       Opcode.right.rawValue, 2, 0x63, 0x64, Opcode.equal.rawValue],
             era: .afterChronicle
         ),
-        .init(
-            name: "after-chronicle-arithmetic-right-shift",
-            locking: [Opcode.three.rawValue, Opcode.negate.rawValue,
-                      Opcode.one.rawValue, Opcode.rightShiftNumber.rawValue,
-                      1, 0x82, Opcode.equal.rawValue],
-            era: .afterChronicle
-        ),
+        // OP_RSHIFTNUM on a negative value is left out: pinned Go v1.3.3
+        // floors (-3 >> 1 == -2) while SV Node rounds toward zero. The node
+        // result is pinned in NodeConformanceRegressionTests.
     ]
 }
 
