@@ -38,7 +38,13 @@ balances must cross the wire between Swift and TypeScript in both directions.
   (`wallet/validationHelpers.ts:680`, `WalletWireProcessor.ts:539-556`).
 - **BRC-112 balance.** For a basket matching `^(?:balance |p [^ ]+ balance )`,
   `totalOutputs` is a UInt64 balance with no outputs and no BEEF
-  (`walletIsBalanceBasket`). Other totals stay within UInt32.
+  (`walletIsBalanceBasket`). Other totals stay within UInt32. The basket is
+  matched after `validateIdentifier`'s trim and lowercasing
+  (`wallet/validationHelpers.ts:376-418`), as the wallet toolbox decides a
+  balance query, so `" Balance Tickets"` is one. The TypeScript wire codecs
+  match the raw basket (`WalletWireProcessor.ts:1296`,
+  `WalletWireTransceiver.ts:726`) and read such an answer as an output
+  count.
 - **Spendable listOutputs extension.** A request may end with one `01` byte.
   The answer then starts with a `-1` marker and each record carries a
   spendable byte after its locking script. Without the extension a
