@@ -162,12 +162,11 @@ public struct WalletCreateActionOptions: Equatable, Sendable {
             )
         }
         if let noSendChange {
+            // TS 4.1.1 takes noSendChange whatever noSend says (validationHelpers.ts:680,
+            // WalletWireProcessor.ts:539-556), and its clients send it that way.
             try walletABIRequireCount(
                 noSendChange.count, kind: "no-send change", maximum: limits.maximumCollectionCount
             )
-            guard noSend == true else {
-                throw WalletABIError.invalidFieldRelation("noSendChange requires noSend to be true")
-            }
         }
         if let sendWith {
             try walletABIRequireCount(
@@ -290,9 +289,6 @@ public struct WalletCreateActionResult:
                 sendWithResults.count, kind: "send-with results", maximum: limits.maximumCollectionCount
             )
         }
-        guard transactionID != nil || transaction != nil || signableTransaction != nil else {
-            throw WalletABIError.invalidFieldRelation("createAction result has no transaction value")
-        }
         self.transactionID = transactionID
         self.transaction = transaction
         self.noSendChange = noSendChange
@@ -381,9 +377,6 @@ public struct WalletSignActionResult:
         sendWithResults: [WalletSendWithResult]? = nil,
         limits: WalletABILimits = .standard
     ) throws {
-        guard transactionID != nil || transaction != nil else {
-            throw WalletABIError.invalidFieldRelation("signAction result has no transaction value")
-        }
         if let sendWithResults {
             try walletABIRequireCount(
                 sendWithResults.count, kind: "send-with results", maximum: limits.maximumCollectionCount
@@ -685,11 +678,14 @@ public struct WalletListOutputsRequest: Equatable, Sendable {
 
 public struct WalletListOutputsResult:
     Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
-    public let totalOutputs: UInt32
+    /// The number of matching outputs, or for a BRC-112 balance basket
+    /// (`walletIsBalanceBasket`) the balance in satoshis. A balance may exceed
+    /// `UInt32.max`; an output count may not.
+    public let totalOutputs: UInt64
     public let beef: BEEF?
     public let outputs: [WalletOutput]
     public init(
-        totalOutputs: UInt32,
+        totalOutputs: UInt64,
         beef: BEEF? = nil,
         outputs: [WalletOutput],
         limits: WalletABILimits = .standard
@@ -859,4 +855,14 @@ public struct WalletInternalizeActionRequest:
 public struct WalletInternalizeActionResult: Equatable, Sendable {
     public let accepted: Bool
     public init(accepted: Bool) { self.accepted = accepted }
+}
+
+/// True for a BRC-112 balance basket, `balance <basket>` or `p <module> balance <basket>`.
+/// Its `listOutputs` total is a balance, not an output count, and has no records.
+public func walletIsBalanceBasket(_ basket: String) -> Bool {
+    if basket.hasPrefix("balance ") { return true }
+    guard basket.hasPrefix("p ") else { return false }
+    let rest = basket.dropFirst(2)
+    guard let space = rest.firstIndex(of: " "), space != rest.startIndex else { return false }
+    return rest[rest.index(after: space)...].hasPrefix("balance ")
 }

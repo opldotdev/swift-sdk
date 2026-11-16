@@ -218,9 +218,6 @@ struct WalletWireReader {
 
     mutating func readOptionalString(maximum: Int, kind: String) throws -> String? {
         guard let encoded = try readOptionalVarBytes(maximum: maximum, kind: kind) else { return nil }
-        guard !encoded.isEmpty else {
-            throw WalletWireError.nonRoundTrippableValue(kind: "empty optional \(kind)")
-        }
         guard let value = String(bytes: encoded, encoding: .utf8) else {
             throw WalletWireError.invalidUTF8(kind: kind)
         }
@@ -319,9 +316,15 @@ func walletWireEncodeCounterparty(
     }
 }
 
-func walletWireDecodeCounterparty(from reader: inout WalletWireReader) throws -> WalletCounterparty {
+/// Reads a counterparty. `@bsv/sdk` writes `00` when the caller omitted it, which
+/// selects the call's own default (`anyone` for createSignature, `self` otherwise).
+func walletWireDecodeCounterparty(
+    from reader: inout WalletWireReader,
+    default defaultCounterparty: WalletCounterparty = .self
+) throws -> WalletCounterparty {
     let discriminator = try reader.readByte()
     switch discriminator {
+    case 0x00: return defaultCounterparty
     case 0x0B: return .self
     case 0x0C: return .anyone
     case 0x02, 0x03:
@@ -343,7 +346,8 @@ func walletWireEncodeAccess(
     to writer: inout WalletWireWriter,
     limits: WalletWireLimits
 ) throws {
-    writer.writeOptionalBoolean(access.privileged)
+    // `@bsv/sdk` writes -1 for an omitted privileged flag, and false is its default.
+    writer.writeOptionalBoolean(access.privileged ? true : nil)
     if let reason = access.privilegedReason {
         guard !reason.isEmpty else {
             throw WalletWireError.nonRoundTrippableValue(kind: "empty privileged reason")
@@ -395,6 +399,7 @@ func walletWireEncodeKeyParameters(
 
 func walletWireDecodeKeyParameters(
     from reader: inout WalletWireReader,
+    defaultCounterparty: WalletCounterparty = .self,
     limits: WalletWireLimits
 ) throws -> WalletWireKeyParameters {
     let protocolID = try walletWireDecodeProtocol(from: &reader, limits: limits)
@@ -405,7 +410,9 @@ func walletWireDecodeKeyParameters(
     let keyID: WalletKeyID
     do { keyID = try WalletKeyID(keyText) }
     catch { throw WalletWireError.nonRoundTrippableValue(kind: "key ID") }
-    let counterparty = try walletWireDecodeCounterparty(from: &reader)
+    let counterparty = try walletWireDecodeCounterparty(
+        from: &reader, default: defaultCounterparty
+    )
     let access = try walletWireDecodeAccess(from: &reader, limits: limits)
     return WalletWireKeyParameters(
         protocolID: protocolID,

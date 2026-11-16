@@ -267,7 +267,7 @@ final class BRC52CertificateBinaryTests: XCTestCase {
         }
     }
 
-    func testDuplicateDescendingInvalidUTF8AndTrailingBytesAreRejected() throws {
+    func testAnyFieldOrderIsReadAndDuplicatesInvalidUTF8AndTrailingBytesAreRejected() throws {
         let a = try CertificateFieldName("a")
         let b = try CertificateFieldName("b")
         let certificate = try Certificate(
@@ -284,10 +284,17 @@ final class BRC52CertificateBinaryTests: XCTestCase {
         duplicate[172] = Character("a").asciiValue!
         assertCertificateError(.duplicateFieldName) { _ = try Certificate(binary: duplicate) }
 
+        // `@bsv/sdk` writes fields in `localeCompare` order
+        // (auth/certificates/Certificate.ts:290), so a descending byte order
+        // is legitimate input. Swift reads it and writes byte order.
         var descending = bytes
         descending[165] = Character("b").asciiValue!
         descending[172] = Character("a").asciiValue!
-        assertCertificateError(.fieldsNotInCanonicalOrder) { _ = try Certificate(binary: descending) }
+        let reordered = try Certificate(binary: descending)
+        XCTAssertEqual(reordered.fields.count, 2)
+        XCTAssertEqual(reordered.fields[a], try CertificateCiphertext([2]))
+        XCTAssertEqual(reordered.fields[b], try CertificateCiphertext([1]))
+        XCTAssertNotEqual(try reordered.binary(includingSignature: false), descending)
 
         var invalidName = bytes
         invalidName[165] = 0xff
@@ -402,9 +409,11 @@ final class BRC52CertificateBinaryTests: XCTestCase {
             limits: custom
         )
         let unsigned = try certificate.binary(includingSignature: false, limits: custom)
-        XCTAssertGreaterThan(unsigned.count, WalletCryptoLimits.standard.maximumPayloadByteCount)
+        // A wallet bounded at 1 MiB, below the expanded preimage.
+        let walletLimits = try WalletCryptoLimits(maximumPayloadByteCount: 1_048_576)
+        XCTAssertGreaterThan(unsigned.count, walletLimits.maximumPayloadByteCount)
         let signed = try await certificate.signed(
-            using: ProtoWallet(rootKey: try key(9)),
+            using: ProtoWallet(rootKey: try key(9), limits: walletLimits),
             limits: custom
         )
         let signatureValid = try await signed.verifySignature(limits: custom)
@@ -416,7 +425,7 @@ final class BRC52CertificateBinaryTests: XCTestCase {
         )
         await XCTAssertThrowsErrorAsync {
             _ = try await certificate.signed(
-                using: ProtoWallet(rootKey: try self.key(9)),
+                using: ProtoWallet(rootKey: try self.key(9), limits: walletLimits),
                 limits: exactUnsignedOnly
             )
         }

@@ -5,35 +5,46 @@ import Testing
 
 @Suite("Wallet-wire certificate hostile input")
 struct WalletWireCertificateAdversarialTests {
-    @Test func rejectsPresentEmptyKeyringAtABIAndWireBoundaries() throws {
+    /// `@bsv/sdk` 4.1.1 writes flag 0 for an empty keyring
+    /// (packages/sdk/src/wallet/substrates/WalletWireProcessor.ts:2118) and its
+    /// transceiver reads flag 1 with no entries as `{}`. Swift stores either as nil.
+    @Test func emptyKeyringIsStoredAsAbsentAndWrittenAsFlagZero() throws {
         let fixture = try WalletWireCertificateFixture()
-        #expect(throws: WalletABIError.invalidFieldRelation(
-            "a present certificate keyring must not be empty"
-        )) {
-            _ = try WalletCertificateResult(
-                certificate: fixture.certificate,
-                keyring: [:],
-                verifier: []
-            )
-        }
+        let empty = try WalletCertificateResult(
+            certificate: fixture.certificate,
+            keyring: [:],
+            verifier: []
+        )
+        #expect(empty.keyring == nil)
 
+        let certificateBytes = try fixture.certificate.binary(includingSignature: true)
         var payload = WalletWireWriter()
         payload.writeCompactSize(1)
-        try payload.writeVarBytes(fixture.certificate.binary(includingSignature: true))
+        try payload.writeVarBytes(certificateBytes)
         payload.writeByte(1)
         payload.writeCompactSize(0)
         payload.writeCompactSize(0)
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "empty present certificate keyring"
-        )) {
-            try WalletWireCodec.decodeCertificateResult(
-                [0] + payload.bytes,
-                expectedCall: .listCertificates
-            )
+        let decoded = try WalletWireCodec.decodeCertificateResult(
+            [0] + payload.bytes,
+            expectedCall: .listCertificates
+        )
+        guard case .listCertificates(let list) = decoded else {
+            Issue.record("expected a listCertificates result")
+            return
         }
+        #expect(list.certificates.first?.keyring == nil)
+
+        var expected = WalletWireWriter()
+        expected.writeCompactSize(1)
+        try expected.writeVarBytes(certificateBytes)
+        expected.writeByte(0)
+        expected.writeCompactSize(0)
+        #expect(try WalletWireCodec.encodeCertificateResult(
+            .listCertificates(WalletListCertificatesResult(totalCertificates: 1, certificates: [empty]))
+        ) == [0] + expected.bytes)
     }
 
-    @Test func rejectsNoncanonicalCountsHostileCountsAndUnsortedMaps() throws {
+    @Test func rejectsNoncanonicalCountsHostileCountsAndDuplicateMapNames() throws {
         #expect(throws: WalletWireError.noncanonicalCompactSize) {
             try WalletWireCodec.decodeCertificateRequest(
                 [WalletCall.discoverByAttributes.rawValue, 0, 0xfd, 0, 0]
@@ -48,6 +59,9 @@ struct WalletWireCertificateAdversarialTests {
             )
         }
 
+        // `@bsv/sdk` writes maps in insertion order
+        // (packages/sdk/src/wallet/substrates/WalletWireTransceiver.ts:1962 iterates
+        // `Object.keys(args.attributes)`), so unsorted names are accepted.
         var unsorted = WalletWireWriter()
         unsorted.writeCompactSize(2)
         try unsorted.writeString("zeta")
@@ -57,11 +71,28 @@ struct WalletWireCertificateAdversarialTests {
         unsorted.writeOptionalUInt32(nil)
         unsorted.writeOptionalUInt32(nil)
         unsorted.writeOptionalBoolean(nil)
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "unsorted or duplicate certificate attributes"
-        )) {
+        let decoded = try WalletWireCodec.decodeCertificateRequest(
+            [WalletCall.discoverByAttributes.rawValue, 0] + unsorted.bytes
+        )
+        guard case .discoverByAttributes(let attributes) = decoded.request else {
+            Issue.record("expected discoverByAttributes")
+            return
+        }
+        #expect(attributes.attributes.count == 2)
+
+        // A repeated name has no map value and is still rejected.
+        var duplicate = WalletWireWriter()
+        duplicate.writeCompactSize(2)
+        try duplicate.writeString("alpha")
+        try duplicate.writeString("first")
+        try duplicate.writeString("alpha")
+        try duplicate.writeString("second")
+        duplicate.writeOptionalUInt32(nil)
+        duplicate.writeOptionalUInt32(nil)
+        duplicate.writeOptionalBoolean(nil)
+        #expect(throws: WalletWireError.self) {
             try WalletWireCodec.decodeCertificateRequest(
-                [WalletCall.discoverByAttributes.rawValue, 0] + unsorted.bytes
+                [WalletCall.discoverByAttributes.rawValue, 0] + duplicate.bytes
             )
         }
     }

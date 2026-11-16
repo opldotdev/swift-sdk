@@ -26,7 +26,8 @@ struct InterpreterReferenceNumberBoundaryTests {
         #expect(afterChronicle.maximumPushDataByteCount == Int(Int32.max))
         #expect(afterChronicle.maximumStackItemCount == Int(Int32.max))
         #expect(afterChronicle.maximumOperationCountPerScript == Int(Int32.max))
-        let chronicleMaximum = 32 * 1_024 * 1_024
+        // SV Node MAX_SCRIPT_NUM_LENGTH_AFTER_CHRONICLE = 32 * ONE_MEGABYTE (1,000,000).
+        let chronicleMaximum = 32_000_000
         let chroniclePlusOne = chronicleMaximum + 1
         #expect(afterChronicle.maximumScriptNumberByteCount == chronicleMaximum)
         #expect(afterChronicle.maximumScriptNumberByteCount + 1 == chroniclePlusOne)

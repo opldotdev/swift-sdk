@@ -343,14 +343,14 @@ private struct ActionInputDTO: Codable {
 
 private struct ActionOutputDTO: Codable {
     let satoshis: UInt64; let lockingScript: String?; let spendable: Bool; let customInstructions: String?
-    let tags: [String]; let outputIndex: UInt32; let outputDescription: String; let basket: String
+    let tags: [String]?; let outputIndex: UInt32; let outputDescription: String; let basket: String
     init(_ value: WalletActionOutput) {
         satoshis = value.satoshis; lockingScript = value.lockingScript.map(Hex.encode); spendable = value.spendable
         customInstructions = value.customInstructions; tags = value.tags; outputIndex = value.outputIndex
         outputDescription = value.outputDescription; basket = value.basket
     }
     func model(_ codec: WalletBRC100JSONCodec) throws -> WalletActionOutput {
-        try .init(satoshis: satoshis, lockingScript: try lockingScript.map { try decodeCanonicalHex($0, maximum: codec.abiLimits.maximumBytePayloadCount) }, spendable: spendable, customInstructions: customInstructions, tags: tags, outputIndex: outputIndex, outputDescription: outputDescription, basket: basket, limits: codec.abiLimits)
+        try .init(satoshis: satoshis, lockingScript: try lockingScript.map { try decodeCanonicalHex($0, maximum: codec.abiLimits.maximumBytePayloadCount) }, spendable: spendable, customInstructions: customInstructions, tags: tags ?? [], outputIndex: outputIndex, outputDescription: outputDescription, basket: basket, limits: codec.abiLimits)
     }
 }
 
@@ -419,7 +419,7 @@ private struct ListOutputsDTO: Codable {
     func model(_ codec: WalletBRC100JSONCodec) throws -> WalletListOutputsRequest { try .init(basket: basket, tags: tags ?? [], tagQueryMode: tagQueryMode, include: include, includeCustomInstructions: includeCustomInstructions, includeTags: includeTags, includeLabels: includeLabels, pagination: .init(limit: limit, offset: offset), seekPermission: seekPermission, limits: codec.abiLimits) }
 }
 private struct ListOutputsResultDTO: Codable {
-    let totalOutputs: UInt32; let BEEF: [UInt8]?; let outputs: [OutputDTO]
+    let totalOutputs: UInt64; let BEEF: [UInt8]?; let outputs: [OutputDTO]
     init(_ value: WalletListOutputsResult, codec: WalletBRC100JSONCodec) throws { totalOutputs = value.totalOutputs; BEEF = try value.beef?.serialized(limits: codec.beefLimits); outputs = value.outputs.map(OutputDTO.init) }
     func model(_ codec: WalletBRC100JSONCodec) throws -> WalletListOutputsResult { try .init(totalOutputs: totalOutputs, beef: try BEEF.map { try BSVTransaction.BEEF(bytes: $0, limits: codec.beefLimits, transactionOrder: .any) }, outputs: try outputs.map { try $0.model(codec) }, limits: codec.abiLimits) }
 }

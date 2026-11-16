@@ -35,20 +35,29 @@ struct WalletWireActionAdversarialTests {
         }
     }
 
-    @Test func rejectsUnsortedSpendsAndInvalidDiscriminators() throws {
+    @Test func acceptsUnsortedSpendsButRejectsDuplicatesAndInvalidDiscriminators() throws {
         let negativeOne = [UInt8](repeating: 0xff, count: 9)
+        // `@bsv/sdk` writes spends in `Object.keys(args.spends)` order
+        // (packages/sdk/src/wallet/substrates/WalletWireTransceiver.ts:357),
+        // so an unsorted index list is legitimate traffic.
         let unsorted = actionWireBytes([
             [2, 0, 2, 2, 0], negativeOne, [1, 0], negativeOne, [0, 0],
         ])
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "unsorted or duplicate spend index"
-        )) {
-            try WalletWireCodec.decodeActionRequest(
-                unsorted, beefLimits: actionBEEFLimits()
-            )
+        #expect(throws: Never.self) {
+            try WalletWireCodec.decodeActionRequest(unsorted, beefLimits: actionBEEFLimits())
+        }
+        let duplicate = actionWireBytes([
+            [2, 0, 2, 1, 0], negativeOne, [1, 0], negativeOne, [0, 0],
+        ])
+        #expect(throws: WalletWireError.nonRoundTrippableValue(kind: "duplicate spend index")) {
+            try WalletWireCodec.decodeActionRequest(duplicate, beefLimits: actionBEEFLimits())
         }
 
-        let invalidMode = [UInt8](arrayLiteral: 6, 0, 0, 0, 3)
+        // listOutputs: basket "", no tags, tag query mode 3, then absent include,
+        // include flags, limit, offset and seekPermission.
+        let invalidMode = actionWireBytes([
+            [6, 0, 0, 0, 3, 0xff, 0xff, 0xff, 0xff], negativeOne, negativeOne, [0xff],
+        ])
         #expect(throws: WalletWireError.invalidDiscriminator(
             kind: "tag query mode", value: 3
         )) {
@@ -74,7 +83,7 @@ struct WalletWireActionAdversarialTests {
         }
     }
 
-    @Test func rejectsInvalidBEEFAndNonRoundTrippableGoUnions() throws {
+    @Test func rejectsInvalidBEEFAndAcceptsAbsentCreateActionParts() throws {
         let invalidAtomic = [UInt8](arrayLiteral: 5, 0, 1, 0, 0, 0, 0, 0xff)
         #expect(throws: WalletWireError.nonRoundTrippableValue(kind: "Atomic BEEF")) {
             try WalletWireCodec.decodeActionRequest(
@@ -82,44 +91,85 @@ struct WalletWireActionAdversarialTests {
             )
         }
 
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "absent pinned Go transaction ID"
-        )) {
+        // `@bsv/sdk` 4.1.1 createAction result with every part absent
+        // (WalletWireProcessor.ts createAction: txid flag 0, tx flag 0,
+        // noSendChange -1, sendWithResults -1, signableTransaction flag 0). G3.
+        let negativeOne = [UInt8](repeating: 0xff, count: 9)
+        let empty = actionWireBytes([[0, 0, 0], negativeOne, negativeOne, [0]])
+        let decoded = try WalletWireCodec.decodeActionResult(
+            empty, expectedCall: .createAction, beefLimits: actionBEEFLimits()
+        )
+        guard case .createAction(let result) = decoded else {
+            Issue.record("expected a createAction result")
+            return
+        }
+        #expect(result.transactionID == nil)
+        #expect(result.signableTransaction == nil)
+        #expect(try WalletWireCodec.encodeActionResult(decoded, beefLimits: actionBEEFLimits()) == empty)
+
+        // The Go wire's extra leading byte is no longer read: [0, 0, 0] stops
+        // at the sendWithResults count.
+        #expect(throws: WalletWireError.truncated) {
             try WalletWireCodec.decodeActionResult(
                 [0, 0, 0], expectedCall: .createAction, beefLimits: actionBEEFLimits()
             )
         }
     }
 
-    @Test func rejectsFalseImplicitResultsAndTotalMismatches() throws {
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "false abort-action result"
-        )) {
-            try WalletWireCodec.encodeActionResult(
-                .abortAction(WalletAbortActionResult(aborted: false)),
-                beefLimits: actionBEEFLimits()
-            )
+    @Test func answersAbortRefusalInBandAndAllowsShortPages() throws {
+        // `@bsv/sdk` 4.1.1 refuses an abort with code 8 and a fixed message
+        // (packages/sdk/src/wallet/substrates/WalletWireProcessor.ts:817), and
+        // its transceiver maps code 8 to `aborted: false`
+        // (WalletWireTransceiver.ts:412). W5.
+        let message = "The wallet refused to abort this action because it has already been broadcast"
+        let refusal = try WalletWireCodec.encodeActionResult(
+            .abortAction(WalletAbortActionResult(aborted: false)),
+            beefLimits: actionBEEFLimits()
+        )
+        #expect(refusal == [8, UInt8(message.utf8.count)] + Array(message.utf8) + [0])
+        let decodedRefusal = try WalletWireCodec.decodeActionResult(
+            refusal, expectedCall: .abortAction, beefLimits: actionBEEFLimits()
+        )
+        guard case .abortAction(let abort) = decodedRefusal else {
+            Issue.record("expected an abortAction result")
+            return
         }
-        let mismatch = try WalletListActionsResult(totalActions: 1, actions: [])
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "total actions mismatch"
-        )) {
-            try WalletWireCodec.encodeActionResult(
-                .listActions(mismatch), beefLimits: actionBEEFLimits()
+        #expect(abort.aborted == false)
+
+        // A page shorter than its total is an ordinary paginated answer.
+        let shortPage = try WalletListActionsResult(totalActions: 1, actions: [])
+        #expect(try WalletWireCodec.encodeActionResult(
+            .listActions(shortPage), beefLimits: actionBEEFLimits()
+        ) == [0, 1])
+
+        // More records than the declared total is still rejected.
+        let absent = [UInt8](repeating: 0xff, count: 9)
+        let overfull = actionWireBytes([
+            [0, 0], [UInt8](repeating: 0, count: 32), [0, 1, 0, 0], absent, [0, 0], absent, absent,
+        ])
+        #expect(throws: WalletWireResultRejection.self) {
+            try WalletWireCodec.decodeActionResult(
+                overfull, expectedCall: .listActions, beefLimits: actionBEEFLimits()
             )
         }
     }
 
-    @Test func rejectsCreateActionNilEmptyCollisionsOnEncodeAndDecode() throws {
+    @Test func keepsEmptyCreateActionInputsAndRejectsEmptyLockingScripts() throws {
         let beefLimits = try actionBEEFLimits()
+        // `@bsv/sdk` writes `inputs: []` as count 0 and an omitted array as -1
+        // (WalletWireTransceiver.ts createAction `args.inputs != null`), so
+        // both forms round-trip.
         let emptyInputs = try WalletCreateActionRequest(description: "", inputs: [])
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "empty create-action inputs"
-        )) {
-            try WalletWireCodec.encodeActionRequest(
-                .createAction(emptyInputs), originator: "", beefLimits: beefLimits
-            )
+        let emptyInputsEncoded = try WalletWireCodec.encodeActionRequest(
+            .createAction(emptyInputs), originator: "", beefLimits: beefLimits
+        )
+        guard case .createAction(let emptyInputsDecoded) = try WalletWireCodec.decodeActionRequest(
+            emptyInputsEncoded, beefLimits: beefLimits
+        ).request else {
+            Issue.record("expected a createAction request")
+            return
         }
+        #expect(emptyInputsDecoded.inputs == [])
 
         let emptyOutput = try WalletCreateActionRequest(
             description: "",
@@ -143,11 +193,13 @@ struct WalletWireActionAdversarialTests {
             emptyInputsFrame.append(contentsOf: absent)
         }
         emptyInputsFrame.append(0)
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "empty create-action inputs"
-        )) {
-            try WalletWireCodec.decodeActionRequest(emptyInputsFrame, beefLimits: beefLimits)
+        guard case .createAction(let emptyFrameRequest) = try WalletWireCodec.decodeActionRequest(
+            emptyInputsFrame, beefLimits: beefLimits
+        ).request else {
+            Issue.record("expected a createAction request")
+            return
         }
+        #expect(emptyFrameRequest.inputs == [])
 
         var emptyScriptFrame: [UInt8] = [1, 0, 0]
         emptyScriptFrame.append(contentsOf: absent)
@@ -167,106 +219,67 @@ struct WalletWireActionAdversarialTests {
         }
     }
 
-    @Test func rejectsPresentZeroLengthStringSliceEntries() throws {
-        let request = [UInt8](arrayLiteral: WalletCall.listActions.rawValue, 0, 1, 0)
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "zero-length labels entry"
-        )) {
-            try WalletWireCodec.decodeActionRequest(request, beefLimits: actionBEEFLimits())
+    @Test func readsZeroLengthAndAbsentStringSliceEntriesAsEmpty() throws {
+        // `@bsv/sdk` writes an empty label or tag with length 0
+        // (WalletWireTransceiver.ts `#writeUTF8Array`), and earlier Go and
+        // Swift peers wrote -1. Both read as "", and "" is written as 0.
+        let limits = WalletWireLimits.standard
+        for entry in [[UInt8(0)], [UInt8](repeating: 0xff, count: 9)] {
+            var reader = WalletWireReader([1] + entry)
+            #expect(try walletWireReadStringSlice(
+                from: &reader, kind: "labels", optional: false, limits: limits
+            ) == [""])
+            #expect(reader.isAtEnd)
         }
-
-        let result = actionWireBytes([
-            [0, 1], [UInt8](repeating: 0, count: 32), [0, 1, 0, 0, 1, 0],
-        ])
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "zero-length labels entry"
-        )) {
-            try WalletWireCodec.decodeActionResult(
-                result, expectedCall: .listActions, beefLimits: actionBEEFLimits()
-            )
-        }
+        var writer = WalletWireWriter()
+        try walletWireWriteStringSlice([""], kind: "labels", to: &writer, limits: limits)
+        #expect(writer.bytes == [1, 0])
     }
 
-    @Test func rejectsPinnedGoUnreadableListActionScriptSentinels() throws {
-        let absent = [UInt8](repeating: 0xff, count: 9)
-        let prefix = actionWireBytes([
-            [0, 1], [UInt8](repeating: 0, count: 32), [0, 1, 0, 0], absent, [0, 0],
-        ])
-        let inputPrefix = actionWireBytes([
-            prefix, [1], [UInt8](repeating: 0, count: 32), [0, 0],
-        ])
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "absent action source locking script"
-        )) {
-            try WalletWireCodec.decodeActionResult(
-                actionWireBytes([inputPrefix, absent]),
-                expectedCall: .listActions, beefLimits: actionBEEFLimits()
-            )
-        }
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "absent action unlocking script"
-        )) {
-            try WalletWireCodec.decodeActionResult(
-                actionWireBytes([inputPrefix, [1, 0x51], absent]),
-                expectedCall: .listActions, beefLimits: actionBEEFLimits()
-            )
-        }
-
-        let outputPrefix = actionWireBytes([prefix, absent, [1, 0, 0]])
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "absent action output locking script"
-        )) {
-            try WalletWireCodec.decodeActionResult(
-                actionWireBytes([outputPrefix, absent]),
-                expectedCall: .listActions, beefLimits: actionBEEFLimits()
-            )
-        }
-
+    @Test func roundTripsAbsentListActionScripts() throws {
+        // `@bsv/sdk` 4.1.1 writes an absent listActions script as -1 and reads
+        // it back as undefined (WalletWireProcessor.ts listActions inputs and
+        // outputs). G6.
         let outpoint = Outpoint(transactionID: try actionTransactionID(), outputIndex: 0)
-        func action(
-            inputs: [WalletActionInput]? = nil,
-            outputs: [WalletActionOutput]? = nil
-        ) throws -> WalletAction {
-            try WalletAction(
-                transactionID: try actionTransactionID(), satoshis: 0, status: .completed,
-                isOutgoing: false, description: "", version: 0, lockTime: 0,
-                inputs: inputs, outputs: outputs
-            )
-        }
-        let lossyActions: [(WalletAction, String)] = [
-            (try action(inputs: [WalletActionInput(
+        let action = try WalletAction(
+            transactionID: try actionTransactionID(), satoshis: 0, status: .completed,
+            isOutgoing: false, description: "", version: 0, lockTime: 0,
+            inputs: [WalletActionInput(
                 sourceOutpoint: outpoint, sourceSatoshis: 0, sourceLockingScript: nil,
-                unlockingScript: [0x51], inputDescription: "", sequenceNumber: 0
-            )]), "absent or empty action source locking script"),
-            (try action(inputs: [WalletActionInput(
-                sourceOutpoint: outpoint, sourceSatoshis: 0, sourceLockingScript: [0x51],
                 unlockingScript: nil, inputDescription: "", sequenceNumber: 0
-            )]), "absent or empty action unlocking script"),
-            (try action(outputs: [WalletActionOutput(
+            )],
+            outputs: [WalletActionOutput(
                 satoshis: 0, lockingScript: nil, spendable: true, tags: [], outputIndex: 0,
                 outputDescription: "", basket: ""
-            )]), "absent or empty action output locking script"),
-        ]
-        for (action, kind) in lossyActions {
-            #expect(throws: WalletWireError.nonRoundTrippableValue(kind: kind)) {
-                try WalletWireCodec.encodeActionResult(
-                    .listActions(WalletListActionsResult(totalActions: 1, actions: [action])),
-                    beefLimits: actionBEEFLimits()
-                )
-            }
+            )]
+        )
+        let result = WalletWireActionResult.listActions(
+            try WalletListActionsResult(totalActions: 1, actions: [action])
+        )
+        let encoded = try WalletWireCodec.encodeActionResult(result, beefLimits: actionBEEFLimits())
+        let decoded = try WalletWireCodec.decodeActionResult(
+            encoded, expectedCall: .listActions, beefLimits: actionBEEFLimits()
+        )
+        guard case .listActions(let page) = decoded,
+              let input = page.actions.first?.inputs?.first,
+              let output = page.actions.first?.outputs?.first else {
+            Issue.record("expected one listActions input and output")
+            return
         }
+        #expect(input.sourceLockingScript == nil)
+        #expect(input.unlockingScript == nil)
+        #expect(output.lockingScript == nil)
+        #expect(try WalletWireCodec.encodeActionResult(decoded, beefLimits: actionBEEFLimits()) == encoded)
     }
 
-    @Test func rejectsRemainingHostileActionResultForms() throws {
+    @Test func rejectsHostileActionResultForms() throws {
         let absent = [UInt8](repeating: 0xff, count: 9)
-        let signable = actionWireBytes([
-            [0, 0, 1], [UInt8](repeating: 0, count: 32), [0], absent, [0, 1],
-        ])
-        #expect(throws: WalletWireError.nonRoundTrippableValue(
-            kind: "pinned Go signable create-action result"
+        let badSignableFlag = actionWireBytes([[0, 0, 0], absent, absent, [2]])
+        #expect(throws: WalletWireError.invalidDiscriminator(
+            kind: "signable transaction", value: 2
         )) {
             try WalletWireCodec.decodeActionResult(
-                signable, expectedCall: .createAction, beefLimits: actionBEEFLimits()
+                badSignableFlag, expectedCall: .createAction, beefLimits: actionBEEFLimits()
             )
         }
 
@@ -289,13 +302,22 @@ struct WalletWireActionAdversarialTests {
             )
         }
 
-        let hostileCount = [UInt8](arrayLiteral: 0, 0xfd, 0x11, 0x27)
-        #expect(throws: WalletWireError.countLimitExceeded(
-            kind: "outputs", actual: 10_001, maximum: 10_000
-        )) {
-            try WalletWireCodec.decodeActionResult(
-                hostileCount, expectedCall: .listOutputs, beefLimits: actionBEEFLimits()
-            )
+        // The total counts every matching output, not the records in this frame
+        // (WalletWireTransceiver.ts listOutputs reads records until the frame
+        // ends), so a large total with no records is a valid page.
+        let largeTotal = actionWireBytes([[0, 0xfd, 0x11, 0x27], absent])
+        guard case .listOutputs(let page) = try WalletWireCodec.decodeActionResult(
+            largeTotal, expectedCall: .listOutputs, beefLimits: actionBEEFLimits()
+        ) else {
+            Issue.record("expected a listOutputs result")
+            return
+        }
+        #expect(page.totalOutputs == 10_001)
+        #expect(page.outputs.isEmpty)
+
+        // Records beyond the page limit are rejected before more are read.
+        #expect(throws: WalletWireResultRejection.self) {
+            try walletWireRequirePageCapacity(10, limit: 10, call: "listOutputs")
         }
     }
 }

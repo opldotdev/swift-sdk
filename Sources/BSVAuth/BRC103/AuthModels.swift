@@ -256,6 +256,10 @@ public struct AuthMessage: Equatable, Sendable, CustomStringConvertible,
 /// (`AuthMessageValidation.ts:8`), an authenticated response frame of 16 MiB
 /// plus 512 KiB of framing (`clients/AuthFetch.ts:147`, `:571`), and 100
 /// certificates, certifiers and types (`AuthMessageValidation.ts:12-14`).
+///
+/// Over HTTP `maximumPayloadBytes` bounds the whole BRC-104 request or response,
+/// its body plus framing. At 1 MiB a wallet storage reply carrying a photo
+/// inscription's transaction was refused before it was read.
 public struct AuthLimits: Equatable, Sendable {
     public static let maximumAllowedJSONBytes = 64 << 20
     public static let maximumAllowedPayloadBytes = 32 << 20

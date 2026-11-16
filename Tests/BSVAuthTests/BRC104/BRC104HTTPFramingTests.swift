@@ -329,6 +329,80 @@ struct BRC104HTTPFramingTests {
                 "BRC104HTTPFrameCodec.parseRequestedCertificates: AuthError: ") == true)
     }
 
+
+    /// The TypeScript `AuthFetch` sends a request frame of up to 16 MiB
+    /// (`MAX_AUTH_HTTP_REQUEST_FRAME_BYTES`) and reads a response body of up to 16 MiB
+    /// (`DEFAULT_SIMPLIFIED_FETCH_MAX_RESPONSE_BYTES`) plus 512 KiB of framing
+    /// (`clients/AuthFetch.ts:147`), which is the default here. A wallet storage reply carrying a 180 KB
+    /// image inscription as JSON numbers was 1,330,479 bytes, and at the old 1 MiB default it was
+    /// refused with `resourceLimit` before it was read.
+    @Test("payloads over 1 MiB and up to the default limit are signed, framed and read")
+    func payloadsOverOneMebibyte() async throws {
+        #expect(AuthLimits.standard.maximumPayloadBytes == AuthLimits.defaultPayloadBytes)
+        #expect(try AuthLimits().maximumPayloadBytes == AuthLimits.defaultPayloadBytes)
+        #expect(BRC104Limits.standard.maximumPayloadBytes == AuthLimits.defaultPayloadBytes)
+        #expect(try BRC104Limits().maximumPayloadBytes == AuthLimits.defaultPayloadBytes)
+        #expect(BRC104HTTPFramingLimits.standard.payloadLimits.maximumPayloadBytes == AuthLimits.defaultPayloadBytes)
+
+        let requestBody = [UInt8](repeating: 0x5b, count: (1 << 20) + 1)
+        let responseBody = [UInt8](repeating: 0x31, count: 1_330_479)
+        let fixture = try await makeHTTPFixture(
+            requestBody: requestBody, responseBody: responseBody
+        )
+
+        let requestFrame = try BRC104HTTPFrameCodec.encodeRequest(fixture.requestMessage)
+        #expect(requestFrame.body == requestBody)
+        #expect(try BRC104HTTPFrameCodec.decodeRequest(requestFrame) == fixture.requestMessage)
+
+        let responseFrame = try BRC104HTTPFrameCodec.encodeResponse(fixture.responseMessage)
+        #expect(responseFrame.body == responseBody)
+        let decoded = try BRC104HTTPFrameCodec.decodeResponse(
+            try BRC104HTTPResponseFrame(
+                status: responseFrame.status, headers: responseFrame.headers,
+                body: responseFrame.body
+            ),
+            expectedRequestID: fixture.requestID
+        )
+        #expect(decoded == fixture.responseMessage)
+        let inner = try BRC104Codec.decodeResponse(try #require(decoded.payload))
+        #expect(inner.body == responseBody)
+    }
+
+    @Test("a response payload at exactly the default limit is read and one byte more is refused")
+    func defaultPayloadBoundary() throws {
+        let limit = AuthLimits.defaultPayloadBytes
+        let requestID = [UInt8](repeating: 9, count: 32)
+        let empty = try BRC104Codec.encode(
+            BRC104Response(requestID: requestID, status: 200, body: [])
+        )
+        // The empty body's one-byte length prefix is five bytes for a body this large.
+        let overhead = empty.count - 1 + 5
+        let largest = try BRC104Response(
+            requestID: requestID, status: 200,
+            body: [UInt8](repeating: 1, count: limit - overhead)
+        )
+        let encoded = try BRC104Codec.encode(largest)
+        #expect(encoded.count == limit)
+        #expect(try BRC104Codec.decodeResponse(encoded) == largest)
+
+        #expect(throws: BRC104Error.resourceLimit) {
+            try BRC104Codec.encode(
+                BRC104Response(
+                    requestID: requestID, status: 200,
+                    body: [UInt8](repeating: 1, count: limit - overhead + 1)
+                )
+            )
+        }
+        #expect(throws: BRC104Error.resourceLimit) {
+            try BRC104Codec.decodeResponse(encoded + [0])
+        }
+        #expect(throws: BRC104HTTPFramingError.resourceLimit) {
+            try BRC104HTTPResponseFrame(
+                status: 200, body: [UInt8](repeating: 1, count: limit + 1)
+            )
+        }
+    }
+
     @Test("frames and messages do not disclose HTTP or authentication data")
     func redaction() async throws {
         let fixture = try await makeHTTPFixture()
@@ -374,7 +448,10 @@ private struct HTTPAuthFixture {
     let responseMessage: AuthMessage
 }
 
-private func makeHTTPFixture() async throws -> HTTPAuthFixture {
+private func makeHTTPFixture(
+    requestBody: [UInt8] = Array(#"{"secret":true}"#.utf8),
+    responseBody: [UInt8] = Array("accepted".utf8)
+) async throws -> HTTPAuthFixture {
     let client = PeerAuthenticator(wallet: ProtoWallet(rootKey: try httpPrivateKey(3)))
     let server = PeerAuthenticator(wallet: ProtoWallet(rootKey: try httpPrivateKey(7)))
     let start = try await client.beginAuthentication(with: try httpPrivateKey(7).publicKey)
@@ -392,7 +469,7 @@ private func makeHTTPFixture() async throws -> HTTPAuthFixture {
             .init(name: "content-type", value: "application/json"),
             .init(name: "x-bsv-trace", value: "1"),
         ],
-        body: Array(#"{"secret":true}"#.utf8)
+        body: requestBody
     )
     let requestMessage = try sentHTTPMessage([
         try await client.makeGeneralMessage(
@@ -409,7 +486,7 @@ private func makeHTTPFixture() async throws -> HTTPAuthFixture {
         requestID: requestID,
         status: 201,
         headers: [.init(name: "x-bsv-result", value: "ok")],
-        body: Array("accepted".utf8)
+        body: responseBody
     )
     let responseMessage = try sentHTTPMessage([
         try await server.makeGeneralMessage(

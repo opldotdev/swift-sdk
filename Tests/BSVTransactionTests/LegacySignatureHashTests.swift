@@ -88,7 +88,8 @@ struct LegacySignatureHashTests {
         #expect(try transaction.legacySignatureHash(
             inputIndex: 1,
             rawHashType: 0x43,
-            scriptCode: scriptCode,
+            scriptCodeBytes: scriptCode.bytes,
+            encodedScriptCodeLength: scriptCode.byteCount,
             limits: limits
         ).bytes == expected)
     }
