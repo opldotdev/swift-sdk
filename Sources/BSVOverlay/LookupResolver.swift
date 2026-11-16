@@ -253,6 +253,10 @@ package func overlayLookupTransaction(
         // Lookup answers come from `@bsv/sdk` writers, which can list a child
         // before its parents. Reordered parents-first, `last` is a transaction no
         // other record spends, not whichever record the writer emitted last.
+        // `Transaction.fromBEEF` in `@bsv/sdk` takes the record last on the wire
+        // instead; the two differ only when the writer put a parent last. This
+        // keeps the reordered choice: a transaction nothing else in the answer
+        // spends.
         let beef = try BEEF(bytes: output.beef, limits: beefLimits, transactionOrder: .any)
         guard let transaction = beef.transactions.last?.transaction else {
             throw OverlayPolicyError.invalidLookupOutput

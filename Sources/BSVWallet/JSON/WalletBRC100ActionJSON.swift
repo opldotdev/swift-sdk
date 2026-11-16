@@ -1,6 +1,8 @@
 import BSVCore
 import BSVTransaction
 
+// BEEF and Atomic BEEF in these messages are read in any record order: the other side is usually
+// `@bsv/sdk`, whose writer can list a child ahead of its parents. Writes stay parents-first.
 extension WalletBRC100JSONCodec {
     func decodeActionRequest(call: WalletCall, bytes: [UInt8]) throws -> WalletWireActionRequest {
         switch call {
@@ -178,7 +180,7 @@ private struct CreateActionDTO: Codable {
     func model(_ codec: WalletBRC100JSONCodec) throws -> WalletCreateActionRequest {
         try WalletCreateActionRequest(
             description: description,
-            inputBEEF: try inputBEEF.map { try BEEF(bytes: $0, limits: codec.beefLimits) },
+            inputBEEF: try inputBEEF.map { try BEEF(bytes: $0, limits: codec.beefLimits, transactionOrder: .any) },
             inputs: try inputs?.map { try $0.model(codec) },
             outputs: try outputs?.map { try $0.model(codec) },
             lockTime: lockTime,
@@ -205,7 +207,7 @@ private struct SignableTransactionDTO: Codable {
         reference = value.reference.base64
     }
     func model(_ codec: WalletBRC100JSONCodec) throws -> WalletSignableTransaction {
-        .init(transaction: try AtomicBEEF(bytes: tx, limits: codec.beefLimits), reference: try .init(base64: reference, limits: codec.abiLimits))
+        .init(transaction: try AtomicBEEF(bytes: tx, limits: codec.beefLimits, transactionOrder: .any), reference: try .init(base64: reference, limits: codec.abiLimits))
     }
 }
 
@@ -226,7 +228,7 @@ private struct CreateActionResultDTO: Codable {
     func model(_ codec: WalletBRC100JSONCodec) throws -> WalletCreateActionResult {
         try WalletCreateActionResult(
             transactionID: try txid.map(TransactionID.init(displayHex:)),
-            transaction: try tx.map { try AtomicBEEF(bytes: $0, limits: codec.beefLimits) },
+            transaction: try tx.map { try AtomicBEEF(bytes: $0, limits: codec.beefLimits, transactionOrder: .any) },
             noSendChange: try noSendChange?.map { try Outpoint($0) },
             sendWithResults: try sendWithResults?.map { try $0.model() },
             signableTransaction: try signableTransaction?.model(codec),
@@ -289,7 +291,7 @@ private struct SignActionResultDTO: Codable {
         sendWithResults = value.sendWithResults?.map(SendWithResultDTO.init)
     }
     func model(_ codec: WalletBRC100JSONCodec) throws -> WalletSignActionResult {
-        try .init(transactionID: try txid.map(TransactionID.init(displayHex:)), transaction: try tx.map { try AtomicBEEF(bytes: $0, limits: codec.beefLimits) }, sendWithResults: try sendWithResults?.map { try $0.model() }, limits: codec.abiLimits)
+        try .init(transactionID: try txid.map(TransactionID.init(displayHex:)), transaction: try tx.map { try AtomicBEEF(bytes: $0, limits: codec.beefLimits, transactionOrder: .any) }, sendWithResults: try sendWithResults?.map { try $0.model() }, limits: codec.abiLimits)
     }
 }
 
@@ -400,7 +402,7 @@ private struct InternalizeOutputDTO: Codable {
 private struct InternalizeActionDTO: Codable {
     let tx: [UInt8]; let outputs: [InternalizeOutputDTO]; let description: String; let labels: [String]?; let seekPermission: Bool?
     init(_ value: WalletInternalizeActionRequest, codec: WalletBRC100JSONCodec) throws { tx = try value.transaction.serialized(limits: codec.beefLimits); outputs = value.outputs.map(InternalizeOutputDTO.init); description = value.description; labels = value.labels.isEmpty ? nil : value.labels; seekPermission = value.seekPermission }
-    func model(_ codec: WalletBRC100JSONCodec) throws -> WalletInternalizeActionRequest { try .init(transaction: .init(bytes: tx, limits: codec.beefLimits), description: description, labels: labels ?? [], seekPermission: seekPermission, outputs: try outputs.map { try $0.model(codec) }, limits: codec.abiLimits) }
+    func model(_ codec: WalletBRC100JSONCodec) throws -> WalletInternalizeActionRequest { try .init(transaction: .init(bytes: tx, limits: codec.beefLimits, transactionOrder: .any), description: description, labels: labels ?? [], seekPermission: seekPermission, outputs: try outputs.map { try $0.model(codec) }, limits: codec.abiLimits) }
 }
 
 private struct OutputDTO: Codable {
@@ -419,7 +421,7 @@ private struct ListOutputsDTO: Codable {
 private struct ListOutputsResultDTO: Codable {
     let totalOutputs: UInt32; let BEEF: [UInt8]?; let outputs: [OutputDTO]
     init(_ value: WalletListOutputsResult, codec: WalletBRC100JSONCodec) throws { totalOutputs = value.totalOutputs; BEEF = try value.beef?.serialized(limits: codec.beefLimits); outputs = value.outputs.map(OutputDTO.init) }
-    func model(_ codec: WalletBRC100JSONCodec) throws -> WalletListOutputsResult { try .init(totalOutputs: totalOutputs, beef: try BEEF.map { try BSVTransaction.BEEF(bytes: $0, limits: codec.beefLimits) }, outputs: try outputs.map { try $0.model(codec) }, limits: codec.abiLimits) }
+    func model(_ codec: WalletBRC100JSONCodec) throws -> WalletListOutputsResult { try .init(totalOutputs: totalOutputs, beef: try BEEF.map { try BSVTransaction.BEEF(bytes: $0, limits: codec.beefLimits, transactionOrder: .any) }, outputs: try outputs.map { try $0.model(codec) }, limits: codec.abiLimits) }
 }
 private struct RelinquishOutputDTO: Codable {
     let basket: String; let output: String

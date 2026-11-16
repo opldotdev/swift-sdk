@@ -4,13 +4,21 @@ import BSVTransaction
 import Foundation
 import Testing
 
-/// BEEF bytes produced by the TypeScript SDK (`@bsv/sdk` 4.1.0, `Beef.toBinary()`).
+/// BEEF bytes produced by the TypeScript SDK's `Beef.toBinary()`.
 ///
 /// `Beef.sortTxs()` emits transactions with missing inputs first, then
 /// transactions that do not chain to a proof, then txid-only records, then
-/// proven transactions and their dependents. A child that is not fully proven
-/// therefore lands before its own parents. The TypeScript reader accepts that
-/// order; these vectors pin it so the Swift reader stays compatible.
+/// every proven transaction in the order it was merged, then the transactions
+/// that depend on them. Two orders follow that a parents-first reader refuses:
+/// a child that is not fully proven lands before its own parents, and a proven
+/// child lands before its proven parent whenever the child was merged first.
+/// The second needs nothing unusual: the graph is complete and valid. The
+/// TypeScript reader accepts both; these vectors pin them so the Swift reader
+/// stays compatible.
+///
+/// `missingInput`, `notValid` and `transactionIDOnlyParent` were written by
+/// `@bsv/sdk` 4.1.0 and are byte-identical under 4.1.1. `provenChildFirst` was
+/// written by 4.1.1.
 enum ForeignBEEFVectors {
     /// C spends proven P and an input whose parent is absent. Wire order: C, P.
     static let missingInput = [
@@ -43,6 +51,22 @@ enum ForeignBEEFVectors {
         "01d0070000000000001976a914111111111111111111111111111111111111111188ac00000000027777777777777777",
         "777777777777777777777777777777777777777777777777",
     ].joined()
+
+    /// P1 is mined at height 800000; P2 spends P1 and is mined at 800001. Each comes from its
+    /// own BEEF, merged P2 first, as a funding result merges one proof per reserved output. The
+    /// TypeScript SDK reports the graph valid. Wire order: P2, P1.
+    static let provenChildFirst = [
+        "0200beef02fe01350c000102000258adcb8a1354f21b3729df044cf3817e0bc6f2350dac49570c05ead19ed70fb90100",
+        "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2fe00350c0001020002cc83da3bb1ec91",
+        "b65e47cefb293eb3572aacc36498cee60e77783edb5d0f86940100b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+        "b1b1b1b1b1b1b1b1b1b1b10201000100000001cc83da3bb1ec91b65e47cefb293eb3572aacc36498cee60e77783edb5d",
+        "0f8694000000000151ffffffff01401f0000000000001976a914222222222222222222222222222222222222222288ac",
+        "0000000001010100000001a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a10000000001",
+        "51ffffffff0128230000000000001976a914222222222222222222222222222222222222222288ac00000000",
+    ].joined()
+
+    static let provenParentID = "94860f5ddb3e78770ee6ce9864c3ac2a57b33e29fbce475eb691ecb13bda83cc"
+    static let provenChildID = "b90fd79ed1ea050c5749ac0d35f2c60b7e81f34c04df29371bf254138acbad58"
 }
 
 @Suite("BEEF from TypeScript writers")
@@ -53,6 +77,7 @@ struct ForeignBEEFOrderTests {
             ForeignBEEFVectors.missingInput,
             ForeignBEEFVectors.notValid,
             ForeignBEEFVectors.transactionIDOnlyParent,
+            ForeignBEEFVectors.provenChildFirst,
         ] {
             #expect {
                 try BEEF(hex: hex, limits: foreignLimits())
@@ -76,6 +101,7 @@ struct ForeignBEEFOrderTests {
             ForeignBEEFVectors.missingInput,
             ForeignBEEFVectors.notValid,
             ForeignBEEFVectors.transactionIDOnlyParent,
+            ForeignBEEFVectors.provenChildFirst,
         ] {
             let bytes = try Hex.decode(hex, maximumDecodedByteCount: limits.maximumByteCount)
             let beef = try BEEF(bytes: bytes, limits: limits, transactionOrder: .any)
@@ -113,6 +139,29 @@ struct ForeignBEEFOrderTests {
         )
         // Wire order D, C, P becomes D, P, C: D keeps its place, P moves ahead of C.
         #expect(notValid.transactions.map(\.merklePathIndex) == [nil, 0, nil])
+    }
+
+    @Test("a complete graph with a proven child ahead of its proven parent")
+    func provenChildBeforeProvenParent() throws {
+        let limits = try foreignLimits()
+        let parentID = try TransactionID(displayHex: ForeignBEEFVectors.provenParentID)
+        let childID = try TransactionID(displayHex: ForeignBEEFVectors.provenChildID)
+        #expect {
+            try BEEF(hex: ForeignBEEFVectors.provenChildFirst, limits: limits)
+        } throws: { error in
+            (error as? BEEFError) == .parentAfterChild(parent: parentID, child: childID)
+        }
+        let beef = try BEEF(
+            hex: ForeignBEEFVectors.provenChildFirst,
+            limits: limits,
+            transactionOrder: .any
+        )
+        #expect(try beef.transactions.map { try $0.transactionID(limits: limits.transactionLimits) }
+            == [parentID, childID])
+        // Both keep their own BUMP; the reorder moves records, not proofs.
+        #expect(beef.merklePath(for: parentID)?.blockHeight == 800_000)
+        #expect(beef.merklePath(for: childID)?.blockHeight == 800_001)
+        #expect(beef.transactions.allSatisfy { $0.merklePathIndex != nil })
     }
 
     @Test("records already parents-first keep their order")
@@ -200,17 +249,38 @@ struct ForeignBEEFOrderTests {
         )
         #expect(
             error.localizedDescription
-                == "The wallet's transaction data came back incomplete or out of order. Try again."
+                == "The transaction data lists a transaction before a transaction it spends."
         )
         let missing: Error = BEEFError.missingAncestor(
             transaction: fixture.childID,
             ancestor: fixture.parentID
         )
-        #expect(missing.localizedDescription == error.localizedDescription)
-        let unreadable: Error = BEEFError.invalidVersion(7)
         #expect(
-            unreadable.localizedDescription
-                == "The wallet received transaction data it could not read."
+            missing.localizedDescription
+                == "The transaction data is incomplete: a transaction it depends on is missing."
+        )
+        let extra: Error = BEEFError.unrelatedTransaction(fixture.parentID)
+        #expect(
+            extra.localizedDescription
+                == "The transaction data includes records unrelated to the transaction it proves."
+        )
+        let unreadable: Error = BEEFError.invalidVersion(7)
+        #expect(unreadable.localizedDescription == "The transaction data could not be read.")
+        for described in [error, missing, extra, unreadable] {
+            #expect(!described.localizedDescription.contains("Try again"))
+            #expect(!described.localizedDescription.contains("wallet's"))
+        }
+        // The case and its transaction IDs stay available for a log.
+        let parent = fixture.parentID.displayHex
+        let child = fixture.childID.displayHex
+        #expect(
+            String(reflecting: error)
+                == "BEEFError.parentAfterChild(parent: \(parent), child: \(child))"
+        )
+        #expect(String(reflecting: unreadable) == "BEEFError.invalidVersion(7)")
+        #expect(
+            String(reflecting: BEEFError.duplicateTransactionID(fixture.parentID))
+                == "BEEFError.duplicateTransactionID(\(parent))"
         )
         #expect(!error.localizedDescription.contains("BEEFError"))
     }
