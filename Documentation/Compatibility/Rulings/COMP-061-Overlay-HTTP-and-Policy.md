@@ -74,6 +74,10 @@ the TS hosts:
   that host may have admitted the transaction. `broadcastDetailed` reports each
   host's acknowledged topics and each failure with its error. Hosts past the
   host limit are left out, as TS stops at its host cap, instead of failing.
+  SLAP discovery for a lookup does the same (`LookupHostQueue.ts:20-29`):
+  caller hosts keep their places and discovered hosts fill the rest of the
+  limit in tracker order. Hosts a caller lists directly still throw
+  `limitExceeded` past the limit, as TS throws for more than 32.
   Acknowledgment-policy keys that are not `https://` origins are rejected when
   the broadcaster is made, since no discovered host could match them.
 - **Host normalization.** Discovered hosts, caller-supplied resolver hosts that

@@ -223,6 +223,7 @@ public struct OverlayTopicBroadcaster: Sendable {
 
         let requested = Set(topics)
         var hosts: [OverlayHost: Set<OverlayTopic>] = [:]
+        var skipped = 0
         for output in outputs {
             guard
                 let token = verifiedAdvertisement(
@@ -236,9 +237,15 @@ public struct OverlayTopicBroadcaster: Sendable {
                     token, policy: discoveredHostPolicy, limits: limits)
             else { continue }
             guard hosts[host] != nil || hosts.count < limits.maximumResolutionHostCount else {
+                skipped += 1
                 continue
             }
             hosts[host, default: []].insert(topic)
+        }
+        if skipped > 0 {
+            OverlayLog.skippedHosts(
+                "OverlayTopicBroadcaster.broadcast", count: skipped,
+                limit: limits.maximumResolutionHostCount)
         }
         return hosts
     }

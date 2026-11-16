@@ -7,7 +7,8 @@ import os
 /// The HTTPS facilitators log each failed request through `NetworkLog`. This
 /// log records what the resolver and broadcaster then leave out: a host that
 /// failed, a STEAK that was empty or acknowledged a topic that was not sent,
-/// and an output whose transaction could not be read. Hosts are origins and
+/// an output whose transaction could not be read, and advertised hosts past
+/// the host limit. Hosts are origins and
 /// errors are logged in full; no payload bytes are written.
 enum OverlayLog {
     static let subsystem = "dev.opl.swift-sdk"
@@ -26,6 +27,10 @@ enum OverlayLog {
                 + "\(rejection.host.rawValue) left out: "
                 + "\(type(of: rejection.error)): \(String(reflecting: rejection.error))"
         )
+    }
+
+    static func skippedHosts(_ operation: String, count: Int, limit: Int) {
+        error("\(operation): \(count) advertised host(s) left out past the limit of \(limit)")
     }
 
     private static func error(_ message: String) {

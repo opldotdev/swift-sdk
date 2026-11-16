@@ -170,14 +170,24 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
         } else if let override = hostOverrides[service] {
             primary = override
         } else {
-            primary = try await discoverHosts(for: service)
+            primary = try await discoverHosts(
+                for: service, alongside: Set(additionalHosts[service] ?? []))
         }
         let combined = Self.uniqueSorted(primary + (additionalHosts[service] ?? []))
         try Self.validateHosts(combined, limits: limits)
         return combined
     }
 
-    private func discoverHosts(for service: OverlayService) async throws -> [OverlayHost] {
+    /// Asks the SLAP trackers which hosts serve `service`. Caller hosts in
+    /// `alongside` keep their places; discovered hosts fill the rest of the
+    /// host limit in the order the trackers listed them, and later ones are
+    /// left out, as `LookupHostQueue.add` in @bsv/sdk does
+    /// (`overlay-tools/LookupHostQueue.ts:20-29`). A flood of advertisements
+    /// therefore cannot stop a lookup.
+    private func discoverHosts(
+        for service: OverlayService,
+        alongside callerHosts: Set<OverlayHost>
+    ) async throws -> [OverlayHost] {
         guard !slapTrackers.isEmpty else { return [] }
         let slapService: OverlayService
         do {
@@ -196,6 +206,7 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
             throw OverlayPolicyError.noSuccessfulResponses
         }
         var discovered: Set<OverlayHost> = []
+        var skipped = 0
         for case (_, .success(.outputList(let outputs))) in results {
             for output in outputs {
                 guard
@@ -208,15 +219,19 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
                     let host = advertisedHTTPSHost(
                         token, policy: discoveredHostPolicy, limits: limits)
                 else { continue }
-                discovered.insert(host)
-                guard discovered.count <= limits.maximumResolutionHostCount else {
-                    throw OverlayError.limitExceeded(
-                        name: "resolvedHosts",
-                        actual: discovered.count,
-                        maximum: limits.maximumResolutionHostCount
-                    )
+                guard !callerHosts.contains(host), !discovered.contains(host) else { continue }
+                guard discovered.count + callerHosts.count < limits.maximumResolutionHostCount
+                else {
+                    skipped += 1
+                    continue
                 }
+                discovered.insert(host)
             }
+        }
+        if skipped > 0 {
+            OverlayLog.skippedHosts(
+                "LookupResolver.discoverHosts", count: skipped,
+                limit: limits.maximumResolutionHostCount)
         }
         return discovered.sorted()
     }

@@ -606,6 +606,31 @@ struct OverlayTSParityTests {
         }
     }
 
+    @Test("Discovered lookup hosts past the host limit are left out, not an error")
+    func discoveredHostLimitTruncates() async throws {
+        let limits = try overlayLimits(maximumNameBytes: 256, maximumHosts: 2)
+        let tracker = try OverlayHost(rawValue: "https://tracker.example")
+        let service = try OverlayService(rawValue: "ls_records")
+        let caller = try OverlayHost(rawValue: "https://caller.example")
+        let outputs = try [
+            advertisementItem("SLAP", host: "https://a.example", subject: service.rawValue, key: 120),
+            advertisementItem("SLAP", host: "https://caller.example", subject: service.rawValue, key: 121),
+            advertisementItem("SLAP", host: "https://b.example", subject: service.rawValue, key: 122),
+            advertisementItem("SLAP", host: "https://c.example", subject: service.rawValue, key: 123),
+        ]
+        let resolver = try LookupResolver(
+            facilitator: ParityLookupMock(responses: [tracker: try LookupAnswer(outputList: outputs)]),
+            slapTrackers: [tracker],
+            additionalHosts: [service: [caller]],
+            beefLimits: try beefLimits(),
+            limits: limits
+        )
+        #expect(
+            try await resolver.competentHosts(for: service).map(\.rawValue) == [
+                "https://a.example", "https://caller.example",
+            ])
+    }
+
     @Test("Hosts past the host limit are left out, not an error")
     func hostLimitTruncates() async throws {
         let topic = try OverlayTopic(rawValue: "tm_a")
