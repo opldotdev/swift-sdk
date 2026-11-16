@@ -3,36 +3,82 @@
 ## Decision
 
 `BSVAuth` supports signed certificate-request and certificate-response messages.
-A request contains a nonempty bounded set of certifiers and a bounded map of
-certificate types to field names. The map and each field list may be empty, as
-in `@bsv/sdk` 4.1.1 (`AuthMessageValidation.ts:122`). A response is an
-allowlist answer to the pending request: each certificate must have a requested
-certifier and type and reveal a nonempty subset of that type's fields. A
-response may contain no certificates (`Peer.ts:359-389`, `Peer.ts:1117`).
+A request contains a bounded set of certifiers and a bounded map of
+certificate types to field names. The certifier set, the map and each field
+list may be empty, as in `@bsv/sdk` 4.1.1 (`AuthMessageValidation.ts:122`,
+`:134-136`). A request with no certifiers asks for nothing: Swift sends it
+without awaiting an answer, and a received one authenticates the sender and
+needs no answer (`Peer.ts:1097-1100`).
+
+A response is an allowlist answer to an open request: each certificate must
+name the responder as subject, have a requested certifier and type, and reveal
+a nonempty subset of that type's fields. A response may contain no
+certificates (`Peer.ts:359-389`, `Peer.ts:1117`).
 
 Certificate messages carry the sender's session nonce in `initialNonce`
 (`AuthMessageValidation.ts:404`, `:415`). Swift sends it and requires it to
 equal the session nonce it holds for the peer.
 
+### Open requests
+
+Each direction of a session may have up to 16 open requests at once, as
+`Peer.ts:474-478` keeps one per request nonce. A seventeenth request, sent or
+received, fails with `AuthError.resourceLimit` and leaves the session open.
+A response settles the oldest open request it fits (`Peer.ts:1236-1240`); an
+empty response declines the oldest. `makeCertificateResponse(_:using:answering:)`
+can name the request being answered instead. A response that fits no open
+request, or arrives when none is open, is refused.
+
+### Handshake policies
+
 A certificate policy in a received `initialRequest` or `initialResponse` is
 returned as a certificate-request action (`Peer.ts:644-650`, `Peer.ts:866-875`).
-A handshake policy without certifiers means no request. A certificate-request
-message without certifiers is rejected; TypeScript accepts one, but it asks for
-nothing. The peer may answer a handshake request before the other side sends
-its first signed message. A policy in `initialRequest` is unsigned, so answer
-it only with wallet-proved keyrings, which are encrypted to the claimed
-identity.
+A handshake policy without certifiers means no request. The peer may answer a
+handshake request before the other side sends its first signed message. A
+policy in `initialRequest` is unsigned, so answer it only with wallet-proved
+keyrings, which are encrypted to the claimed identity.
 
-`PeerAuthenticator` verifies the peer message signature and correlates one
-response with one pending request. This verification does not establish
-certificate trust. The caller must use `AuthCertificateExchange.validate` to
-verify each BRC-52 certificate, bind the subject to the peer, decrypt every
-requested field, and apply its own trust and revocation policy.
+Swift sends a policy in the same places. `beginAuthentication(requesting:)`
+puts one in `initialRequest`. `PeerAuthenticator(certificatesToRequest:)` sets
+a policy that a responder puts in every `initialResponse` and that an
+initiator uses when `beginAuthentication` names none. A TypeScript `AuthFetch`
+client answers a responder policy on its own with a `certificateResponse`
+(`AuthFetch.ts:496-511`); Swift returns that as a certificate-response action.
+Certificates a peer includes in `initialResponse` are checked against the
+policy Swift sent and returned as a certificate response, and are ignored when
+none was sent. They are not covered by any signature (`Peer.ts:960-982`).
+
+### Validation
+
+`PeerAuthenticator` verifies the peer message signature and correlates each
+response with one open request. This does not establish certificate trust.
+The caller validates the certificates with `AuthCertificateExchange`:
+
+- `validate` requires every requested type and every requested field of each
+  certificate. It fails when given no certificates.
+- `validateSubset` accepts what `validateCertificates` in `@bsv/sdk` accepts
+  (`validateCertificates.ts:23-29`): a nonempty subset of the requested fields
+  for each certificate, with requested types allowed to be missing. It returns
+  an empty result for no certificates. The caller decides whether what was
+  disclosed is enough.
+
+Both verify each BRC-52 signature, bind the subject to the peer, decrypt every
+revealed field, and fail as a whole when any certificate fails. The caller
+still applies its own trust and revocation policy.
 
 The wallet preparation helper lists certificates and proves exactly the
 requested fields for the verifier. It fails unless it can satisfy every
-requested certificate type. `AuthCertificateExchange.validate` also requires
-every requested field. Both are caller policy; the wire accepts subsets.
+requested certificate type.
+
+### Errors
+
+Errors stay short and name no side, so the same text fits Swift as client or
+server. The detailed cause of a refused message or certificate, such as the
+underlying `BRC104Error`, JSON or certificate decoding error, or which
+certificate failed which check, is written to the system log through
+`os.Logger` with subsystem `dev.opl.swift-sdk` and category `BSVAuth`.
+The reasons `BSVAuth` writes hold no certificate field value, keyring,
+nonce or signature; an underlying error is written as it describes itself.
 
 ## Compatibility
 
@@ -61,13 +107,11 @@ U+2028 and U+2029 are not escaped. When Swift sends, it writes certificate
 types, fields and keyring entries in UTF-8 byte order, with array-index names
 first as JavaScript orders them, and puts the same bytes on the wire.
 
-Swift ignores certificates that arrive in `initialResponse`. The certificate
-trust decision stays with the caller through the signed certificate-response
-message.
-
-The BRC-104 requested-certificate HTTP header remains unavailable. The Go
-transport does not bind that header to the signed general-message payload. A
-caller must use the signed BRC-103 certificate-request message.
+The BRC-104 `x-bsv-auth-requested-certificates` header is read and written
+(COMP-059) but not acted on, as `Peer.processGeneralMessage` does not act on
+it. Neither the Go nor the TypeScript transport binds that header to the
+signed general-message payload, so a caller asks with the signed BRC-103
+certificate-request message or a handshake policy.
 
 ## Exclusions
 
@@ -89,6 +133,8 @@ these broke certificate exchange with TypeScript in one direction or both:
   `TypeScriptInteropTests.foundationSortedKeysOrder` records this.
 - TypeScript rejects certificate messages without `initialNonce`.
 - TypeScript answers a request with any allowed subset, including none.
+- TypeScript keeps several requests open and sends a responder policy in
+  `initialResponse`, which `AuthFetch` answers on its own.
 
 `TypeScriptAuthVectors.md` lists the vectors and the check of Swift messages
 against a live TypeScript peer.

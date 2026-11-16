@@ -37,8 +37,16 @@ that the pinned Go verifier accepts.
 The BRC-104 codec is transport-neutral. It binds a 32-byte request identifier
 to the method, path, optional query, selected headers, body, or response status.
 It uses canonical CompactSize values and explicit payload and header limits.
-It excludes all `x-bsv-auth-*` headers from the signed payload, rejects
-duplicate headers, and sorts selected header names by lowercase UTF-8 bytes.
+It excludes every header whose name starts with `x-bsv-auth` from the signed
+payload, as `AuthFetch.ts:727` does, rejects duplicate headers, and sorts the
+lowercase selected header names in `localeCompare` order (`AuthFetch.ts:740`).
+That order differs from the Go SDK's UTF-8 byte order only where names differ
+at a `_`: `localeCompare` puts `x-bsv-a_b` before `x-bsv-a-b`, `x-bsv-a1` and
+`x-bsv-ab`, and byte order puts it after them. A signed header value must be
+printable ASCII without leading or trailing spaces, because `fetch` trims
+values and reads them as Latin-1 before a TypeScript client rebuilds the
+payload; Swift refuses other values rather than sign bytes the peer will not
+see.
 
 An absent or empty body is written as -1, never 0, in requests and responses.
 When a client encodes a POST, PUT, PATCH or DELETE request with an absent body

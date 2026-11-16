@@ -42,6 +42,11 @@ The vectors cover:
   certifiers;
 - a certificate signed by `Certificate.sign` with mixed-case and punctuated
   field names, and its unsigned binary.
+- an `AuthFetch` client with a certificate in its wallet answering the
+  certificate policy in a Swift server's initialResponse: its initialRequest,
+  the initialResponse the Swift server signs, the certificateResponse
+  `AuthFetch` posts on its own (fields `Zip` and `age` revealed, `name`
+  withheld), and the headers of the GET that follows.
 
 ## Regenerating
 
@@ -329,6 +334,69 @@ const out: Record<string, unknown> = { tsIdentity: T, swiftIdentity: S, certifie
   }, '{}', new URL('https://h.example/h'), fill(0x07, 32))).toArray())
 }
 
+// ---------------- Scenario 4: Swift server policy answered by a TS AuthFetch client ----------------
+{
+  resetRandom(4)
+  const certType = b64(fill(0x91, 32))
+  const serial = b64(fill(0x92, 32))
+  const plaintext: Record<string, string> = { Zip: '73301', age: '41', name: 'Bob' }
+  const master = await MasterCertificate.issueCertificateForSubject(
+    certifierWallet, T, plaintext, certType, async () => '00'.repeat(32) + '.0', serial)
+  class CertWallet extends ProtoWallet {
+    async listCertificates () {
+      return {
+        totalCertificates: 1,
+        certificates: [{
+          type: master.type, serialNumber: master.serialNumber, subject: master.subject,
+          certifier: master.certifier, revocationOutpoint: master.revocationOutpoint,
+          fields: master.fields, signature: master.signature
+        }]
+      }
+    }
+    async proveCertificate (args: any) {
+      return {
+        keyringForVerifier: await MasterCertificate.createKeyringForVerifier(
+          tsWallet, C, args.verifier, master.fields, args.fieldsToReveal, master.masterKeyring, serial)
+      }
+    }
+  }
+  const serverPolicy = { certifiers: [C], types: { [certType]: ['Zip', 'age'] } }
+  out.serverPolicy = serverPolicy
+  out.serverPolicyPlaintext = plaintext
+  const serverNonce = b64(fill(0x61, 48))
+  const captured: any[] = []
+  const fetchMock = async (url: string, init: any) => {
+    const headers: Record<string, string> = {}
+    new Headers(init.headers).forEach((v, k) => { headers[k] = v })
+    let body: number[] | null = null
+    if (init.body != null) {
+      body = typeof init.body === 'string' ? Utils.toArray(init.body, 'utf8') : Array.from(init.body as Uint8Array)
+    }
+    captured.push({ url, method: init.method, headers, body: body == null ? null : Utils.toUTF8(body) })
+    if (url.endsWith('/.well-known/auth')) {
+      const request = JSON.parse(Utils.toUTF8(body!))
+      if (request.messageType !== 'initialRequest') return new Response(null, { status: 204 })
+      const clientNonce = request.initialNonce
+      const { signature } = await swiftWallet.createSignature({
+        data: [...Utils.toArray(clientNonce, 'base64'), ...Utils.toArray(serverNonce, 'base64')],
+        protocolID: [2, 'auth message signature'],
+        keyID: `${clientNonce} ${serverNonce}`,
+        counterparty: request.identityKey
+      })
+      const response = {
+        version: '0.1', messageType: 'initialResponse', identityKey: S, nonce: serverNonce,
+        initialNonce: serverNonce, yourNonce: clientNonce, signature, requestedCertificates: serverPolicy
+      }
+      out.serverPolicyInitialResponse = JSON.stringify(response)
+      return new Response(JSON.stringify(response), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    throw new Error('captured')
+  }
+  const client = new AuthFetch(new CertWallet(tsKey), undefined, undefined, undefined, {}, fetchMock as any)
+  try { await client.fetch('https://swift.example/b', { method: 'GET' }) } catch (e) { out.policyGetError = String(e) }
+  out.policyAuthFetch = captured
+}
+
 console.log(JSON.stringify(out, null, 1))
 ```
 
@@ -486,6 +554,28 @@ L.append(f'    static let mixedCaseCertificatePreimage =\n        "{v["mixedCase
 L.append('')
 L.append('    /// `AuthFetch.serializeRequest` with headers sorted by `localeCompare` (`AuthFetch.ts:740`).')
 L.append(f'    static let serializedHeaderOrder =\n        "{v["serializedHeaderOrder"]}"')
+pf=v['policyAuthFetch']
+assert len(pf)==3 and pf[2]['body'] is None and len(pf[2]['headers'])==6
+L.append('')
+L.append('    /// A TS `AuthFetch` client whose wallet holds a certificate, against a Swift server')
+L.append('    /// (nonce 48 bytes of 0x61) whose policy is `serverPolicyFields` of')
+L.append('    /// `serverPolicyCertificateType`: its handshake body, the initialResponse the server')
+L.append('    /// was expected to send, the certificateResponse `AuthFetch` then posted on its own')
+L.append('    /// (`clients/AuthFetch.ts:496-511`), and the headers of the GET it sent next.')
+L.append(f'    static let policyInitialRequest =\n        {raw(pf[0]["body"])}')
+L.append(f'    static let policyInitialResponse =\n        {raw(v["serverPolicyInitialResponse"])}')
+L.append(f'    static let policyCertificateResponse =\n        {raw(pf[1]["body"])}')
+L.append('    static let policyGetPath = "/b"')
+L.append('    static let policyGetHeaders: [(name: String, value: String)] = [')
+for k,val in sorted(pf[2]['headers'].items()):
+    L.append(f'        ("{k}", "{val}"),')
+L.append('    ]')
+L.append('    static let serverPolicyCertificateType = [UInt8](repeating: 0x91, count: 32)')
+L.append('    static let serverPolicyFields = [' + ', '.join(json.dumps(f) for f in list(v['serverPolicy']['types'].values())[0]) + ']')
+L.append('    static let serverPolicyPlaintext: [(name: String, value: String)] = [')
+for k,val in v['serverPolicyPlaintext'].items():
+    L.append(f'        ({json.dumps(k)}, {json.dumps(val)}),')
+L.append('    ]')
 L.append('}')
 open(sys.argv[2],'w').write('\n'.join(L)+'\n')
 ```
