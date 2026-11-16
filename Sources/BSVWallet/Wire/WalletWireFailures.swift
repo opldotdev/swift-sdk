@@ -1,3 +1,5 @@
+import Foundation
+
 /// A result the wallet wire answers with an error frame, as `@bsv/sdk` 4.1.1 does.
 ///
 /// The codecs throw this when a wallet result has no success encoding (for
@@ -14,6 +16,20 @@ public struct WalletWireResultRejection: Error, Equatable, Sendable, CustomStrin
     }
 
     public var description: String { "WalletWireResultRejection(code: \(code), message: \(message))" }
+}
+
+/// Plain sentences a wallet can show. `message` keeps the exact `@bsv/sdk`
+/// text that goes on the wire, and `description` keeps code and message for logs.
+extension WalletWireResultRejection: LocalizedError {
+    public var errorDescription: String? {
+        if code == WalletWireErrorCode.abortRefused {
+            return "The wallet could not cancel this action because it was already broadcast."
+        }
+        if message.hasPrefix("Invalid ") || message.hasPrefix("Wallet Wire ") || message.hasPrefix("Missing ") {
+            return "The wallet's answer was not in a form the other side can read."
+        }
+        return message.hasSuffix(".") ? message : message + "."
+    }
 }
 
 /// Error codes shared with `@bsv/sdk` `walletErrors`.
