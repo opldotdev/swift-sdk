@@ -294,7 +294,9 @@ struct OverlayTSWireTests {
     // A 4-transaction, 2-BUMP BEEF from `@bsv/sdk` `Beef.toBinary`, and
     // `toBinaryAtomic` of B (`transaction/Beef.ts:385-475`). M1 is proven by
     // BUMP 0 and M2 by BUMP 1; A spends M1:0 and B spends M2:0; the records are
-    // written M1, M2, B, A. Atomic B keeps only BUMP 1, renumbered 0.
+    // written M1, M2, B, A. Atomic B keeps only BUMP 1, renumbered 0. The
+    // records arrive parents first, so the bytes match TS; when a child comes
+    // before its parents, Swift may write the kept BUMPs in another order.
     static let bumpedShared =
         "0200beef02640102000243c78955a7a87a2d73710d5f5708974577bbb50254cc172bee459f74345368ab"
         + "0100aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa6501020000aaaaaa"
