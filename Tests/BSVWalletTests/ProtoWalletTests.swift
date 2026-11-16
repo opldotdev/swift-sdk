@@ -214,7 +214,10 @@ final class ProtoWalletTests: XCTestCase {
         ))
     }
 
-    func testCounterpartyProofSerializesResponseAsBRC97MinimalInteger() async throws {
+    /// `@bsv/sdk` 4.1.1 writes z as `linkageProof.z.toArray('be', 32)`
+    /// (packages/sdk/src/wallet/ProtoWallet.ts:196), so a response with a
+    /// leading zero byte keeps it and the proof is always 98 bytes (W7).
+    func testCounterpartyProofSerializesResponseAsFixed32ByteInteger() async throws {
         let proverKey = try PrivateKey(scalar(7))
         let counterpartyKey = try PrivateKey(scalar(13))
         let verifierKey = try PrivateKey(scalar(17))
@@ -263,9 +266,9 @@ final class ProtoWalletTests: XCTestCase {
             counterparty: .publicKey(proverKey.publicKey),
             ciphertext: result.encryptedLinkageProof.bytes
         )).plaintext
-        let expectedResponse = Array(selectedResponse.drop(while: { $0 == 0 }))
-        XCTAssertEqual(Array(proofBytes.dropFirst(66)), expectedResponse)
-        XCTAssertLessThan(proofBytes.count, 98)
+        XCTAssertEqual(selectedResponse.first, 0)
+        XCTAssertEqual(Array(proofBytes.dropFirst(66)), selectedResponse)
+        XCTAssertEqual(proofBytes.count, 98)
     }
 
     func testSpecificKeyLinkageMatchesBRC69BRC72AndProofTypeZero() async throws {
@@ -440,6 +443,76 @@ final class ProtoWalletTests: XCTestCase {
             let failing = ProtoWallet(rootKey: root, limits: limits, randomSource: source)
             await XCTAssertThrowsErrorAsync(try await failing.encrypt(WalletEncryptRequest(protocolID: protocolID, keyID: keyID, plaintext: []))) { error in
                 XCTAssertEqual(error as? WalletCryptoError, .randomGenerationFailed)
+            }
+        }
+    }
+
+    /// BRC-56 HMAC key vectors from `@bsv/sdk` 4.1.1
+    /// (packages/sdk/src/wallet/__tests/ProtoWallet.brc56-hmac-key.test.ts:9-70).
+    /// Tags use the minimal-length X coordinate as the HMAC key (W1, COMP-064).
+    /// TypeScript rejects `rejectedTag` (made with the zero-padded 32-byte key);
+    /// Swift still accepts it so tags Swift and Go peers made before the switch
+    /// keep verifying.
+    func testBRC56HMACKeyVectorsMatchTypeScript() async throws {
+        let rootKey = try PrivateKey(walletTestHex(
+            "f0efba88c117ca2614554bb676d743f413822a31e3c8d70cfcc5fff119d20a07"
+        ))
+        XCTAssertEqual(
+            Hex.encode(rootKey.publicKey.compressedBytes),
+            "035818cd7cc614fea816c8b39eebe6e43cafc635451ec5a873f8757b418aaae91a"
+        )
+        let counterparty = try PublicKey(walletTestHex(
+            "03458d551018414b8fe1adbcef2d0afc17e1074bfab3fdde3e1b0750bdde58a9a7"
+        ))
+        let protocolID = try WalletProtocolID(securityLevel: .everyAppAndCounterparty, name: "hmac key vectors")
+        let data = try walletTestHex("4252432d353620484d41432074657374")
+        let vectors: [(WalletCounterparty, String, String, String, String?)] = [
+            (.self, "k0",
+             "b1273850ff41cee365a4d590e3c323822129f66c5a9b2eacb8b9e790e000e396",
+             "99455edf49ea2156f6109466fb344c3027d4c14485581a50bf5ff0850328a269", nil),
+            (.self, "k95",
+             "0c82ac78dc853158f24883ccfda332be6ba34f821765357cc4ef2a190a28fd",
+             "3a968ebaa25eaa4b1cfad138f96105bb1eb738defc066d01e37b32595900d48b",
+             "054a0fc6a3b0e21b31dc627fb1d645f2eea4127dff71eac95b1f71b7cb13c787"),
+            (.self, "k91538",
+             "9dc11102cc72eca3c6e4e232460eac581e9b2cee1bb35c395b635d3f6393",
+             "5a8b84fb2a7d9ce7b12feb8319f14dc6169e0be005a1a8e58d9b9b2d1ac29d47",
+             "ff43127cb1ddfbd19776d01ce34b8c3e83916b51fa55ac045a355b731e6999f5"),
+            (.publicKey(counterparty), "k0",
+             "1896e0210afac8dbb4ca3bd4ea25c8377d0352ab83e62fe6ffabeca78c1a6113",
+             "986af579272261acf3e890bb1650124b0dfbc0b1edacda202f8ed0c3b876c072", nil),
+            (.publicKey(counterparty), "k497",
+             "1829e1dd58fc2c45b6edcbb277eecdecbab1c884b42fd779e131fea5881b45",
+             "3a5ea2bf5bcc9bc1461041737384bf258b0a3e5a475fb281a19c2972cdb1cff6",
+             "aa39467c48a116ffb00fd7b56ff158bd9af37d1298df2f031c0125458c30f574"),
+            (.publicKey(counterparty), "k29510",
+             "a52a35523175d6c181e90f463a27cdbf70f4ecf055e912d6fc24ac7d0e3c",
+             "ecca769bb17b1775ce8ae4326fe721ba0f7ba272300741bf4a5b068cf0cebd60",
+             "2677674035f1aaac3219b3405cf8569ec07922a3ceffbd4f7c8a7948b2d3c553"),
+        ]
+        let wallet = ProtoWallet(rootKey: rootKey)
+        let deriver = WalletKeyDeriver(rootKey: rootKey)
+        for (party, keyIDText, hmacKey, tag, paddedTag) in vectors {
+            let keyID = try WalletKeyID(keyIDText)
+            let symmetric = try deriver.deriveSymmetricKey(
+                protocolID: protocolID, keyID: keyID, counterparty: party
+            )
+            XCTAssertEqual(Hex.encode(walletHMACKey(symmetric.bytes)), hmacKey, keyIDText)
+            let created = try await wallet.createHMAC(WalletCreateHMACRequest(
+                protocolID: protocolID, keyID: keyID, counterparty: party, data: data
+            ))
+            XCTAssertEqual(Hex.encode(created.hmac.bytes), tag, keyIDText)
+            let valid = try await wallet.verifyHMAC(WalletVerifyHMACRequest(
+                protocolID: protocolID, keyID: keyID, counterparty: party, data: data,
+                hmac: WalletHMAC(bytes: walletTestHex(tag))
+            )).valid
+            XCTAssertTrue(valid, keyIDText)
+            if let paddedTag {
+                let paddedValid = try await wallet.verifyHMAC(WalletVerifyHMACRequest(
+                    protocolID: protocolID, keyID: keyID, counterparty: party, data: data,
+                    hmac: WalletHMAC(bytes: walletTestHex(paddedTag))
+                )).valid
+                XCTAssertTrue(paddedValid, "padded-key tag \(keyIDText)")
             }
         }
     }

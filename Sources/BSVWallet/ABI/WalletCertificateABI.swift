@@ -74,11 +74,7 @@ public struct WalletRevealSpecificKeyLinkageRequest: Equatable, Sendable {
         keyID: WalletKeyID,
         privilege: WalletPrivilege = .standard
     ) throws {
-        guard case .publicKey = counterparty else {
-            throw WalletABIError.invalidFieldRelation(
-                "specific key linkage requires a concrete counterparty public key"
-            )
-        }
+        // `self` and `anyone` resolve to concrete keys, as @bsv/sdk 4.1.1 does (W6).
         self.counterparty = counterparty
         self.verifier = verifier
         self.protocolID = protocolID
