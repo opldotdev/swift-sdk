@@ -77,6 +77,12 @@ struct WalletWireTypeScript41VectorTests {
         #expect(!walletIsBalanceBasket(" balance"))
         #expect(!walletIsBalanceBasket("\u{85}balance default"))
         #expect(!walletIsBalanceBasket("p  balance tokens"))
+        // The pattern matches code units: a space followed by a combining
+        // mark is still a space, and `[^ ]+` admits a tab.
+        #expect(walletIsBalanceBasket("balance \u{301}x"))
+        #expect(walletIsBalanceBasket("p \u{301}m balance x"))
+        #expect(walletIsBalanceBasket("p a\tb balance x"))
+        #expect(!walletIsBalanceBasket("p m \u{301}balance x"))
 
         let request = WalletWireActionRequest.listOutputs(
             try WalletListOutputsRequest(basket: "balance default")

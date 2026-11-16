@@ -869,13 +869,19 @@ public struct WalletInternalizeActionResult: Equatable, Sendable {
 /// `" Balance Tickets"` is a balance query there and here. The TypeScript
 /// wire codecs test the raw basket instead (`WalletWireProcessor.ts:1296`,
 /// `WalletWireTransceiver.ts:726`).
+///
+/// The pattern is matched on UTF-8 bytes, as the JavaScript regular
+/// expression matches code units, so a space followed by a combining mark is
+/// still a space.
 public func walletIsBalanceBasket(_ basket: String) -> Bool {
-    let basket = walletNormalizedIdentifier(basket)
-    if basket.hasPrefix("balance ") { return true }
-    guard basket.hasPrefix("p ") else { return false }
-    let rest = basket.dropFirst(2)
-    guard let space = rest.firstIndex(of: " "), space != rest.startIndex else { return false }
-    return rest[rest.index(after: space)...].hasPrefix("balance ")
+    let bytes = Array(walletNormalizedIdentifier(basket).utf8)
+    let balance = Array("balance ".utf8)
+    if bytes.starts(with: balance) { return true }
+    guard bytes.starts(with: Array("p ".utf8)) else { return false }
+    let rest = bytes.dropFirst(2)
+    // `[^ ]+`: UTF-8 never encodes another scalar with a 0x20 byte.
+    guard let space = rest.firstIndex(of: 0x20), space != rest.startIndex else { return false }
+    return rest[(space + 1)...].starts(with: balance)
 }
 
 /// A basket, label or tag as `@bsv/sdk` `validateIdentifier` normalises it:
