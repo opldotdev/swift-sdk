@@ -45,6 +45,7 @@ struct AuthGoOracleTests {
             let peer = try privateKey(10)
             let certifier = try privateKey(11)
             let nonce = Base64Encoding.encode([UInt8](repeating: 4, count: 32))
+            let sessionNonce = Base64Encoding.encode([UInt8](repeating: 5, count: 48))
             let type = try CertificateTypeID([UInt8](repeating: 0x21, count: 32))
             let field = try CertificateFieldName("email")
             let escapedField = try CertificateFieldName("<&\u{2028}")
@@ -57,6 +58,7 @@ struct AuthGoOracleTests {
                 messageType: .certificateRequest,
                 identityKey: requester.publicKey,
                 nonce: nonce,
+                initialNonce: sessionNonce,
                 yourNonce: nonce,
                 signature: signature.derBytes,
                 requestedCertificates: request
@@ -95,6 +97,7 @@ struct AuthGoOracleTests {
                 messageType: .certificateResponse,
                 identityKey: peer.publicKey,
                 nonce: nonce,
+                initialNonce: sessionNonce,
                 yourNonce: nonce,
                 signature: signature.derBytes,
                 certificates: [verifiable]

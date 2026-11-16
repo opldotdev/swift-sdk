@@ -6,8 +6,14 @@ public typealias AuthenticationWallet = WalletPublicKeyProviding & WalletSignatu
 
 /// The certificate types, certifiers, and disclosed fields that a peer requests.
 ///
-/// An instance is always nonempty. Use `nil` on `AuthMessage` when no
-/// certificates are requested.
+/// A set with no certifiers asks for nothing. `@bsv/sdk` 4.1.1 sends one as
+/// `{"certifiers":[],"types":{}}` and treats it as no request
+/// (`Peer.ts:836-838`, `Peer.ts:1097-1100`); `PeerAuthenticator` does the same.
+///
+/// As in `@bsv/sdk` 4.1.1 (`AuthMessageValidation.ts:122-180`), the type map
+/// and each field list may be empty. The set is an allowlist: a response may
+/// carry any subset of the listed types and a nonempty subset of each type's
+/// fields. `AuthCertificateExchange.validate` checks completeness.
 public struct AuthRequestedCertificateSet:
     Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible,
     CustomReflectable
@@ -20,8 +26,7 @@ public struct AuthRequestedCertificateSet:
         certificateTypes: [CertificateTypeID: [CertificateFieldName]],
         limits: AuthLimits = .standard
     ) throws {
-        guard !certifiers.isEmpty, !certificateTypes.isEmpty,
-            certifiers.count <= limits.maximumCertificateCertifierCount,
+        guard certifiers.count <= limits.maximumCertificateCertifierCount,
             certificateTypes.count <= limits.maximumCertificateTypeCount,
             Set(certifiers).count == certifiers.count
         else { throw AuthError.invalidCertificateRequest }
@@ -33,8 +38,7 @@ public struct AuthRequestedCertificateSet:
         else { throw AuthError.resourceLimit }
         var aggregate = certifierBytes
         for fields in certificateTypes.values {
-            guard !fields.isEmpty,
-                fields.count <= limits.maximumCertificateFieldCount,
+            guard fields.count <= limits.maximumCertificateFieldCount,
                 Set(fields).count == fields.count
             else { throw AuthError.invalidCertificateRequest }
             let (fieldBytes, overflow) = fields.reduce(into: (0, false)) { result, field in
@@ -50,6 +54,16 @@ public struct AuthRequestedCertificateSet:
 
         self.certifiers = certifiers
         self.certificateTypes = certificateTypes
+    }
+
+    /// The bytes the set is charged in `AuthLimits.maximumCertificateAggregateBytes`:
+    /// 33 per certifier, and 32 per type plus the UTF-8 length of its field names.
+    /// `init` keeps this within the limit, so the sum cannot overflow.
+    var accountedBytes: Int {
+        certifiers.count * 33
+            + certificateTypes.values.reduce(0) { total, fields in
+                total + 32 + fields.reduce(0) { $0 + $1.value.utf8.count }
+            }
     }
 
     public var description: String { "<redacted requested certificate set>" }
@@ -115,6 +129,11 @@ public struct AuthReceivedMessage: Equatable, Sendable, CustomStringConvertible,
         Mirror(self, children: EmptyCollection<(label: String?, value: Any)>())
     }
 }
+/// A certificate request from a peer.
+///
+/// A request carried in `initialRequest` arrives before the peer has signed
+/// anything, so `peer` is only the identity it claims. Answer it only with
+/// wallet-proved keyrings, which are encrypted to that identity.
 public struct AuthReceivedCertificateRequest:
     Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible,
     CustomReflectable
@@ -132,9 +151,12 @@ public struct AuthReceivedCertificateResponse:
     Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible,
     CustomReflectable
 {
-    /// The peer response signature is valid. Call
-    /// `AuthCertificateExchange.validate` before you trust the certificates or
-    /// disclosed fields.
+    /// Certificates the peer sent for `requested`. From a certificateResponse
+    /// message, the peer's message signature over them is valid. From an
+    /// `initialResponse`, they are not covered by any message signature
+    /// (`Peer.ts:912-915`). In both cases call `AuthCertificateExchange.validate`
+    /// or `validateSubset` before you trust the certificates or disclosed
+    /// fields.
     public let sessionID: AuthSessionID
     public let peer: PublicKey
     public let requested: AuthRequestedCertificateSet
@@ -175,12 +197,29 @@ public struct AuthMessage: Equatable, Sendable, CustomStringConvertible,
     public let signature: [UInt8]?
     public let certificates: [VerifiableCertificate]?
     public let requestedCertificates: AuthRequestedCertificateSet?
+    /// The certificate JSON text a decoded certificate message signs, rebuilt
+    /// from the received member order. `nil` for messages built in memory.
+    let receivedSigningBytes: [UInt8]?
     public init(
         version: String = "0.1", messageType: AuthMessageType, identityKey: PublicKey,
         nonce: String? = nil, initialNonce: String? = nil, yourNonce: String? = nil,
         payload: [UInt8]? = nil, signature: [UInt8]? = nil,
         certificates: [VerifiableCertificate]? = nil,
         requestedCertificates: AuthRequestedCertificateSet? = nil
+    ) {
+        self.init(
+            version: version, messageType: messageType, identityKey: identityKey, nonce: nonce,
+            initialNonce: initialNonce, yourNonce: yourNonce, payload: payload,
+            signature: signature, certificates: certificates,
+            requestedCertificates: requestedCertificates, receivedSigningBytes: nil)
+    }
+    init(
+        version: String, messageType: AuthMessageType, identityKey: PublicKey,
+        nonce: String?, initialNonce: String?, yourNonce: String?,
+        payload: [UInt8]?, signature: [UInt8]?,
+        certificates: [VerifiableCertificate]?,
+        requestedCertificates: AuthRequestedCertificateSet?,
+        receivedSigningBytes: [UInt8]?
     ) {
         self.version = version
         self.messageType = messageType
@@ -192,6 +231,17 @@ public struct AuthMessage: Equatable, Sendable, CustomStringConvertible,
         self.signature = signature
         self.certificates = certificates
         self.requestedCertificates = requestedCertificates
+        self.receivedSigningBytes = receivedSigningBytes
+    }
+    /// Compares the message content. The received member order is transport
+    /// detail and is not part of equality.
+    public static func == (lhs: AuthMessage, rhs: AuthMessage) -> Bool {
+        lhs.version == rhs.version && lhs.messageType == rhs.messageType
+            && lhs.identityKey == rhs.identityKey && lhs.nonce == rhs.nonce
+            && lhs.initialNonce == rhs.initialNonce && lhs.yourNonce == rhs.yourNonce
+            && lhs.payload == rhs.payload && lhs.signature == rhs.signature
+            && lhs.certificates == rhs.certificates
+            && lhs.requestedCertificates == rhs.requestedCertificates
     }
     public var description: String { "<redacted auth message>" }
     public var debugDescription: String { description }
@@ -200,17 +250,22 @@ public struct AuthMessage: Equatable, Sendable, CustomStringConvertible,
     }
 }
 
-/// Bounds on what a peer accepts.
+/// Resource limits for BRC-103 messages and sessions.
 ///
-/// `maximumPayloadBytes` bounds a general message's payload, which over HTTP is the whole BRC-104
-/// request or response: its body plus a few hundred bytes of framing. The default is 16 MiB, the
-/// TypeScript SDK's `MAX_AUTH_MESSAGE_BYTES` and `AuthFetch`'s request frame limit
-/// (`MAX_AUTH_HTTP_REQUEST_FRAME_BYTES`), so a reply a TypeScript client reads is one this one
-/// reads too. At 1 MiB, a wallet storage reply carrying a photo inscription's transaction was
-/// refused before it was read.
+/// The defaults accept everything `@bsv/sdk` 4.1.1 sends: a 16 MiB message
+/// (`AuthMessageValidation.ts:8`), an authenticated response frame of 16 MiB
+/// plus 512 KiB of framing (`clients/AuthFetch.ts:147`, `:571`), and 100
+/// certificates, certifiers and types (`AuthMessageValidation.ts:12-14`).
+///
+/// Over HTTP `maximumPayloadBytes` bounds the whole BRC-104 request or response,
+/// its body plus framing. At 1 MiB a wallet storage reply carrying a photo
+/// inscription's transaction was refused before it was read.
 public struct AuthLimits: Equatable, Sendable {
     public static let maximumAllowedJSONBytes = 64 << 20
-    public static let maximumAllowedPayloadBytes = 16 << 20
+    public static let maximumAllowedPayloadBytes = 32 << 20
+    /// 16 MiB plus 512 KiB, shared with `WalletCryptoLimits.defaultPayloadByteCount` so the
+    /// default wallet can sign and verify every payload these limits accept.
+    public static let defaultPayloadBytes = WalletCryptoLimits.defaultPayloadByteCount
     public static let maximumAllowedSessions = 65_536
     public static let maximumAllowedSessionsPerIdentity = 4_096
     public static let maximumAllowedPendingSessions = 65_536
@@ -235,11 +290,12 @@ public struct AuthLimits: Equatable, Sendable {
     public let certificateLimits: CertificateLimits
     public let handshakeTimeout: Duration
     public init(
-        maximumJSONBytes: Int = 8 << 20, maximumPayloadBytes: Int = 16 << 20,
+        maximumJSONBytes: Int = 16 << 20,
+        maximumPayloadBytes: Int = AuthLimits.defaultPayloadBytes,
         maximumSessions: Int = 1024, maximumSessionsPerIdentity: Int = 8,
         maximumPendingSessions: Int = 128, maximumMessages: Int = 4096,
-        maximumCertificateCount: Int = 64, maximumCertificateCertifierCount: Int = 64,
-        maximumCertificateTypeCount: Int = 64, maximumCertificateFieldCount: Int = 256,
+        maximumCertificateCount: Int = 100, maximumCertificateCertifierCount: Int = 100,
+        maximumCertificateTypeCount: Int = 100, maximumCertificateFieldCount: Int = 256,
         maximumCertificateAggregateBytes: Int = 8 << 20,
         certificateLimits: CertificateLimits = .standard,
         handshakeTimeout: Duration = .seconds(30)
@@ -278,15 +334,15 @@ public struct AuthLimits: Equatable, Sendable {
         self.handshakeTimeout = handshakeTimeout
     }
     private init(standard: Void) {
-        maximumJSONBytes = 8 << 20
-        maximumPayloadBytes = 16 << 20
+        maximumJSONBytes = 16 << 20
+        maximumPayloadBytes = Self.defaultPayloadBytes
         maximumSessions = 1024
         maximumSessionsPerIdentity = 8
         maximumPendingSessions = 128
         maximumMessages = 4096
-        maximumCertificateCount = 64
-        maximumCertificateCertifierCount = 64
-        maximumCertificateTypeCount = 64
+        maximumCertificateCount = 100
+        maximumCertificateCertifierCount = 100
+        maximumCertificateTypeCount = 100
         maximumCertificateFieldCount = 256
         maximumCertificateAggregateBytes = 8 << 20
         certificateLimits = .standard
@@ -301,21 +357,26 @@ public enum AuthError: Error, Equatable, Sendable, LocalizedError {
         peerMismatch, notAuthenticated, certificateExchangeUnavailable, invalidCertificateRequest,
         certificateValidationFailed, resourceLimit, handshakeTimedOut, randomGenerationFailed
 
+    /// A short sentence that does not assume which side the app is on. The
+    /// case, and any detail logged with it, identify the cause.
     public var errorDescription: String? {
         switch self {
         case .notAuthenticated:
-            "Not authenticated with the storage server."
+            "The connection has not been authenticated yet."
         case .sessionNotFound:
-            "The storage session is no longer valid."
+            "The authenticated session is no longer valid."
         case .resourceLimit:
-            "The storage session reached its message limit."
+            "The authenticated session reached one of its limits."
         case .handshakeTimedOut:
-            "Authentication with the storage server timed out."
+            "Authentication timed out."
         case .invalidSignature, .replay, .peerMismatch:
-            "The storage server could not be verified."
-        case .invalidMessage, .invalidNonce, .unexpectedMessage, .invalidCertificateRequest,
-            .certificateValidationFailed, .certificateExchangeUnavailable:
-            "The storage server sent an invalid authentication message."
+            "The other side could not be verified."
+        case .invalidMessage, .invalidNonce, .unexpectedMessage, .invalidCertificateRequest:
+            "An authentication message was not valid."
+        case .certificateValidationFailed:
+            "The certificates do not match what was requested or could not be verified."
+        case .certificateExchangeUnavailable:
+            "Certificates cannot be exchanged this way."
         case .randomGenerationFailed:
             "A secure random value could not be generated."
         }

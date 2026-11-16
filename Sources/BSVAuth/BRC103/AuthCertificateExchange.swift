@@ -44,12 +44,15 @@ public enum AuthCertificateExchange {
             else { continue }
 
             do {
-                guard try await certificate.verifySignature(limits: limits.certificateLimits) else {
+                guard try await certificate.verifySignatureInEitherFieldOrder(limits: limits.certificateLimits) else {
                     throw AuthError.certificateValidationFailed
                 }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                AuthLog.reported(
+                    "AuthCertificateExchange.prepare signature", error,
+                    as: AuthError.certificateValidationFailed)
                 throw AuthError.certificateValidationFailed
             }
             try Task.checkCancellation()
@@ -65,6 +68,10 @@ public enum AuthCertificateExchange {
             )
             try Task.checkCancellation()
             guard Set(proof.keyringForVerifier.keys) == Set(fields) else {
+                AuthLog.rejected(
+                    "AuthCertificateExchange.prepare",
+                    "the wallet proof does not reveal exactly the requested fields",
+                    as: AuthError.certificateValidationFailed)
                 throw AuthError.certificateValidationFailed
             }
             let verifiable = try VerifiableCertificate(
@@ -84,6 +91,10 @@ public enum AuthCertificateExchange {
         }
 
         guard foundTypes == Set(request.certificateTypes.keys), !result.isEmpty else {
+            AuthLog.rejected(
+                "AuthCertificateExchange.prepare",
+                "the wallet holds \(foundTypes.count) of \(request.certificateTypes.count) requested types",
+                as: AuthError.certificateValidationFailed)
             throw AuthError.certificateValidationFailed
         }
         return result
@@ -91,6 +102,10 @@ public enum AuthCertificateExchange {
 
     /// Verifies certificate signatures, request matching, subject binding, and
     /// every disclosed field. The result is all-or-nothing.
+    ///
+    /// Every requested type must be present and every certificate must
+    /// reveal every requested field of its type. Use `validateSubset` to
+    /// accept any allowed subset, as `@bsv/sdk` does.
     public static func validate(
         _ certificates: [VerifiableCertificate],
         from peer: PublicKey,
@@ -98,23 +113,80 @@ public enum AuthCertificateExchange {
         using wallet: any CertificateWallet,
         limits: AuthLimits = .standard
     ) async throws -> [AuthValidatedCertificate] {
-        guard !certificates.isEmpty,
-            certificates.count <= limits.maximumCertificateCount
-        else { throw AuthError.certificateValidationFailed }
+        try await validate(
+            certificates, from: peer, requested: request, using: wallet, limits: limits,
+            complete: true)
+    }
+
+    /// Verifies certificates that answer a request as an allowlist, as
+    /// `validateCertificates` in `@bsv/sdk` does (`validateCertificates.ts:23-29`).
+    ///
+    /// Each certificate must be signed by a requested certifier, be of a
+    /// requested type, name `peer` as subject, and reveal a nonempty subset of
+    /// that type's requested fields, all of which must decrypt. Types and
+    /// fields that were requested but not supplied are allowed: the result
+    /// holds exactly what was disclosed, and the caller decides whether that
+    /// is enough. No certificates fails, as `validateCertificates.ts:74`
+    /// does, so a returned value always holds at least one certificate. Any
+    /// certificate that fails makes the whole call fail.
+    public static func validateSubset(
+        _ certificates: [VerifiableCertificate],
+        from peer: PublicKey,
+        requested request: AuthRequestedCertificateSet,
+        using wallet: any CertificateWallet,
+        limits: AuthLimits = .standard
+    ) async throws -> [AuthValidatedCertificate] {
+        try await validate(
+            certificates, from: peer, requested: request, using: wallet, limits: limits,
+            complete: false)
+    }
+
+    private static func validate(
+        _ certificates: [VerifiableCertificate],
+        from peer: PublicKey,
+        requested request: AuthRequestedCertificateSet,
+        using wallet: any CertificateWallet,
+        limits: AuthLimits,
+        complete: Bool
+    ) async throws -> [AuthValidatedCertificate] {
+        let operation = complete ? "AuthCertificateExchange.validate" : "AuthCertificateExchange.validateSubset"
+        func reject(_ reason: String) -> AuthError {
+            AuthLog.rejected(operation, reason, as: AuthError.certificateValidationFailed)
+            return AuthError.certificateValidationFailed
+        }
+        guard !certificates.isEmpty else { throw reject("no certificates") }
+        guard certificates.count <= limits.maximumCertificateCount else {
+            throw reject("\(certificates.count) certificates exceed the limit")
+        }
 
         var aggregate = 0
         var foundTypes = Set<CertificateTypeID>()
         var result: [AuthValidatedCertificate] = []
         result.reserveCapacity(certificates.count)
 
-        for verifiable in certificates {
+        for (position, verifiable) in certificates.enumerated() {
             try Task.checkCancellation()
             let certificate = verifiable.certificate
-            guard certificate.subject == peer,
-                request.certifiers.contains(certificate.certifier),
-                let fields = request.certificateTypes[certificate.type],
-                Set(verifiable.keyring.entries.keys) == Set(fields)
-            else { throw AuthError.certificateValidationFailed }
+            guard certificate.subject == peer else {
+                throw reject("certificate \(position) names another subject")
+            }
+            guard request.certifiers.contains(certificate.certifier) else {
+                throw reject("certificate \(position) has a certifier that was not requested")
+            }
+            guard let fields = request.certificateTypes[certificate.type] else {
+                throw reject("certificate \(position) has a type that was not requested")
+            }
+            let revealed = Set(verifiable.keyring.entries.keys)
+            if complete {
+                guard revealed == Set(fields) else {
+                    throw reject("certificate \(position) does not reveal exactly the requested fields")
+                }
+            } else {
+                guard !revealed.isEmpty, revealed.isSubset(of: Set(fields)) else {
+                    throw reject(
+                        "certificate \(position) reveals no field or a field that was not requested")
+                }
+            }
 
             try addEnvelopeSize(
                 verifiable,
@@ -131,11 +203,14 @@ public enum AuthCertificateExchange {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                AuthLog.reported(
+                    "\(operation) certificate \(position)", error,
+                    as: AuthError.certificateValidationFailed)
                 throw AuthError.certificateValidationFailed
             }
             try Task.checkCancellation()
-            guard Set(plaintext.keys) == Set(fields) else {
-                throw AuthError.certificateValidationFailed
+            guard Set(plaintext.keys) == revealed else {
+                throw reject("certificate \(position) decrypted to other fields than it reveals")
             }
             result.append(
                 AuthValidatedCertificate(
@@ -146,8 +221,8 @@ public enum AuthCertificateExchange {
             foundTypes.insert(certificate.type)
         }
 
-        guard foundTypes == Set(request.certificateTypes.keys) else {
-            throw AuthError.certificateValidationFailed
+        guard !complete || foundTypes == Set(request.certificateTypes.keys) else {
+            throw reject("\(request.certificateTypes.count - foundTypes.count) requested types are missing")
         }
         return result
     }

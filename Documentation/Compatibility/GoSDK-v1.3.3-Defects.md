@@ -1075,9 +1075,11 @@ Suggested correction: store one bounded pending request on the session,
 compare the exact response with that request, and clear the request only after
 successful signature and certificate validation.
 
-Swift handling: `PeerAuthenticator` stores one pending request per session,
-rejects unsolicited or mismatched responses, and clears the request only after
-successful response-signature verification.
+Swift handling: `PeerAuthenticator` keeps up to 16 open requests per session
+and direction, as `@bsv/sdk` 4.1.1 does (`Peer.ts:474-478`). After the
+response signature verifies, it binds the response to the oldest open request
+it fits, in the order of `Peer.ts:1236-1241`, rejects unsolicited or
+mismatched responses, and clears that request.
 
 ### GO-063: The requested-certificate HTTP header is not signed
 
@@ -1096,7 +1098,10 @@ Suggested correction: include a canonical hash of the requested-certificate
 set in the signed payload, or send a signed BRC-103 certificate-request
 message.
 
-Swift handling: the HTTP frame codec rejects this header. Callers use the
+Swift handling: `@bsv/sdk` 4.1.1 sends and reads the same unsigned header, so
+the HTTP frame codec reads and writes it for interoperability (COMP-059).
+`PeerAuthenticator` does not act on a requested set in a general message, as
+`Peer.processGeneralMessage` does not. Callers that need a request use the
 signed BRC-103 certificate-request message.
 
 ### GO-064: Storage resolution does not bind advertisements to the requested UHRP identifier

@@ -11,6 +11,11 @@ public enum CertificateEngine {
     /// `.self` creates a self-signed certificate. `.anyone` is intentionally
     /// rejected rather than silently being treated as self, a stricter Swift
     /// deviation from the pinned Go helper's ambiguous fallback.
+    ///
+    /// The certificate is signed with its fields in `localeCompare` order, as
+    /// `@bsv/sdk` signs them (`certificates/Certificate.ts:290`). Field names
+    /// must be ASCII; another name throws `CertificateFieldNameError.nonASCII`
+    /// (COMP-041).
     public static func issue(
         type: CertificateTypeID,
         serialNumber suppliedSerialNumber: CertificateSerialNumber? = nil,
@@ -22,6 +27,7 @@ public enum CertificateEngine {
         randomSource: any SecureRandomSource = SystemSecureRandomSource()
     ) async throws -> MasterCertificate {
         try validateFieldSet(plaintextFields, limits: limits)
+        try Certificate.requireASCIIFieldNames(plaintextFields.keys)
         let serialNumber: CertificateSerialNumber
         if let suppliedSerialNumber {
             serialNumber = suppliedSerialNumber
@@ -56,7 +62,7 @@ public enum CertificateEngine {
             fields: encrypted.fields,
             limits: limits
         )
-        let signed = try await unsigned.signed(using: certifierWallet, limits: limits)
+        let signed = try await unsigned.signedInLocaleOrder(using: certifierWallet, limits: limits)
         return try MasterCertificate(certificate: signed, masterKeyring: encrypted.keyring)
     }
 
@@ -74,7 +80,7 @@ public enum CertificateEngine {
         if let certifier = requirements.certifier, certifier != certificate.certifier { throw CertificateError.requirementMismatch }
         if let outpoint = requirements.revocationOutpoint, outpoint != certificate.revocationOutpoint { throw CertificateError.requirementMismatch }
         try validateKeyringBounds(masterCertificate.masterKeyring, limits: limits)
-        guard try await certificate.verifySignature(limits: limits) else {
+        guard try await certificate.verifySignatureInEitherFieldOrder(limits: limits) else {
             throw CertificateError.signatureMismatch
         }
         let identity = try await subjectWallet.getPublicKey(.init(selection: .identity)).publicKey
@@ -116,7 +122,7 @@ public enum CertificateEngine {
             throw CertificateError.fieldNotFound
         }
         try validateKeyringBounds(masterCertificate.masterKeyring, limits: limits)
-        guard try await certificate.verifySignature(limits: limits) else {
+        guard try await certificate.verifySignatureInEitherFieldOrder(limits: limits) else {
             throw CertificateError.signatureMismatch
         }
         let identity = try await subjectWallet.getPublicKey(.init(selection: .identity)).publicKey
@@ -155,6 +161,9 @@ public enum CertificateEngine {
             } catch WalletCryptoError.randomGenerationFailed {
                 throw CertificateError.randomGenerationFailed
             } catch {
+                AuthLog.reported(
+                    "CertificateEngine field key encryption", error,
+                    as: CertificateError.encryptionFailed)
                 throw CertificateError.encryptionFailed
             }
             projected[field] = try CertificateCiphertext(
@@ -177,7 +186,7 @@ public enum CertificateEngine {
     ) async throws -> [CertificateFieldName: String] {
         let certificate = verifiableCertificate.certificate
         try validateKeyringBounds(verifiableCertificate.keyring, limits: limits)
-        guard try await certificate.verifySignature(limits: limits) else {
+        guard try await certificate.verifySignatureInEitherFieldOrder(limits: limits) else {
             throw CertificateError.signatureMismatch
         }
         return try await decryptAll(
@@ -224,12 +233,21 @@ public enum CertificateEngine {
                 throw CertificateError.fieldValueTooLarge(actual: plaintextBytes.count, maximum: limits.maximumFieldPlaintextByteCount)
             }
             let key: SymmetricKey
-            do { key = try SymmetricKey.random(using: randomSource) }
-            catch { throw CertificateError.randomGenerationFailed }
+            do { key = try SymmetricKey.random(using: randomSource) } catch {
+                AuthLog.reported(
+                    "CertificateEngine.issue field key", error,
+                    as: CertificateError.randomGenerationFailed)
+                throw CertificateError.randomGenerationFailed
+            }
             let encryptedField: [UInt8]
             do { encryptedField = try key.seal(plaintextBytes, using: randomSource) }
             catch SymmetricKeyError.randomGenerationFailed { throw CertificateError.randomGenerationFailed }
-            catch { throw CertificateError.encryptionFailed }
+            catch {
+                AuthLog.reported(
+                    "CertificateEngine.issue field encryption", error,
+                    as: CertificateError.encryptionFailed)
+                throw CertificateError.encryptionFailed
+            }
             fields[name] = try CertificateCiphertext(
                 encryptedField,
                 maximumByteCount: limits.maximumFieldCiphertextByteCount
@@ -245,6 +263,9 @@ public enum CertificateEngine {
             } catch WalletCryptoError.randomGenerationFailed {
                 throw CertificateError.randomGenerationFailed
             } catch {
+                AuthLog.reported(
+                    "CertificateEngine field key encryption", error,
+                    as: CertificateError.encryptionFailed)
                 throw CertificateError.encryptionFailed
             }
             keyring[name] = try CertificateCiphertext(
@@ -319,12 +340,18 @@ public enum CertificateEngine {
                 ciphertext: wrappedKey.bytes
             )).plaintext
         } catch {
+            AuthLog.reported(
+                "CertificateEngine field key decryption", error,
+                as: CertificateError.decryptionFailed)
             throw CertificateError.decryptionFailed
         }
         guard key.count == SymmetricKey.keyByteCount else { throw CertificateError.decryptionFailed }
         let plaintextBytes: [UInt8]
-        do { plaintextBytes = try SymmetricKey(key).open(encryptedField.bytes) }
-        catch { throw CertificateError.decryptionFailed }
+        do { plaintextBytes = try SymmetricKey(key).open(encryptedField.bytes) } catch {
+            AuthLog.reported(
+                "CertificateEngine field decryption", error, as: CertificateError.decryptionFailed)
+            throw CertificateError.decryptionFailed
+        }
         guard plaintextBytes.count <= limits.maximumFieldPlaintextByteCount,
               let plaintext = String(bytes: plaintextBytes, encoding: .utf8),
               Array(plaintext.utf8) == plaintextBytes else {
@@ -377,8 +404,11 @@ public enum CertificateEngine {
 
     private static func draw32(using randomSource: any SecureRandomSource) throws -> [UInt8] {
         let bytes: [UInt8]
-        do { bytes = try randomSource.randomBytes(count: 32) }
-        catch { throw CertificateError.randomGenerationFailed }
+        do { bytes = try randomSource.randomBytes(count: 32) } catch {
+            AuthLog.reported(
+                "CertificateEngine random bytes", error, as: CertificateError.randomGenerationFailed)
+            throw CertificateError.randomGenerationFailed
+        }
         guard bytes.count == 32 else { throw CertificateError.randomGenerationFailed }
         return bytes
     }

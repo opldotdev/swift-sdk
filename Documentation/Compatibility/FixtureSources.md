@@ -64,3 +64,24 @@ is not committed as golden data. See the repository
 [fixture license policy](../Planning/FixtureLicensePolicy.md) and
 [vector inventory](VectorInventory.md) for the source boundary and approved
 families.
+
+## Recorded TypeScript auth vectors
+
+The BRC-103 and BRC-104 vectors in
+`Tests/BSVAuthTests/BRC103/TypeScriptAuthVectors.swift` and the collation
+digests in `Tests/BSVAuthTests/Certificates/LocaleCompareOrderTests.swift` are
+outputs recorded from running permissively licensed source. They are not copied
+upstream fixtures and are not under the conformance fixture root, so they have no
+manifest fragment. Their provenance:
+
+| Item | Value |
+| --- | --- |
+| Source | `ts-stack` repository, `packages/sdk`, `@bsv/sdk` 4.1.1 |
+| Revision | `3b1abc5691c0848eb00eaf5e8f018e8a7a26d5f1` |
+| License | Apache-2.0, from relicensing commit `4760b26d0` (2026-11-11), an ancestor of the revision; NOTICE "Copyright 2020-2026 BSV Association" |
+| Generator | `gen.ts`, `det.ts`, `toswift.py` and `collate-vec.ts` in [TypeScriptAuthVectors.md](TypeScriptAuthVectors.md), run with Bun 1.4.4; the collation output was also checked with Node 22.23.4 |
+| Inputs | Chosen in this repository: private keys 3, 7 and 11, a SHA-256 counter random stream, certificate fields and request targets |
+| Transformation | Program output written verbatim into Swift string literals by `toswift.py`; no TypeScript source text is copied |
+
+Regenerate them only from the pinned revision, and record a new revision here
+when they change.
