@@ -58,4 +58,38 @@ enum TypeScriptAuthVectors {
         "070707070707070707070707070707070707070707070707070707070707070704504f5354092f76312f6974656d73043f783d31010c636f6e74656e742d74797065106170706c69636174696f6e2f6a736f6e077b2261223a317d"
     static let serializedMultipart =
         "070707070707070707070707070707070707070707070707070707070707070704504f5354072f75706c6f6164ffffffffffffffffff010c636f6e74656e742d74797065246d756c7469706172742f666f726d2d646174613b20626f756e646172793d6162633132330470617274"
+
+    /// `Peer.processInitialRequest` with no listener answering a Swift initialRequest (nonce
+    /// 48 bytes of 0x41) that carries `handshakePolicy`: the wallet's certificate is included
+    /// in initialResponse (`Peer.ts:836-849`, `Peer.ts:872`). The certificate was issued by
+    /// `MasterCertificate.issueCertificateForSubject` with `handshakeFields` in this order.
+    static let initialResponseWithCertificates =
+        #"{"version":"0.1","messageType":"initialResponse","identityKey":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","initialNonce":"pSRSlnhZqBpHB0ZhS+ty0CS3xklJMplE71l5vfWYbsGYnWd0AR9PQJMIKZn1zRVn","yourNonce":"QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB","certificates":[{"type":"cXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXE=","serialNumber":"cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI=","subject":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","certifier":"03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb","revocationOutpoint":"0000000000000000000000000000000000000000000000000000000000000000.0","fields":{"Zip":"3gf6t4OfmHH/zq+ClRv5jqu+qa6orjSfq/bASIqPcSisGi9ARuudggYdlo2w6pHGMceoxG8=","age":"kPUGb15CmxrmGMOUJk3Yjf6OQz2qbf2VibczTKNFu+JdiB+mP7lsCW0SVp0MPv0x01A=","a-b":"5488fUBFuQLITiTHyiYv+0dixBymT13lGIG2UfH4iVIsLB30HXSWmu7Pn5GDFoJ137wD2g==","a_b":"Zga0RrT4c74Wi0NzqGICMOd2IzXPPiF0H26JPZPKZLlR8ZAN9M1uGxZJnNC0mbU8nRPoNLNKX5+2FA=="},"signature":"3045022100b35528432b32e67eab8a90180274c2ce95136865c6df6d1b9fff5630e1cf72a902204350b8c38da0b7ce885b39a7d030098b452ed61ea4864a89b6a8a94b340ea914","keyring":{"Zip":"9Smff62IiabgK0ivnZA56qeC1YMwur2n+v7eoTsiylK7wo85Y1getFsPKhjNA657r+LEAzOsTjQPnCphEQoM/HIKKXYK0MxF4AdwJ2dftT0=","age":"rvlNNesJX7zgj74e2LaSWvTDugZjrYMEgeGSnoERCERDcQzf7W3+/FZQyh6HZ44UZp66k19IAx45Vq0dhLRDpJp4/3kBl7HW3VynVyvLDUo=","a_b":"WySh7VB4LsdmuxlaP2LlXxQOaC997pEv4BQy/rKLpyOocNwBJ4lomZG1Kkp2oKPgpgI+lj2O6ljdKsJObKSU3iZJ85VhCKEvw46PUxWxnSk="}}],"requestedCertificates":{"certifiers":[],"types":{}},"signature":[48,68,2,32,32,173,160,191,207,86,48,118,150,22,192,70,89,41,249,214,216,21,217,218,25,186,8,39,143,253,1,30,178,66,215,49,2,32,31,210,32,24,185,117,253,158,247,173,35,152,218,151,248,226,236,238,70,83,34,246,111,135,219,241,203,20,85,64,195,233]}"#
+    static let handshakeCertificateType = [UInt8](repeating: 0x71, count: 32)
+    static let handshakeRequestedFields = ["Zip", "age", "a_b"]
+    static let handshakeFields: [(name: String, value: String)] = [
+        ("Zip", "90210"),
+        ("age", "30"),
+        ("a-b", "dash"),
+        ("a_b", "underscore"),
+    ]
+
+    /// A TS `Peer` initiator's initialRequest to a Swift responder whose nonce is 48 bytes of
+    /// 0x61, then `Peer.requestCertificates({ certifiers: [], types: {} })`.
+    static let emptyRequestInitialRequest =
+        #"{"version":"0.1","messageType":"initialRequest","identityKey":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","initialNonce":"DISF/nIEYj2XCTXSFNevRHQwhA+wzZhk/oaMpNXTgWTRFq6JvNVxPCcXof/PK24g","requestedCertificates":{"certifiers":[],"types":{}}}"#
+    static let emptyCertificateRequest =
+        #"{"version":"0.1","messageType":"certificateRequest","identityKey":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","nonce":"pE8az4ZVFQOJNre5boun9nHNDvdjZAd7KIvVWWzNAgc=","initialNonce":"DISF/nIEYj2XCTXSFNevRHQwhA+wzZhk/oaMpNXTgWTRFq6JvNVxPCcXof/PK24g","yourNonce":"YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFh","requestedCertificates":{"certifiers":[],"types":{}},"signature":[48,69,2,33,0,167,181,167,72,66,187,106,236,29,171,58,69,25,189,157,24,148,59,227,111,227,89,66,228,152,143,136,165,40,215,186,173,2,32,102,170,157,112,234,194,192,3,203,142,43,230,176,97,239,3,188,61,239,61,216,197,89,163,200,62,175,255,148,1,192,104]}"#
+
+    /// A certificate signed by `Certificate.sign` (`Certificate.ts:464-485`) with field names
+    /// that `localeCompare` and byte order sort differently, and its unsigned binary
+    /// (`Certificate.ts:290`).
+    static let mixedCaseCertificate =
+        #"{"type":"gYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYE=","serialNumber":"goKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoI=","subject":"02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9","certifier":"03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb","revocationOutpoint":"0000000000000000000000000000000000000000000000000000000000000000.0","fields":{"Zip":"AQ==","age":"Ag==","a-b":"Aw==","a_b":"BA==","Email":"BQ==","email":"Bg=="},"signature":"3045022100df81a49a963198439b6f035955214a3b37375f3396463bacb97525349e7e9889022075bc35f586ab78bc3b09f407737d7065a46a597e9eeb0f78bb76f77ed6e56b0f"}"#
+    static let mixedCaseCertificatePreimage =
+        "8181818181818181818181818181818181818181818181818181818181818181828282828282828282828282828282828282828282828282828282828282828202f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f903774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb0000000000000000000000000000000000000000000000000000000000000000000603615f620442413d3d03612d620441773d3d036167650441673d3d05656d61696c0442673d3d05456d61696c0442513d3d035a69700441513d3d"
+
+    /// `AuthFetch.serializeRequest` with headers sorted by `localeCompare` (`AuthFetch.ts:740`).
+    static let serializedHeaderOrder =
+        "070707070707070707070707070707070707070707070707070707070707070704504f5354022f68ffffffffffffffffff070c636f6e74656e742d74797065106170706c69636174696f6e2f6a736f6e09782d6273762d615f62013409782d6273762d612d62013309782d6273762d612e62013508782d6273762d616201320b782d6273762d757070657201360a782d6273762d7a6574610131027b7d"
 }

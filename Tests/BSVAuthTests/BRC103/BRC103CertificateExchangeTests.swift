@@ -78,14 +78,16 @@ struct BRC103CertificateExchangeTests {
         }
     }
 
-    @Test("request validation rejects empty, duplicate, and over-limit values")
+    @Test("request validation rejects duplicate and over-limit values")
     func requestBounds() throws {
         let certifier = try key(11).publicKey
         let type = try CertificateTypeID([UInt8](repeating: 1, count: 32))
         let field = try CertificateFieldName("name")
-        #expect(throws: AuthError.invalidCertificateRequest) {
+        // `@bsv/sdk` 4.1.1 sends and accepts a set with no certifiers
+        // (`AuthMessageValidation.ts:134-136`); it asks for nothing.
+        #expect(
             try AuthRequestedCertificateSet(certifiers: [], certificateTypes: [type: [field]])
-        }
+                .certifiers.isEmpty)
         #expect(throws: AuthError.resourceLimit) {
             try AuthLimits(
                 maximumCertificateCount: AuthLimits.maximumAllowedCertificateCount + 1

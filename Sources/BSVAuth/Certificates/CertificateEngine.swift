@@ -56,7 +56,7 @@ public enum CertificateEngine {
             fields: encrypted.fields,
             limits: limits
         )
-        let signed = try await unsigned.signed(using: certifierWallet, limits: limits)
+        let signed = try await unsigned.signedInLocaleOrder(using: certifierWallet, limits: limits)
         return try MasterCertificate(certificate: signed, masterKeyring: encrypted.keyring)
     }
 
@@ -74,7 +74,7 @@ public enum CertificateEngine {
         if let certifier = requirements.certifier, certifier != certificate.certifier { throw CertificateError.requirementMismatch }
         if let outpoint = requirements.revocationOutpoint, outpoint != certificate.revocationOutpoint { throw CertificateError.requirementMismatch }
         try validateKeyringBounds(masterCertificate.masterKeyring, limits: limits)
-        guard try await certificate.verifySignature(limits: limits) else {
+        guard try await certificate.verifySignatureInEitherFieldOrder(limits: limits) else {
             throw CertificateError.signatureMismatch
         }
         let identity = try await subjectWallet.getPublicKey(.init(selection: .identity)).publicKey
@@ -116,7 +116,7 @@ public enum CertificateEngine {
             throw CertificateError.fieldNotFound
         }
         try validateKeyringBounds(masterCertificate.masterKeyring, limits: limits)
-        guard try await certificate.verifySignature(limits: limits) else {
+        guard try await certificate.verifySignatureInEitherFieldOrder(limits: limits) else {
             throw CertificateError.signatureMismatch
         }
         let identity = try await subjectWallet.getPublicKey(.init(selection: .identity)).publicKey
@@ -177,7 +177,7 @@ public enum CertificateEngine {
     ) async throws -> [CertificateFieldName: String] {
         let certificate = verifiableCertificate.certificate
         try validateKeyringBounds(verifiableCertificate.keyring, limits: limits)
-        guard try await certificate.verifySignature(limits: limits) else {
+        guard try await certificate.verifySignatureInEitherFieldOrder(limits: limits) else {
             throw CertificateError.signatureMismatch
         }
         return try await decryptAll(

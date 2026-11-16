@@ -44,7 +44,7 @@ public enum AuthCertificateExchange {
             else { continue }
 
             do {
-                guard try await certificate.verifySignature(limits: limits.certificateLimits) else {
+                guard try await certificate.verifySignatureInEitherFieldOrder(limits: limits.certificateLimits) else {
                     throw AuthError.certificateValidationFailed
                 }
             } catch is CancellationError {

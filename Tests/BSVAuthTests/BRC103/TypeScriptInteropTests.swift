@@ -120,6 +120,114 @@ struct TypeScriptInteropTests {
         #expect(throws: AuthError.self) { try decode(missing) }
     }
 
+    @Test("a TS peer answers a Swift handshake policy with certificates in initialResponse")
+    func handshakeCertificatesInInitialResponse() async throws {
+        let typeScript = try key(3).publicKey
+        let certifier = try key(11).publicKey
+        let swiftWallet = ProtoWallet(rootKey: try key(7))
+        let type = try CertificateTypeID(TypeScriptAuthVectors.handshakeCertificateType)
+        let requested = try AuthRequestedCertificateSet(
+            certifiers: [certifier],
+            certificateTypes: [type: try TypeScriptAuthVectors.handshakeRequestedFields.map(field)])
+        let client = PeerAuthenticator(
+            wallet: swiftWallet, randomSource: CountingRandomSource(seed: 0x40))
+        let start = try await client.beginAuthentication(with: typeScript, requesting: requested)
+        let initialRequest = try sent(start.actions)
+        #expect(initialRequest.requestedCertificates == requested)
+        #expect(initialRequest.initialNonce == Base64Encoding.encode([UInt8](repeating: 0x41, count: 48)))
+        #expect(try decode(String(decoding: AuthMessageCodec.encode(initialRequest), as: UTF8.self)) == initialRequest)
+
+        // `Peer.ts:960-982`: the initiator validates initialResponse certificates
+        // against its own policy.
+        let actions = try await client.receive(
+            try decode(TypeScriptAuthVectors.initialResponseWithCertificates))
+        #expect(actions.count == 1)
+        guard case .certificateResponse(let received) = actions.first else {
+            Issue.record("initialResponse certificates were not surfaced")
+            return
+        }
+        #expect(received.sessionID == start.sessionID)
+        #expect(received.peer == typeScript)
+        #expect(received.requested == requested)
+        #expect((await client.session(start.sessionID))?.state == .authenticated)
+        let validated = try await AuthCertificateExchange.validate(
+            received.certificates, from: typeScript, requested: requested, using: swiftWallet)
+        var expected: [CertificateFieldName: String] = [:]
+        for item in TypeScriptAuthVectors.handshakeFields
+        where TypeScriptAuthVectors.handshakeRequestedFields.contains(item.name) {
+            expected[try field(item.name)] = item.value
+        }
+        #expect(validated.first?.disclosedFields == expected)
+
+        // The policy was answered, so a later certificate request may be sent.
+        _ = try await client.makeCertificateRequest(requested, using: start.sessionID)
+    }
+
+    @Test("initialResponse certificates are ignored unless requested and must match the policy")
+    func handshakeCertificatesPolicy() async throws {
+        let typeScript = try key(3).publicKey
+        let vector = try decode(TypeScriptAuthVectors.initialResponseWithCertificates)
+
+        // Not requested: ignored, as `Peer.ts:960-967` does.
+        let plain = PeerAuthenticator(
+            wallet: ProtoWallet(rootKey: try key(7)), randomSource: CountingRandomSource(seed: 0x40))
+        let plainStart = try await plain.beginAuthentication(with: typeScript)
+        #expect(try await plain.receive(vector).isEmpty)
+        #expect((await plain.session(plainStart.sessionID))?.state == .authenticated)
+
+        // A narrower policy than the certificates reveal is refused before the
+        // session changes.
+        let narrow = try AuthRequestedCertificateSet(
+            certifiers: [try key(11).publicKey],
+            certificateTypes: [
+                try CertificateTypeID(TypeScriptAuthVectors.handshakeCertificateType): [
+                    try field("Zip")
+                ]
+            ])
+        let strict = PeerAuthenticator(
+            wallet: ProtoWallet(rootKey: try key(7)), randomSource: CountingRandomSource(seed: 0x40))
+        let strictStart = try await strict.beginAuthentication(with: typeScript, requesting: narrow)
+        await #expect(throws: AuthError.self) { try await strict.receive(vector) }
+        #expect((await strict.session(strictStart.sessionID))?.state == .challengeSent)
+    }
+
+    @Test("a TS certificateRequest with no certifiers authenticates and asks for nothing")
+    func emptyCertifierRequest() async throws {
+        let server = PeerAuthenticator(
+            wallet: ProtoWallet(rootKey: try key(7)), randomSource: CountingRandomSource(seed: 0x60))
+        let initialRequest = try decode(TypeScriptAuthVectors.emptyRequestInitialRequest)
+        // `Peer.ts:644-650` always sends a policy; this one asks for nothing.
+        #expect(initialRequest.requestedCertificates?.certifiers == [])
+        let actions = try await server.receive(initialRequest)
+        #expect(actions.count == 1)
+        let response = try sent(actions)
+        #expect(response.initialNonce == Base64Encoding.encode([UInt8](repeating: 0x61, count: 48)))
+
+        let request = try decode(TypeScriptAuthVectors.emptyCertificateRequest)
+        #expect(request.requestedCertificates?.certifiers == [])
+        #expect(request.requestedCertificates?.certificateTypes == [:])
+        // `Peer.ts:1085-1119` verifies it and authenticates the sender, with no callback.
+        #expect(try await server.receive(request).isEmpty)
+
+        // A replay is still refused.
+        await #expect(throws: AuthError.self) { try await server.receive(request) }
+    }
+
+    @Test("Swift sends a certificateRequest with no certifiers without awaiting an answer")
+    func swiftEmptyCertifierRequest() async throws {
+        let client = PeerAuthenticator(
+            wallet: ProtoWallet(rootKey: try key(7)), randomSource: CountingRandomSource(seed: 0x40))
+        let start = try await client.beginAuthentication(with: try key(3).publicKey)
+        _ = try await client.receive(try decode(TypeScriptAuthVectors.initialResponse))
+        _ = try await client.makeCertificateResponse([], using: start.sessionID)
+        let empty = try AuthRequestedCertificateSet(certifiers: [], certificateTypes: [:])
+        let message = try sent([try await client.makeCertificateRequest(empty, using: start.sessionID)])
+        let wire = try String(decoding: AuthMessageCodec.encode(message), as: UTF8.self)
+        #expect(wire.contains(#""requestedCertificates":{"certifiers":[],"types":{}}"#))
+        // Nothing is pending, so another request may follow.
+        _ = try await client.makeCertificateRequest(empty, using: start.sessionID)
+    }
+
     // MARK: TypeScript `AuthFetch` client, Swift server
 
     @Test("Swift server answers a TS AuthFetch handshake and verifies its GET request")
@@ -176,6 +284,19 @@ struct TypeScriptInteropTests {
         let id = [UInt8](repeating: 0x07, count: 32)
         let json = BRC104Header(name: "content-type", value: "application/json")
         let cases: [(BRC104Request, String)] = [
+            (
+                // `AuthFetch.ts:740` sorts signed headers with `localeCompare`.
+                try BRC104Request(
+                    requestID: id, method: "POST", path: "/h",
+                    headers: [
+                        .init(name: "x-bsv-zeta", value: "1"), .init(name: "x-bsv-ab", value: "2"),
+                        .init(name: "x-bsv-a-b", value: "3"), .init(name: "x-bsv-a_b", value: "4"),
+                        .init(name: "x-bsv-a.b", value: "5"), .init(name: "x-bsv-upper", value: "6"),
+                        json,
+                    ],
+                    body: Array("{}".utf8)),
+                TypeScriptAuthVectors.serializedHeaderOrder
+            ),
             (
                 try BRC104Request(requestID: id, method: "GET", path: "/a"),
                 TypeScriptAuthVectors.serializedGetNoBody
@@ -350,9 +471,8 @@ struct TypeScriptInteropTests {
 
         // Swift client in the `Peer` session: answers the handshake policy with
         // a certificate, then requests the TypeScript certificate and sends a
-        // general message. The field names are all lowercase: TypeScript signs
-        // certificate fields in `localeCompare` order (`Certificate.ts:290`),
-        // which differs from this SDK's byte order for mixed case (A11).
+        // general message. `Zip` and `age` sort differently in `localeCompare`
+        // order, which TypeScript verifies the certificate in (`Certificate.ts:290`).
         let typeScript = try key(3).publicKey
         let certifierKey = try key(11)
         let swiftWallet = ProtoWallet(rootKey: try key(7))
@@ -370,7 +490,7 @@ struct TypeScriptInteropTests {
             serialNumber: try CertificateSerialNumber([UInt8](repeating: 0x52, count: 32)),
             subject: .publicKey(try key(7).publicKey),
             plaintextFields: [
-                try field("email"): "swift@example.test", try field("zip"): "R&D <1>",
+                try field("email"): "swift@example.test", try field("Zip"): "R&D <1>",
                 try field("age"): "30", try field("a&b<c>"): "\u{2028}",
             ],
             using: ProtoWallet(rootKey: certifierKey))

@@ -99,7 +99,7 @@ struct AuthMessageCodecTests {
         }
     }
 
-    @Test("certificate data is accepted only in signed certificate messages")
+    @Test("requested certificate sets are accepted in initialRequest and general messages")
     func certificateMessageBoundary() throws {
         let identity = try fixtureIdentity()
         let nonce = Base64Encoding.encode([UInt8](repeating: 3, count: 32))
@@ -117,19 +117,20 @@ struct AuthMessageCodecTests {
             requestedCertificates: request
         )
         #expect(try AuthMessageCodec.decode(AuthMessageCodec.encode(initial)) == initial)
-        #expect(throws: AuthError.invalidMessage) {
-            try AuthMessageCodec.encode(
-                AuthMessage(
-                    messageType: .general,
-                    identityKey: identity,
-                    nonce: nonce,
-                    yourNonce: nonce,
-                    payload: [1],
-                    signature: [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01],
-                    requestedCertificates: request
-                )
-            )
-        }
+        // A general message may carry a requested set: BRC-104 moves one in
+        // the unsigned `x-bsv-auth-requested-certificates` header
+        // (`SimplifiedFetchTransport.ts:349`), and `@bsv/sdk` validates it
+        // like any other set (`AuthMessageValidation.ts:380-382`).
+        let general = AuthMessage(
+            messageType: .general,
+            identityKey: identity,
+            nonce: nonce,
+            yourNonce: nonce,
+            payload: [1],
+            signature: [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01],
+            requestedCertificates: request
+        )
+        #expect(try AuthMessageCodec.decode(AuthMessageCodec.encode(general)) == general)
     }
 
     @Test("rejects excessive JSON nesting before Foundation parsing")

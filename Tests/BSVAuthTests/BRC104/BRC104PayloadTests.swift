@@ -93,6 +93,54 @@ struct BRC104PayloadTests {
         )
     }
 
+    @Test("refuses statuses, methods and request targets that @bsv/sdk rejects")
+    func typeScriptRequestLimits() throws {
+        let requestID = [UInt8](repeating: 4, count: 32)
+        // `AuthFetch.ts:587-589` rejects an authenticated status outside 200...599.
+        for status in [100, 101, 199, 600] {
+            #expect(throws: BRC104Error.invalidStatus) {
+                try BRC104Response(requestID: requestID, status: status)
+            }
+        }
+        for status in [200, 204, 599] {
+            #expect(try BRC104Response(requestID: requestID, status: status).status == status)
+        }
+        var informational = try BRC104Codec.encode(
+            try BRC104Response(requestID: requestID, status: 200))
+        #expect(informational[32] == 200)
+        informational[32] = 199
+        #expect(throws: BRC104Error.invalidStatus) {
+            try BRC104Codec.decodeResponse(informational)
+        }
+
+        // The middleware accepts 1 to 32 uppercase token characters
+        // (`auth-express-middleware/src/index.ts:2002`).
+        for method in ["get", "Post", "M1", "", "GET ", String(repeating: "A", count: 33)] {
+            #expect(throws: BRC104Error.invalidMethod) {
+                try BRC104Request(requestID: requestID, method: method, path: "/")
+            }
+        }
+        for method in ["GET", "PROPFIND", "M-SEARCH", "!#$%&'*+.^_`|~-", String(repeating: "A", count: 32)] {
+            #expect(try BRC104Request(requestID: requestID, method: method, path: "/").method == method)
+        }
+
+        // `originalUrl`, the path and query, is limited to 8192 characters
+        // (`auth-express-middleware/src/index.ts:2024`).
+        let path = "/" + String(repeating: "p", count: 4_095)
+        let exactQuery = "?" + String(repeating: "q", count: 4_095)
+        #expect(
+            try BRC104Request(requestID: requestID, method: "GET", path: path, query: exactQuery)
+                .query == exactQuery)
+        #expect(throws: BRC104Error.invalidPath) {
+            try BRC104Request(
+                requestID: requestID, method: "GET", path: path, query: exactQuery + "q")
+        }
+        #expect(throws: BRC104Error.invalidPath) {
+            try BRC104Request(
+                requestID: requestID, method: "GET", path: path + String(repeating: "p", count: 4_097))
+        }
+    }
+
     @Test("response correlation is exact")
     func responseCorrelation() throws {
         let requestID = [UInt8](repeating: 1, count: 32)

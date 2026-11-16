@@ -145,7 +145,7 @@ public struct BRC104HTTPResponseFrame: Equatable, Sendable, CustomStringConverti
         body: [UInt8]? = nil,
         limits: BRC104HTTPFramingLimits = .standard
     ) throws {
-        guard (100...599).contains(status) else {
+        guard (200...599).contains(status) else {
             throw BRC104HTTPFramingError.invalidFrame
         }
         try BRC104HTTPFrameCodec.validateFrame(headers: headers, body: body, limits: limits)
@@ -193,7 +193,8 @@ public enum BRC104HTTPFrameCodec {
         }
         let authentication = try authenticationHeaders(
             for: message,
-            requestID: request.requestID
+            requestID: request.requestID,
+            limits: limits
         )
         return try BRC104HTTPRequestFrame(
             method: request.method,
@@ -217,7 +218,7 @@ public enum BRC104HTTPFrameCodec {
         )
         try validateFrame(headers: frame.headers, body: frame.body, limits: limits)
         let split = try split(frame.headers, kind: .request, limits: limits)
-        let authentication = try parseAuthentication(split.authentication)
+        let authentication = try parseAuthentication(split.authentication, limits: limits)
         let request: BRC104Request
         do {
             request = try BRC104Request(
@@ -264,7 +265,8 @@ public enum BRC104HTTPFrameCodec {
         }
         let authentication = try authenticationHeaders(
             for: message,
-            requestID: response.requestID
+            requestID: response.requestID,
+            limits: limits
         )
         return try BRC104HTTPResponseFrame(
             status: response.status,
@@ -284,7 +286,7 @@ public enum BRC104HTTPFrameCodec {
         }
         try validateFrame(headers: frame.headers, body: frame.body, limits: limits)
         let split = try split(frame.headers, kind: .response, limits: limits)
-        let authentication = try parseAuthentication(split.authentication)
+        let authentication = try parseAuthentication(split.authentication, limits: limits)
         guard authentication.requestID == expectedRequestID else {
             throw BRC104HTTPFramingError.requestIDMismatch
         }
@@ -325,7 +327,7 @@ public enum BRC104HTTPFrameCodec {
         else {
             throw BRC104HTTPFramingError.resourceLimit
         }
-        guard BRC104Codec.validToken(method), !path.isEmpty, path.utf8.first == 47,
+        guard BRC104Codec.validMethod(method), !path.isEmpty, path.utf8.first == 47,
             BRC104Codec.safeText(path), !path.contains("?"), !path.contains("#")
         else {
             throw BRC104HTTPFramingError.invalidFrame
@@ -334,6 +336,9 @@ public enum BRC104HTTPFrameCodec {
             guard query.utf8.first == 63, !query.contains("#"), BRC104Codec.safeText(query) else {
                 throw BRC104HTTPFramingError.invalidFrame
             }
+        }
+        guard BRC104Codec.validTargetLength(path: path, query: query) else {
+            throw BRC104HTTPFramingError.resourceLimit
         }
     }
 
@@ -377,6 +382,7 @@ public enum BRC104HTTPFrameCodec {
         let yourNonce: String
         let signature: [UInt8]
         let requestID: [UInt8]
+        let requestedCertificates: AuthRequestedCertificateSet?
     }
 
     private struct SplitHeaders {
@@ -394,9 +400,6 @@ public enum BRC104HTTPFrameCodec {
         signed.reserveCapacity(min(headers.count, limits.payloadLimits.maximumHeaders))
         for header in headers {
             let name = header.name.lowercased()
-            if name == BRC104HTTPHeaderName.requestedCertificates {
-                throw BRC104HTTPFramingError.certificateExchangeUnavailable
-            }
             if knownAuthenticationHeader(name) {
                 guard authentication[name] == nil else {
                     throw BRC104HTTPFramingError.duplicateAuthenticationHeader
@@ -430,7 +433,8 @@ public enum BRC104HTTPFrameCodec {
             BRC104HTTPHeaderName.nonce,
             BRC104HTTPHeaderName.yourNonce,
             BRC104HTTPHeaderName.signature,
-            BRC104HTTPHeaderName.requestID:
+            BRC104HTTPHeaderName.requestID,
+            BRC104HTTPHeaderName.requestedCertificates:
             return true
         default:
             return false
@@ -450,9 +454,10 @@ public enum BRC104HTTPFrameCodec {
     /// only when the message is *not* general, and `SimplifiedFetchTransport` never writes it on a
     /// request (`transports/SimplifiedFetchTransport.ts:189-194`); the middleware reads the other
     /// six headers and assumes `general`. When a sender does include it, it must say `general`.
-    private static func parseAuthentication(_ headers: [String: String]) throws
-        -> ParsedAuthentication
-    {
+    private static func parseAuthentication(
+        _ headers: [String: String],
+        limits: BRC104HTTPFramingLimits
+    ) throws -> ParsedAuthentication {
         let version = try required(BRC104HTTPHeaderName.version, in: headers)
         let messageType =
             headers[BRC104HTTPHeaderName.messageType] ?? AuthMessageType.general.rawValue
@@ -484,20 +489,53 @@ public enum BRC104HTTPFrameCodec {
             nonce: nonce,
             yourNonce: yourNonce,
             signature: signature,
-            requestID: requestID
+            requestID: requestID,
+            requestedCertificates: try parseRequestedCertificates(
+                headers[BRC104HTTPHeaderName.requestedCertificates],
+                limits: limits
+            )
         )
+    }
+
+    /// The `@bsv/sdk` 4.1.1 limit for `x-bsv-auth-requested-certificates`
+    /// (`transports/SimplifiedFetchTransport.ts:30`).
+    static let maximumRequestedCertificatesHeaderBytes = 256 << 10
+
+    /// Reads `x-bsv-auth-requested-certificates`, the JSON text of a requested
+    /// certificate set (`transports/SimplifiedFetchTransport.ts:234-258`,
+    /// `auth-express-middleware/src/index.ts:985-988`). The header is not
+    /// covered by the message signature.
+    private static func parseRequestedCertificates(
+        _ value: String?,
+        limits: BRC104HTTPFramingLimits
+    ) throws -> AuthRequestedCertificateSet? {
+        guard let value else { return nil }
+        guard value.utf8.count <= maximumRequestedCertificatesHeaderBytes else {
+            throw BRC104HTTPFramingError.resourceLimit
+        }
+        do {
+            return try AuthMessageCodec.decodeRequestedCertificates(
+                try AuthJSONParser.parse(Array(value.utf8)),
+                limits: limits.authLimits
+            )
+        } catch AuthError.resourceLimit {
+            throw BRC104HTTPFramingError.resourceLimit
+        } catch {
+            throw BRC104HTTPFramingError.invalidAuthenticationHeader
+        }
     }
 
     private static func authenticationHeaders(
         for message: AuthMessage,
-        requestID: [UInt8]
+        requestID: [UInt8],
+        limits: BRC104HTTPFramingLimits
     ) throws -> [BRC104Header] {
         guard requestID.count == 32, let nonce = message.nonce,
             let yourNonce = message.yourNonce, let signature = message.signature
         else {
             throw BRC104HTTPFramingError.invalidFrame
         }
-        return [
+        var headers: [BRC104Header] = [
             .init(name: BRC104HTTPHeaderName.version, value: message.version),
             .init(name: BRC104HTTPHeaderName.messageType, value: message.messageType.rawValue),
             .init(
@@ -509,6 +547,14 @@ public enum BRC104HTTPFrameCodec {
             .init(name: BRC104HTTPHeaderName.signature, value: Hex.encode(signature)),
             .init(name: BRC104HTTPHeaderName.requestID, value: Base64Encoding.encode(requestID)),
         ]
+        if let request = message.requestedCertificates {
+            let json = try AuthCertificateJSON.request(request, limits: limits.authLimits)
+            headers.append(
+                .init(
+                    name: BRC104HTTPHeaderName.requestedCertificates,
+                    value: String(decoding: json, as: UTF8.self)))
+        }
+        return headers
     }
 
     private static func makeMessage(
@@ -523,7 +569,8 @@ public enum BRC104HTTPFrameCodec {
             nonce: authentication.nonce,
             yourNonce: authentication.yourNonce,
             payload: payload,
-            signature: authentication.signature
+            signature: authentication.signature,
+            requestedCertificates: authentication.requestedCertificates
         )
         do {
             try AuthMessageCodec.validate(message, limits: limits.authLimits)
@@ -541,7 +588,7 @@ public enum BRC104HTTPFrameCodec {
         _ message: AuthMessage,
         limits: BRC104HTTPFramingLimits
     ) throws {
-        guard message.certificates == nil, message.requestedCertificates == nil else {
+        guard message.certificates?.isEmpty ?? true else {
             throw BRC104HTTPFramingError.certificateExchangeUnavailable
         }
         do {

@@ -17,7 +17,7 @@ public struct BRC104Request: Equatable, Sendable, CustomStringConvertible,
         limits: BRC104Limits = .standard
     ) throws {
         guard requestID.count == 32 else { throw BRC104Error.invalidRequestID }
-        guard BRC104Codec.validToken(method) else { throw BRC104Error.invalidMethod }
+        guard BRC104Codec.validMethod(method) else { throw BRC104Error.invalidMethod }
         guard !path.isEmpty, path.utf8.first == 47, BRC104Codec.safeText(path),
             !path.contains("?"), !path.contains("#")
         else { throw BRC104Error.invalidPath }
@@ -25,6 +25,9 @@ public struct BRC104Request: Equatable, Sendable, CustomStringConvertible,
             guard query.utf8.first == 63, !query.contains("#"), BRC104Codec.safeText(query) else {
                 throw BRC104Error.invalidPath
             }
+        }
+        guard BRC104Codec.validTargetLength(path: path, query: query) else {
+            throw BRC104Error.invalidPath
         }
         self.requestID = requestID
         self.method = method
@@ -57,7 +60,9 @@ public struct BRC104Response: Equatable, Sendable, CustomStringConvertible,
         limits: BRC104Limits = .standard
     ) throws {
         guard requestID.count == 32 else { throw BRC104Error.invalidRequestID }
-        guard (100...599).contains(status) else { throw BRC104Error.invalidStatus }
+        // `AuthFetch` rejects an authenticated status outside 200...599
+        // (`clients/AuthFetch.ts:587-589`).
+        guard (200...599).contains(status) else { throw BRC104Error.invalidStatus }
         self.requestID = requestID
         self.status = status
         self.headers = try BRC104Codec.normalized(headers, kind: .response, limits: limits)
@@ -255,7 +260,9 @@ public enum BRC104Codec {
             guard name != "content-type" || !value.isEmpty else { throw BRC104Error.invalidHeader }
             result.append(.init(name: name, value: value))
         }
-        return result.sorted { Array($0.name.utf8).lexicographicallyPrecedes(Array($1.name.utf8)) }
+        // `@bsv/sdk` sorts signed header names with `localeCompare`
+        // (`clients/AuthFetch.ts:740`, `transports/SimplifiedFetchTransport.ts:286`).
+        return result.sorted { LocaleCompareOrder.areInIncreasingOrder($0.name, $1.name) }
     }
     /// The signed form of a `content-type` value, as `authenticatedContentType`
     /// in `utils/paymentTransport.ts:84-90` computes it: a `multipart/form-data`
@@ -289,6 +296,22 @@ public enum BRC104Codec {
         case .request: return name == "authorization" || name == "content-type"
         case .response: return name == "authorization"
         }
+    }
+    /// The methods the TypeScript middleware accepts: 1 to 32 uppercase token
+    /// characters, no digits (`auth-express-middleware/src/index.ts:2002`).
+    /// `AuthFetch` uppercases the method it sends (`clients/AuthFetch.ts:1310`).
+    static func validMethod(_ value: String) -> Bool {
+        (1...32).contains(value.utf8.count)
+            && value.utf8.allSatisfy { b in
+                (65...90).contains(b) || "!#$%&'*+.^_`|~-".utf8.contains(b)
+            }
+    }
+    /// The TypeScript middleware rejects a request target (`originalUrl`, the
+    /// path and query) longer than 8192 UTF-16 code units
+    /// (`auth-express-middleware/src/index.ts:2024`).
+    static let maximumRequestTargetLength = 8_192
+    static func validTargetLength(path: String, query: String?) -> Bool {
+        path.utf16.count + (query?.utf16.count ?? 0) <= maximumRequestTargetLength
     }
     static func validToken(_ value: String) -> Bool {
         !value.isEmpty

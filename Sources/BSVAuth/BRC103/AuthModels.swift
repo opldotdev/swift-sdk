@@ -6,8 +6,9 @@ public typealias AuthenticationWallet = WalletPublicKeyProviding & WalletSignatu
 
 /// The certificate types, certifiers, and disclosed fields that a peer requests.
 ///
-/// An instance always names at least one certifier. Use `nil` on `AuthMessage`
-/// when no certificates are requested.
+/// A set with no certifiers asks for nothing. `@bsv/sdk` 4.1.1 sends one as
+/// `{"certifiers":[],"types":{}}` and treats it as no request
+/// (`Peer.ts:836-838`, `Peer.ts:1097-1100`); `PeerAuthenticator` does the same.
 ///
 /// As in `@bsv/sdk` 4.1.1 (`AuthMessageValidation.ts:122-180`), the type map
 /// and each field list may be empty. The set is an allowlist: a response may
@@ -25,8 +26,7 @@ public struct AuthRequestedCertificateSet:
         certificateTypes: [CertificateTypeID: [CertificateFieldName]],
         limits: AuthLimits = .standard
     ) throws {
-        guard !certifiers.isEmpty,
-            certifiers.count <= limits.maximumCertificateCertifierCount,
+        guard certifiers.count <= limits.maximumCertificateCertifierCount,
             certificateTypes.count <= limits.maximumCertificateTypeCount,
             Set(certifiers).count == certifiers.count
         else { throw AuthError.invalidCertificateRequest }
