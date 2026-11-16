@@ -1,11 +1,18 @@
 /// The URI rules `@bsv/sdk` applies to the host field of a SHIP or SLAP
 /// advertisement (`overlay-tools/OverlayAdminTokenTemplate.ts:30-158`).
 ///
-/// `@bsv/sdk` parses these URIs with the WHATWG URL parser. This port reads
-/// the same ASCII forms and normalizes the host the same way (lowercase, no
-/// default port). It is stricter only on forms no advertisement writer emits:
-/// any `@` in the authority, a backslash, non-ASCII host text, dot segments,
-/// and extra slashes after the scheme.
+/// `@bsv/sdk` parses these URIs with the WHATWG URL parser. This port parses
+/// hosts the same way: domains are lowercased, IPv4 hosts in any WHATWG form
+/// (`2130706433`, `0x7f.1`, `1.2.3`) are read as numbers and written as a
+/// dotted quad, IPv6 hosts are validated and written in canonical form, and a
+/// host that ends in a number but is not a valid IPv4 address is rejected. The
+/// default port is dropped.
+///
+/// It accepts nothing `@bsv/sdk` rejects. It rejects a few forms that the
+/// WHATWG parser repairs and no advertisement writer emits: percent-encoded or
+/// non-ASCII host text, any `@` in the authority, a backslash, dot segments or
+/// other text in a path that must be `/`, extra slashes after the scheme, and
+/// leading or trailing spaces.
 enum OverlayAdvertisementURI {
     static let maximumByteCount = 4_096
 
@@ -44,9 +51,38 @@ enum OverlayAdvertisementURI {
 
     /// The `https://` origin an advertised URI names, as `@bsv/sdk` sends
     /// requests to it (`SHIPBroadcaster.ts:102-125`, `LookupResolver.ts:518-549`):
-    /// lowercase host, no default port, no trailing slash. Returns nil for a
+    /// canonical host, no default port, no trailing slash. Returns nil for a
     /// URI that is not an `https://` origin with path `""` or `"/"`.
     static func httpsOrigin(_ value: String) -> String? {
+        httpsAuthority(value)?.origin
+    }
+
+    /// Whether `value` is an `https://` origin whose host may be a public
+    /// network endpoint, as `createPublicNetworkFetch` in `@bsv/sdk` decides
+    /// for an address literal (`storage/PublicHTTPSFetch.ts:61-158`).
+    ///
+    /// An IPv4 or IPv6 host must be a public unicast address. A domain may
+    /// not be `localhost` or end in `.localhost`, `.local`, `.internal` or
+    /// `.home.arpa`. `@bsv/sdk` also resolves domains and refuses ones that
+    /// resolve to a private address; that check needs DNS, so it belongs to
+    /// the transport.
+    static func isPublicHTTPSOrigin(_ value: String) -> Bool {
+        guard let url = httpsAuthority(value) else { return false }
+        switch url.hostKind {
+        case .ipv4(let address):
+            return isPublicIPv4(address)
+        case .ipv6(let pieces):
+            return isPublicIPv6(pieces)
+        case .domain:
+            var name = url.host
+            if name.hasSuffix(".") { name.removeLast() }
+            let privateSuffixes = [".localhost", ".local", ".internal", ".home.arpa"]
+            return !name.isEmpty && name != "localhost"
+                && !privateSuffixes.contains(where: { name.hasSuffix($0) })
+        }
+    }
+
+    private static func httpsAuthority(_ value: String) -> AuthorityURL? {
         guard isValid(value),
             value.utf8.starts(with: "https://".utf8),
             let url = AuthorityURL(afterScheme: suffix(of: value, after: "https://")),
@@ -54,10 +90,47 @@ enum OverlayAdvertisementURI {
             !url.hasFragment,
             url.path == "/"
         else { return nil }
-        if let port = url.port, port != 443 {
-            return "https://\(url.host):\(port)"
+        return url
+    }
+
+    /// `isPublicNetworkAddress` for IPv4 (`PublicHTTPSFetch.ts:114-132`).
+    static func isPublicIPv4(_ address: UInt32) -> Bool {
+        let a = address >> 24
+        let b = (address >> 16) & 0xff
+        return !(a == 0 || a == 10 || a == 127
+            || (a == 100 && (64...127).contains(b))
+            || (a == 169 && b == 254)
+            || (a == 172 && (16...31).contains(b))
+            || (a == 192 && (b == 0 || b == 168))
+            || (a == 198 && (b == 18 || b == 19 || b == 51))
+            || (a == 203 && b == 0)
+            || a >= 224)
+    }
+
+    /// `isPublicNetworkAddress` for IPv6, including the IPv4 address that a
+    /// mapped, compatible, NAT64 or 6to4 address embeds
+    /// (`PublicHTTPSFetch.ts:100-112,134-157`).
+    static func isPublicIPv6(_ pieces: [UInt16]) -> Bool {
+        guard pieces.count == 8 else { return false }
+        let p = pieces.map(UInt32.init)
+        let firstFiveZero = p[0..<5].allSatisfy { $0 == 0 }
+        let compatibleOrMapped = firstFiveZero && (p[5] == 0 || p[5] == 0xffff)
+        let nat64 = p[0] == 0x0064 && p[1] == 0xff9b && p[2..<6].allSatisfy { $0 == 0 }
+        let sixToFour = p[0] == 0x2002
+        if compatibleOrMapped || nat64 || sixToFour {
+            let start = sixToFour ? 1 : 6
+            if !isPublicIPv4(p[start] << 16 | p[start + 1]) { return false }
         }
-        return "https://\(url.host)"
+        let allZero = p.allSatisfy { $0 == 0 }
+        let loopback = p[0..<7].allSatisfy { $0 == 0 } && p[7] == 1
+        let globalUnicast = p[0] & 0xe000 == 0x2000
+        let special2001 = p[0] == 0x2001 && p[1] < 0x0200
+        let documentation = (p[0] == 0x2001 && p[1] == 0x0db8) || p[0] & 0xfff0 == 0x3ff0
+        return !(allZero || loopback || !globalUnicast || special2001 || documentation
+            || p[0] & 0xfe00 == 0xfc00
+            || p[0] & 0xffc0 == 0xfe80
+            || p[0] & 0xffc0 == 0xfec0
+            || p[0] & 0xff00 == 0xff00)
     }
 
     private static func suffix(of value: String, after prefix: String) -> Substring {
@@ -207,8 +280,16 @@ enum OverlayAdvertisementURI {
 /// The parts of a `scheme://authority/path?query#fragment` URI that the
 /// advertisement rules read.
 private struct AuthorityURL {
-    /// Lowercased host, with brackets for IPv6.
+    enum HostKind {
+        case domain
+        case ipv4(UInt32)
+        case ipv6([UInt16])
+    }
+
+    /// The host as the WHATWG URL parser serializes it: a lowercased domain,
+    /// a dotted-quad IPv4 address, or a bracketed canonical IPv6 address.
     let host: String
+    let hostKind: HostKind
     let port: Int?
     /// `"/"` when the URI has no path, as for WHATWG special schemes.
     let path: Substring
@@ -254,13 +335,11 @@ private struct AuthorityURL {
                 guard after.first == ":" else { return nil }
                 portText = after.dropFirst()
             }
-            let inner = hostText.dropFirst().dropLast()
-            guard !inner.isEmpty,
-                inner.utf8.allSatisfy({
-                    OverlayAdvertisementURI.isDigit($0) || (0x61...0x66).contains($0)
-                        || (0x41...0x46).contains($0) || $0 == 0x3a || $0 == 0x2e
-                })
-            else { return nil }
+            guard let pieces = IPAddressText.ipv6(hostText.dropFirst().dropLast()) else {
+                return nil
+            }
+            self.host = "[" + IPAddressText.serialize(ipv6: pieces) + "]"
+            self.hostKind = .ipv6(pieces)
         } else {
             if let colon = authority.firstIndex(of: ":") {
                 hostText = authority[..<colon]
@@ -275,6 +354,15 @@ private struct AuthorityURL {
                         || $0 == 0x2d || $0 == 0x2e || $0 == 0x5f
                 })
             else { return nil }
+            let domain = hostText.lowercased()
+            if IPAddressText.endsInNumber(domain) {
+                guard let address = IPAddressText.ipv4(domain) else { return nil }
+                self.host = IPAddressText.serialize(ipv4: address)
+                self.hostKind = .ipv4(address)
+            } else {
+                self.host = domain
+                self.hostKind = .domain
+            }
         }
 
         var port: Int?
@@ -287,17 +375,225 @@ private struct AuthorityURL {
             port = value
         }
 
-        self.host = hostText.lowercased()
         self.port = port
         self.path = path
         self.hasQuery = !query.isEmpty
         self.hasFragment = !fragment.isEmpty
     }
 
-    /// `isAllowedPublicHostname` in `OverlayAdminTokenTemplate.ts:75-79`.
+    /// The origin `URL.origin` gives: scheme, host and any non-default port.
+    var origin: String {
+        if let port, port != 443 {
+            return "https://\(host):\(port)"
+        }
+        return "https://\(host)"
+    }
+
+    /// `isAllowedPublicHostname` in `OverlayAdminTokenTemplate.ts:75-79`,
+    /// applied to the serialized host as `URL.hostname` gives it.
     var isAllowedPublicHost: Bool {
         host != "localhost"
             && !host.split(separator: ".", omittingEmptySubsequences: false)
                 .contains(where: { $0.hasPrefix("xn--") })
+    }
+}
+
+/// The WHATWG URL Standard's IPv4 and IPv6 host parsers and serializers
+/// (sections 3.5 and 3.6), for ASCII host text.
+enum IPAddressText {
+    /// "Ends in a number": the last non-empty label is all digits or parses
+    /// as an IPv4 number. Such a host must then be a valid IPv4 address.
+    static func endsInNumber(_ host: String) -> Bool {
+        var parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        if parts.last == "" {
+            guard parts.count > 1 else { return false }
+            parts.removeLast()
+        }
+        guard let last = parts.last else { return false }
+        if !last.isEmpty, last.utf8.allSatisfy(OverlayAdvertisementURI.isDigit) { return true }
+        return ipv4Number(last) != nil
+    }
+
+    /// The IPv4 parser: up to four numbers in decimal, octal (leading `0`)
+    /// or hexadecimal (`0x`); the last fills the remaining bytes.
+    static func ipv4(_ host: String) -> UInt32? {
+        var parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        if parts.last == "", parts.count > 1 { parts.removeLast() }
+        guard (1...4).contains(parts.count) else { return nil }
+        var numbers: [UInt64] = []
+        for part in parts {
+            guard let number = ipv4Number(part) else { return nil }
+            numbers.append(number)
+        }
+        guard numbers.dropLast().allSatisfy({ $0 <= 255 }) else { return nil }
+        let last = numbers[numbers.count - 1]
+        guard last < UInt64(1) << (8 * (5 - numbers.count)) else { return nil }
+        var address = last
+        for (index, number) in numbers.dropLast().enumerated() {
+            address += number << (8 * (3 - index))
+        }
+        return UInt32(address)
+    }
+
+    /// The IPv4 number parser. Values that cannot fit in 32 bits are capped
+    /// above `UInt32.max`, which the caller then rejects.
+    private static func ipv4Number(_ text: Substring) -> UInt64? {
+        guard !text.isEmpty else { return nil }
+        var digits = text.utf8[...]
+        var radix: UInt64 = 10
+        if digits.count >= 2, digits.first == 0x30,
+            digits[digits.index(after: digits.startIndex)] | 0x20 == 0x78
+        {
+            digits = digits.dropFirst(2)
+            radix = 16
+        } else if digits.count >= 2, digits.first == 0x30 {
+            digits = digits.dropFirst()
+            radix = 8
+        }
+        var value: UInt64 = 0
+        for byte in digits {
+            let digit: UInt64
+            switch byte {
+            case 0x30...0x39: digit = UInt64(byte - 0x30)
+            case 0x61...0x66: digit = UInt64(byte - 0x61 + 10)
+            case 0x41...0x46: digit = UInt64(byte - 0x41 + 10)
+            default: return nil
+            }
+            guard digit < radix else { return nil }
+            value = min(value * radix + digit, UInt64(UInt32.max) + 1)
+        }
+        return value
+    }
+
+    static func serialize(ipv4 address: UInt32) -> String {
+        [24, 16, 8, 0].map { String((address >> $0) & 0xff) }.joined(separator: ".")
+    }
+
+    /// The IPv6 parser, including a trailing embedded IPv4 address.
+    static func ipv6(_ text: Substring) -> [UInt16]? {
+        let input = Array(text.utf8)
+        var address = [UInt16](repeating: 0, count: 8)
+        var pieceIndex = 0
+        var compress: Int?
+        var pointer = 0
+        func at(_ index: Int) -> UInt8? { index < input.count ? input[index] : nil }
+
+        if at(pointer) == 0x3a {
+            guard at(pointer + 1) == 0x3a else { return nil }
+            pointer += 2
+            pieceIndex += 1
+            compress = pieceIndex
+        }
+        while let current = at(pointer) {
+            guard pieceIndex < 8 else { return nil }
+            if current == 0x3a {
+                guard compress == nil else { return nil }
+                pointer += 1
+                pieceIndex += 1
+                compress = pieceIndex
+                continue
+            }
+            var value: UInt32 = 0
+            var length = 0
+            while length < 4, let byte = at(pointer), let digit = hexDigit(byte) {
+                value = value * 16 + UInt32(digit)
+                pointer += 1
+                length += 1
+            }
+            if at(pointer) == 0x2e {
+                guard length > 0, pieceIndex <= 6 else { return nil }
+                pointer -= length
+                var numbersSeen = 0
+                while at(pointer) != nil {
+                    var piece: UInt32?
+                    if numbersSeen > 0 {
+                        guard at(pointer) == 0x2e, numbersSeen < 4 else { return nil }
+                        pointer += 1
+                    }
+                    guard let first = at(pointer), OverlayAdvertisementURI.isDigit(first) else {
+                        return nil
+                    }
+                    while let byte = at(pointer), OverlayAdvertisementURI.isDigit(byte) {
+                        let number = UInt32(byte - 0x30)
+                        if let existing = piece {
+                            guard existing != 0 else { return nil }
+                            piece = existing * 10 + number
+                        } else {
+                            piece = number
+                        }
+                        guard piece! <= 255 else { return nil }
+                        pointer += 1
+                    }
+                    address[pieceIndex] = address[pieceIndex] &* 0x100 &+ UInt16(piece!)
+                    numbersSeen += 1
+                    if numbersSeen == 2 || numbersSeen == 4 { pieceIndex += 1 }
+                }
+                guard numbersSeen == 4 else { return nil }
+                break
+            } else if at(pointer) == 0x3a {
+                pointer += 1
+                guard at(pointer) != nil else { return nil }
+            } else if at(pointer) != nil {
+                return nil
+            }
+            address[pieceIndex] = UInt16(value)
+            pieceIndex += 1
+        }
+        if let compress {
+            var swaps = pieceIndex - compress
+            pieceIndex = 7
+            while pieceIndex != 0, swaps > 0 {
+                address.swapAt(pieceIndex, compress + swaps - 1)
+                pieceIndex -= 1
+                swaps -= 1
+            }
+        } else if pieceIndex != 8 {
+            return nil
+        }
+        return address
+    }
+
+    /// The IPv6 serializer: lowercase hex, the first longest run of two or
+    /// more zero pieces written as `::`.
+    static func serialize(ipv6 address: [UInt16]) -> String {
+        var compress: Int?
+        var bestLength = 1
+        var index = 0
+        while index < 8 {
+            guard address[index] == 0 else {
+                index += 1
+                continue
+            }
+            var end = index
+            while end < 8, address[end] == 0 { end += 1 }
+            if end - index > bestLength {
+                bestLength = end - index
+                compress = index
+            }
+            index = end
+        }
+        var output = ""
+        var ignoreZero = false
+        for pieceIndex in 0..<8 {
+            if ignoreZero, address[pieceIndex] == 0 { continue }
+            ignoreZero = false
+            if compress == pieceIndex {
+                output += pieceIndex == 0 ? "::" : ":"
+                ignoreZero = true
+                continue
+            }
+            output += String(address[pieceIndex], radix: 16)
+            if pieceIndex != 7 { output += ":" }
+        }
+        return output
+    }
+
+    private static func hexDigit(_ byte: UInt8) -> UInt8? {
+        switch byte {
+        case 0x30...0x39: byte - 0x30
+        case 0x61...0x66: byte - 0x61 + 10
+        case 0x41...0x46: byte - 0x41 + 10
+        default: nil
+        }
     }
 }

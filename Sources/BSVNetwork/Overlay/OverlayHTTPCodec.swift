@@ -38,7 +38,7 @@ enum OverlayHTTPCodec {
     }
 
     /// The `X-Topics` value `@bsv/sdk` sends: topic names joined by commas
-    /// (`SHIPBroadcaster.ts:340-345`). Names cannot contain a comma.
+    /// (`SHIPBroadcaster.ts:344`). Names cannot contain a comma.
     static func topicsHeader(
         _ topics: [OverlayTopic],
         limits: OverlayLimits
@@ -78,6 +78,10 @@ enum OverlayHTTPCodec {
     /// numeric-key objects `JSON.stringify(Uint8Array)` once produced. `beef`
     /// may also be base64 text, the form Go overlay hosts write. `txid` names
     /// the output's transaction. Unknown keys are ignored, as in `@bsv/sdk`.
+    ///
+    /// Output lists are read with ``OverlayJSONReader`` so that a byte array
+    /// costs one byte per element. A freeform `result` is re-encoded through
+    /// `JSONSerialization`, so its text may be at most twice the freeform limit.
     static func lookupJSONResponse(
         _ bytes: [UInt8],
         configuration: OverlayHTTPConfiguration
@@ -85,77 +89,55 @@ enum OverlayHTTPCodec {
         let limits = configuration.overlayLimits
         guard bytes.count <= limits.maximumLookupAnswerByteCount,
             StrictOverlayJSONPreflight.accepts(bytes),
-            let value = try? JSONSerialization.jsonObject(with: Data(bytes)),
-            let object = value as? [String: Any],
-            let type = object["type"] as? String
+            bytes.first(where: { ![0x20, 0x09, 0x0a, 0x0d].contains($0) }) == 0x7b
         else { throw OverlayHTTPError.malformedResponse }
+
+        let reader = OverlayJSONReader(bytes)
+        var type: String?
+        var outputs: Range<Int>?
+        var result: Range<Int>?
+        try reader.readObject { key in
+            switch key {
+            case "type":
+                guard reader.next == 0x22 else { throw OverlayHTTPError.malformedResponse }
+                type = try reader.readString()
+            case "outputs":
+                outputs = try reader.valueRange()
+            case "result":
+                result = try reader.valueRange()
+            default:
+                try reader.skipValue()
+            }
+        }
 
         switch type {
         case "output-list":
-            let rawOutputs: [Any]
-            if object["outputs"] == nil || object["outputs"] is NSNull {
-                rawOutputs = []
-            } else if let outputs = object["outputs"] as? [Any] {
-                rawOutputs = outputs
-            } else {
-                throw OverlayHTTPError.malformedResponse
-            }
-            guard rawOutputs.count <= limits.maximumLookupOutputCount else {
-                throw OverlayHTTPError.resourceLimit
-            }
-            let maximumContext = min(
-                configuration.maximumContextByteCount,
-                limits.maximumLookupContextByteCount
-            )
-            var outputs: [OutputListItem] = []
-            outputs.reserveCapacity(rawOutputs.count)
-            for raw in rawOutputs {
-                guard let item = raw as? [String: Any],
-                    let index = uint32(item["outputIndex"])
-                else { throw OverlayHTTPError.malformedResponse }
-                let beef = try beefBytes(
-                    item["beef"],
-                    maximum: limits.maximumLookupOutputBEEFByteCount
-                )
-                guard !beef.isEmpty else { throw OverlayHTTPError.malformedResponse }
-                var context: [UInt8]?
-                if let rawContext = item["context"] {
-                    context = try byteArray(rawContext, maximum: maximumContext)
-                }
-                var transactionID: TransactionID?
-                if let rawTransactionID = item["txid"] {
-                    guard let text = rawTransactionID as? String,
-                        text.utf8.count == 64,
-                        let parsed = try? TransactionID(displayHex: text.lowercased())
-                    else { throw OverlayHTTPError.malformedResponse }
-                    transactionID = parsed
-                }
-                do {
-                    outputs.append(
-                        try OutputListItem(
-                            beef: beef,
-                            outputIndex: index,
-                            context: context,
-                            transactionID: transactionID,
-                            limits: limits
-                        )
+            let items =
+                try outputs.map {
+                    try lookupOutputs(
+                        OverlayJSONReader(bytes, offset: $0.lowerBound),
+                        configuration: configuration
                     )
-                } catch {
-                    throw OverlayHTTPError.resourceLimit
-                }
-            }
+                } ?? []
             do {
-                return try LookupAnswer(outputList: outputs, limits: limits)
+                return try LookupAnswer(outputList: items, limits: limits)
             } catch {
                 throw OverlayHTTPError.resourceLimit
             }
 
         case "freeform":
-            guard let result = object["result"] else { throw OverlayHTTPError.malformedResponse }
+            guard let result else { throw OverlayHTTPError.malformedResponse }
+            let (doubled, overflow) = limits.maximumFreeformByteCount.multipliedReportingOverflow(
+                by: 2)
+            guard overflow || result.count <= doubled else {
+                throw OverlayHTTPError.resourceLimit
+            }
             let encoded: Data
             do {
+                let value = try JSONSerialization.jsonObject(
+                    with: Data(bytes[result]), options: .fragmentsAllowed)
                 encoded = try JSONSerialization.data(
-                    withJSONObject: result,
+                    withJSONObject: value,
                     options: [.fragmentsAllowed, .sortedKeys, .withoutEscapingSlashes]
                 )
             } catch {
@@ -172,53 +154,79 @@ enum OverlayHTTPCodec {
         }
     }
 
-    /// A lookup output's `beef`: a byte array (see ``byteArray(_:maximum:)``)
-    /// or canonical base64 text.
-    private static func beefBytes(_ value: Any?, maximum: Int) throws -> [UInt8] {
-        if let text = value as? String {
-            guard
-                let beef = try? Base64Encoding.decode(text, maximumDecodedByteCount: maximum),
-                Base64Encoding.encode(beef) == text
-            else { throw OverlayHTTPError.malformedResponse }
-            return beef
-        }
-        guard let value else { throw OverlayHTTPError.malformedResponse }
-        return try byteArray(value, maximum: maximum)
-    }
-
-    /// A JSON array of integers 0...255, or an object whose keys are exactly
-    /// "0" through "n-1" with byte values, as `normalizeBRC100ByteArray` in
-    /// `@bsv/sdk` reads it (`wallet/BRC100ByteEncoding.ts:45-87,126-146`). An
-    /// empty object is an empty byte array there.
-    private static func byteArray(_ value: Any, maximum: Int) throws -> [UInt8] {
-        if let values = value as? [Any] {
-            guard values.count <= maximum else { throw OverlayHTTPError.resourceLimit }
-            var bytes: [UInt8] = []
-            bytes.reserveCapacity(values.count)
-            for value in values {
-                guard let byte = byte(value) else { throw OverlayHTTPError.malformedResponse }
-                bytes.append(byte)
+    /// The `outputs` value of a JSON output list. `null` reads as no outputs,
+    /// for Go hosts that marshal an empty slice that way.
+    private static func lookupOutputs(
+        _ reader: OverlayJSONReader,
+        configuration: OverlayHTTPConfiguration
+    ) throws -> [OutputListItem] {
+        let limits = configuration.overlayLimits
+        if reader.readNull() { return [] }
+        guard reader.next == 0x5b else { throw OverlayHTTPError.malformedResponse }
+        let maximumContext = configuration.lookupContextByteLimit
+        var outputs: [OutputListItem] = []
+        try reader.readArray {
+            guard outputs.count < limits.maximumLookupOutputCount else {
+                throw OverlayHTTPError.resourceLimit
             }
-            return bytes
+            guard reader.next == 0x7b else { throw OverlayHTTPError.malformedResponse }
+            var index: UInt32?
+            var beef: [UInt8]?
+            var context: [UInt8]?
+            var transactionID: TransactionID?
+            try reader.readObject { key in
+                switch key {
+                case "outputIndex":
+                    guard let value = try reader.readUInt32() else {
+                        throw OverlayHTTPError.malformedResponse
+                    }
+                    index = value
+                case "beef":
+                    beef = try beefBytes(
+                        reader, maximum: limits.maximumLookupOutputBEEFByteCount)
+                case "context":
+                    context = try reader.readByteArray(maximum: maximumContext)
+                case "txid":
+                    guard reader.next == 0x22 else { throw OverlayHTTPError.malformedResponse }
+                    let text = try reader.readString()
+                    guard text.utf8.count == 64,
+                        let parsed = try? TransactionID(displayHex: text.lowercased())
+                    else { throw OverlayHTTPError.malformedResponse }
+                    transactionID = parsed
+                default:
+                    try reader.skipValue()
+                }
+            }
+            guard let index, let beef, !beef.isEmpty else {
+                throw OverlayHTTPError.malformedResponse
+            }
+            do {
+                outputs.append(
+                    try OutputListItem(
+                        beef: beef,
+                        outputIndex: index,
+                        context: context,
+                        transactionID: transactionID,
+                        limits: limits
+                    )
+                )
+            } catch {
+                throw OverlayHTTPError.resourceLimit
+            }
         }
-        guard let object = value as? [String: Any] else {
-            throw OverlayHTTPError.malformedResponse
-        }
-        guard object.count <= maximum else { throw OverlayHTTPError.resourceLimit }
-        var bytes = [UInt8](repeating: 0, count: object.count)
-        for (key, value) in object {
-            guard let index = Int(key), String(index) == key,
-                bytes.indices.contains(index),
-                let byte = byte(value)
-            else { throw OverlayHTTPError.malformedResponse }
-            bytes[index] = byte
-        }
-        return bytes
+        return outputs
     }
 
-    private static func byte(_ value: Any) -> UInt8? {
-        guard let number = uint32(value), number <= 255 else { return nil }
-        return UInt8(number)
+    /// A lookup output's `beef`: a byte array (see
+    /// ``OverlayJSONReader/readByteArray(maximum:)``) or canonical base64 text.
+    private static func beefBytes(_ reader: OverlayJSONReader, maximum: Int) throws -> [UInt8] {
+        guard reader.next == 0x22 else { return try reader.readByteArray(maximum: maximum) }
+        let text = try reader.readString()
+        guard
+            let beef = try? Base64Encoding.decode(text, maximumDecodedByteCount: maximum),
+            Base64Encoding.encode(beef) == text
+        else { throw OverlayHTTPError.malformedResponse }
+        return beef
     }
 
     /// The aggregated answer Overlay Express sends for `X-Aggregation: yes`
@@ -256,10 +264,7 @@ enum OverlayHTTPCodec {
             let outputIndex: UInt32
             let context: [UInt8]?
         }
-        let maximumContext = min(
-            configuration.maximumContextByteCount,
-            limits.maximumLookupContextByteCount
-        )
+        let maximumContext = configuration.lookupContextByteLimit
         var metadata: [Metadata] = []
         metadata.reserveCapacity(min(Int(countValue), cursor.remaining / 34))
         for _ in 0..<Int(countValue) {
@@ -321,9 +326,9 @@ enum OverlayHTTPCodec {
             if let cached = atomicByTransactionID[item.transactionID] {
                 outputBEEF = cached
             } else {
-                outputBEEF =
-                    (try? beef.atomicBEEF(for: item.transactionID, limits: configuration.beefLimits)
-                        .serialized(limits: configuration.beefLimits)) ?? sharedBytes
+                outputBEEF = try atomicOutputBEEF(
+                    beef, subject: item.transactionID, shared: sharedBytes,
+                    limits: configuration.beefLimits)
                 atomicByTransactionID[item.transactionID] = outputBEEF
             }
             do {
@@ -344,6 +349,26 @@ enum OverlayHTTPCodec {
             return try LookupAnswer(outputList: outputs, limits: limits)
         } catch {
             throw OverlayHTTPError.resourceLimit
+        }
+    }
+
+    /// The Atomic BEEF for one output's transaction. Only an incomplete
+    /// ancestry falls back to the shared BEEF, which the output's
+    /// `transactionID` then indexes; any other failure fails the answer.
+    private static func atomicOutputBEEF(
+        _ beef: BEEF,
+        subject: TransactionID,
+        shared: [UInt8],
+        limits: BEEFLimits
+    ) throws -> [UInt8] {
+        do {
+            return try beef.atomicBEEF(for: subject, limits: limits).serialized(limits: limits)
+        } catch BEEFError.missingAncestor {
+            return shared
+        } catch BEEFError.envelopeTooLarge, BEEFError.serializedSizeOverflow {
+            throw OverlayHTTPError.resourceLimit
+        } catch {
+            throw OverlayHTTPError.malformedResponse
         }
     }
 
@@ -375,7 +400,10 @@ enum OverlayHTTPCodec {
             let retained: [UInt32]
             let removed: [UInt32]
             let ancillary: [TransactionID]
-            if keys.isSubset(of: ["outputsToAdmit", "coinsToRetain", "coinsRemoved"]) {
+            // An empty object has no keys to tell the two shapes apart. Go's
+            // shape, whose fields are all optional, reads it as no instructions,
+            // which is how it was read before camelCase support.
+            if !keys.isEmpty, keys.isSubset(of: ["outputsToAdmit", "coinsToRetain", "coinsRemoved"]) {
                 // `validateSTEAK` in `@bsv/sdk` (`SHIPBroadcaster.ts:237-262`):
                 // `outputsToAdmit` and `coinsToRetain` are required arrays and
                 // `coinsRemoved` is an optional array.

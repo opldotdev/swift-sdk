@@ -185,7 +185,11 @@ struct OverlayPolicyTests {
         let limits = try beefLimits()
         let atomic = try atomicBEEF(limits: limits)
 
-        let noAck = OverlayTopicMock(steaks: [host: try Steak()])
+        // The host answers for the topic but admits nothing. An empty STEAK
+        // would be a failed host, as in `@bsv/sdk` (`SHIPBroadcaster.ts:483-485`).
+        let noAck = OverlayTopicMock(
+            steaks: [host: try Steak(instructions: [topic: try AdmittanceInstructions()])]
+        )
         let noAckBroadcaster = try OverlayTopicBroadcaster(
             topics: [topic],
             facilitator: noAck,

@@ -11,18 +11,61 @@ public struct OverlayHTTPConfiguration: Sendable {
 
     public let overlayLimits: OverlayLimits
     public let beefLimits: BEEFLimits
-    /// The largest `context` accepted for one lookup output. The default is
-    /// the 1 MiB that `@bsv/sdk` allows (`MAX_LOOKUP_CONTEXT_BYTES`).
-    public let maximumContextByteCount: Int
     public let requestTimeout: Duration
     public let resourceTimeout: Duration
+    private let contextByteLimit: Int
+
+    /// The largest `context` accepted for one lookup output.
+    @available(*, deprecated, message: "Use OverlayLimits.maximumLookupContextByteCount.")
+    public var maximumContextByteCount: Int { contextByteLimit }
+
+    /// The per-output context limit: `OverlayLimits.maximumLookupContextByteCount`,
+    /// or the deprecated `maximumContextByteCount` when that is smaller.
+    var lookupContextByteLimit: Int {
+        min(contextByteLimit, overlayLimits.maximumLookupContextByteCount)
+    }
 
     public init(
         overlayLimits: OverlayLimits = .standard,
         beefLimits: BEEFLimits,
-        maximumContextByteCount: Int = 1 * 1_024 * 1_024,
         requestTimeout: Duration = .seconds(30),
         resourceTimeout: Duration = .seconds(30)
+    ) throws {
+        try self.init(
+            overlayLimits: overlayLimits,
+            beefLimits: beefLimits,
+            contextByteLimit: Self.maximumAllowedContextByteCount,
+            requestTimeout: requestTimeout,
+            resourceTimeout: resourceTimeout
+        )
+    }
+
+    @available(
+        *, deprecated,
+        message: "Set OverlayLimits.maximumLookupContextByteCount instead of maximumContextByteCount."
+    )
+    public init(
+        overlayLimits: OverlayLimits = .standard,
+        beefLimits: BEEFLimits,
+        maximumContextByteCount: Int,
+        requestTimeout: Duration = .seconds(30),
+        resourceTimeout: Duration = .seconds(30)
+    ) throws {
+        try self.init(
+            overlayLimits: overlayLimits,
+            beefLimits: beefLimits,
+            contextByteLimit: maximumContextByteCount,
+            requestTimeout: requestTimeout,
+            resourceTimeout: resourceTimeout
+        )
+    }
+
+    private init(
+        overlayLimits: OverlayLimits,
+        beefLimits: BEEFLimits,
+        contextByteLimit: Int,
+        requestTimeout: Duration,
+        resourceTimeout: Duration
     ) throws {
         guard
             overlayLimits.maximumLookupQueryByteCount
@@ -31,7 +74,7 @@ public struct OverlayHTTPConfiguration: Sendable {
                 <= Self.maximumAllowedRequestByteCount,
             overlayLimits.maximumLookupAnswerByteCount
                 <= Self.maximumAllowedResponseByteCount,
-            (0...Self.maximumAllowedContextByteCount).contains(maximumContextByteCount),
+            (0...Self.maximumAllowedContextByteCount).contains(contextByteLimit),
             requestTimeout > .zero,
             resourceTimeout > .zero
         else {
@@ -39,7 +82,7 @@ public struct OverlayHTTPConfiguration: Sendable {
         }
         self.overlayLimits = overlayLimits
         self.beefLimits = beefLimits
-        self.maximumContextByteCount = maximumContextByteCount
+        self.contextByteLimit = contextByteLimit
         self.requestTimeout = requestTimeout
         self.resourceTimeout = resourceTimeout
     }
@@ -189,7 +232,7 @@ public struct HTTPSOverlayTopicFacilitator: TopicFacilitator, Sendable {
         }
         guard !Task.isCancelled else { throw OverlayHTTPError.uncertainDelivery }
         // `@bsv/sdk` accepts any 2xx and reads the body as JSON whatever its
-        // content type (`SHIPBroadcaster.ts:367-368`).
+        // content type (`SHIPBroadcaster.ts:370-371`).
         guard (200...299).contains(response.statusCode) else {
             throw OverlayHTTPError.rejected(statusCode: response.statusCode)
         }

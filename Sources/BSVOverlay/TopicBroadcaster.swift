@@ -1,13 +1,34 @@
 import BSVCore
 import BSVTransaction
 
+/// What one broadcast did at each host.
+public struct OverlayBroadcastReport: Sendable {
+    public let transactionID: TransactionID
+    /// The topics each host acknowledged, for every host that answered with
+    /// a usable STEAK.
+    public let acknowledgedTopics: [OverlayHost: Set<OverlayTopic>]
+    /// Hosts whose submission failed, with the reason, in sorted host order.
+    /// Their delivery is uncertain: a host may have admitted the transaction
+    /// before its answer was lost.
+    public let hostFailures: [OverlayHostFailure]
+    /// Why the broadcast did not meet its acknowledgment requirements, or nil
+    /// when it did.
+    public let failure: OverlayPolicyError?
+}
+
 /// A deterministic, one-shot SHIP broadcaster for caller-supplied Atomic BEEF.
 ///
 /// This broadcaster has no default resolver, tracker, transport, or retry. It
 /// discovers signed SHIP advertisements through the injected resolver and
 /// submits to each interested host at most once, naming only the topics that
-/// host advertised. Acknowledgment requirements are checked against all of
-/// the broadcast's topics, as in `@bsv/sdk`.
+/// host advertised.
+///
+/// Acknowledgment requirements follow `@bsv/sdk` `SHIPBroadcaster`
+/// (`SHIPBroadcaster.ts:466-545`). By default some host must acknowledge every
+/// topic, and other hosts may fail: one bogus advertisement does not fail every
+/// broadcast. A failed host counts as acknowledging nothing, so a requirement
+/// on every host or on a named host fails when that host fails. Requirements
+/// are checked against all of the broadcast's topics.
 public struct OverlayTopicBroadcaster: Sendable {
     private let topics: [OverlayTopic]
     private let facilitator: any TopicFacilitator
@@ -17,8 +38,11 @@ public struct OverlayTopicBroadcaster: Sendable {
     private let acknowledgmentByHost: [OverlayHost: AckFrom]
     private let beefLimits: BEEFLimits
     private let adminTokenLimits: OverlayAdminTokenLimits
+    private let discoveredHostPolicy: OverlayDiscoveredHostPolicy
     private let limits: OverlayLimits
 
+    /// `acknowledgmentByHost` keys must be `https://` origins, the only hosts
+    /// discovery yields; `https://host/` and `https://host` name one host.
     public init(
         topics: [OverlayTopic],
         facilitator: any TopicFacilitator,
@@ -28,6 +52,7 @@ public struct OverlayTopicBroadcaster: Sendable {
         acknowledgmentByHost: [OverlayHost: AckFrom] = [:],
         beefLimits: BEEFLimits,
         adminTokenLimits: OverlayAdminTokenLimits = .standard,
+        discoveredHostPolicy: OverlayDiscoveredHostPolicy = .publicNetworkOnly,
         limits: OverlayLimits = .standard
     ) throws {
         guard !topics.isEmpty else { throw OverlayError.emptyValue(name: "topics") }
@@ -59,14 +84,16 @@ public struct OverlayTopicBroadcaster: Sendable {
         try Self.validate(every, against: orderedTopics)
         try Self.validate(any, against: orderedTopics)
         // Discovered hosts are `https://` origins, so a requirement keyed by
-        // `https://host/` names the same host as `https://host`, as in
-        // `@bsv/sdk` (`snapshotSpecificHostRequirements`).
+        // `https://host/` names the same host as `https://host`, and a key
+        // that is not an origin could never match: `@bsv/sdk` rejects it
+        // (`snapshotSpecificHostRequirements`).
         var requirementsByHost: [OverlayHost: AckFrom] = [:]
         for (host, requirement) in acknowledgmentByHost {
             try Self.validate(requirement, against: orderedTopics)
-            let key =
-                OverlayAdvertisementURI.httpsOrigin(host.rawValue)
-                .flatMap { try? OverlayHost(rawValue: $0, limits: limits) } ?? host
+            guard let origin = OverlayAdvertisementURI.httpsOrigin(host.rawValue) else {
+                throw OverlayError.invalidHost
+            }
+            let key = try OverlayHost(rawValue: origin, limits: limits)
             guard requirementsByHost.updateValue(requirement, forKey: key) == nil else {
                 throw OverlayError.duplicateValue(name: "acknowledgmentHosts")
             }
@@ -80,13 +107,40 @@ public struct OverlayTopicBroadcaster: Sendable {
         self.acknowledgmentByHost = requirementsByHost
         self.beefLimits = beefLimits
         self.adminTokenLimits = adminTokenLimits
+        self.discoveredHostPolicy = discoveredHostPolicy
         self.limits = limits
     }
 
+    /// Broadcasts and throws when the acknowledgment requirements are not met.
+    ///
+    /// Throws ``OverlayPolicyError/acknowledgmentFailed`` when every host
+    /// answered and the requirements are not met, and
+    /// ``OverlayPolicyError/uncertainDelivery`` when they are not met and a
+    /// host failed, since that host may have admitted the transaction. Use
+    /// ``broadcastDetailed(_:offChainValues:)`` to see each host's outcome.
     public func broadcast(
         _ atomicBEEF: AtomicBEEF,
         offChainValues: [UInt8] = []
     ) async throws -> BroadcastResult {
+        let report = try await broadcastDetailed(atomicBEEF, offChainValues: offChainValues)
+        if let failure = report.failure { throw failure }
+        let failed = report.hostFailures.count
+        return BroadcastResult(
+            transactionID: report.transactionID,
+            message: failed == 0
+                ? "Submitted to \(report.acknowledgedTopics.count) overlay host(s)."
+                : "Submitted to \(report.acknowledgedTopics.count) overlay host(s); "
+                    + "\(failed) failed."
+        )
+    }
+
+    /// Broadcasts and reports each host's outcome. Throws only before any
+    /// submission (invalid input, discovery failure, no interested host) or on
+    /// cancellation; requirement failures are in ``OverlayBroadcastReport/failure``.
+    public func broadcastDetailed(
+        _ atomicBEEF: AtomicBEEF,
+        offChainValues: [UInt8] = []
+    ) async throws -> OverlayBroadcastReport {
         try Task.checkCancellation()
         let bytes: [UInt8]
         do {
@@ -118,11 +172,24 @@ public struct OverlayTopicBroadcaster: Sendable {
                 )
             )
         }
-        let results = try await submit(submissions)
-        try validateAcknowledgments(results)
-        return BroadcastResult(
+        let outcomes = try await submit(submissions)
+        var acknowledged: [OverlayHost: Set<OverlayTopic>] = [:]
+        var failures: [OverlayHostFailure] = []
+        for (host, outcome) in outcomes {
+            switch outcome {
+            case .success(let steak): acknowledged[host] = Self.acknowledgedTopics(in: steak)
+            case .failure(let error): failures.append(OverlayHostFailure(host: host, error: error))
+            }
+        }
+        var failure: OverlayPolicyError?
+        if !requirementsMet(acknowledged, hosts: hosts.keys) {
+            failure = failures.isEmpty ? .acknowledgmentFailed : .uncertainDelivery
+        }
+        return OverlayBroadcastReport(
             transactionID: atomicBEEF.subjectTransactionID,
-            message: "Submitted to \(results.count) overlay host(s)."
+            acknowledgedTopics: acknowledged,
+            hostFailures: failures,
+            failure: failure
         )
     }
 
@@ -131,6 +198,8 @@ public struct OverlayTopicBroadcaster: Sendable {
     /// Like `@bsv/sdk` `SHIPBroadcaster` (`SHIPBroadcaster.ts:476-482,738-783`),
     /// each host is later sent only the topics it advertised, because the
     /// overlay engine refuses a submission that names a topic it does not host.
+    /// As there, hosts past the host limit are left out rather than failing
+    /// the broadcast; the resolver's output order decides which are kept.
     private func interestedHosts() async throws -> [OverlayHost: Set<OverlayTopic>] {
         let service: OverlayService
         do {
@@ -160,31 +229,33 @@ public struct OverlayTopicBroadcaster: Sendable {
                 ),
                 case .ship(let topic) = token.subject,
                 requested.contains(topic),
-                let host = advertisedHTTPSHost(token, limits: limits)
+                let host = advertisedHTTPSHost(
+                    token, policy: discoveredHostPolicy, limits: limits)
             else { continue }
-            hosts[host, default: []].insert(topic)
-            guard hosts.count <= limits.maximumResolutionHostCount else {
-                throw OverlayError.limitExceeded(
-                    name: "interestedHosts",
-                    actual: hosts.count,
-                    maximum: limits.maximumResolutionHostCount
-                )
+            guard hosts[host] != nil || hosts.count < limits.maximumResolutionHostCount else {
+                continue
             }
+            hosts[host, default: []].insert(topic)
         }
         return hosts
     }
 
+    /// Each host's STEAK or failure, in host order. A host that answers with
+    /// an empty STEAK, or acknowledges a topic it was not sent, has failed, as
+    /// in `@bsv/sdk` (`SHIPBroadcaster.ts:476-496`).
     private func submit(
         _ submissions: [(OverlayHost, TaggedBEEF)]
-    ) async throws -> [OverlayHost: Steak] {
-        var indexed: [(Int, OverlayHost, Steak)] = []
-        var uncertain = false
+    ) async throws -> [(OverlayHost, Result<Steak, any Error>)] {
+        var indexed: [(Int, Result<Steak, any Error>)] = []
         let width = limits.maximumConcurrentRequestCount
         var start = 0
         while start < submissions.count {
-            try Task.checkCancellation()
+            if Task.isCancelled {
+                if start == 0 { throw CancellationError() }
+                throw OverlayPolicyError.uncertainDelivery
+            }
             let end = min(submissions.count, start + width)
-            await withTaskGroup(of: OverlaySubmissionOutcome.self) { group in
+            await withTaskGroup(of: (Int, Result<Steak, any Error>).self) { group in
                 for index in start..<end {
                     let (host, taggedBEEF) = submissions[index]
                     group.addTask {
@@ -192,69 +263,49 @@ public struct OverlayTopicBroadcaster: Sendable {
                             try Task.checkCancellation()
                             let steak = try await facilitator.submit(taggedBEEF, to: host)
                             try Task.checkCancellation()
-                            // `validateSTEAK` in `@bsv/sdk` fails a host that
-                            // acknowledges a topic it was not sent.
-                            guard Set(steak.instructions.keys).isSubset(of: taggedBEEF.topics)
-                            else { return .uncertain }
-                            return .success(index, host, steak)
+                            guard !steak.instructions.isEmpty,
+                                Set(steak.instructions.keys).isSubset(of: taggedBEEF.topics)
+                            else { return (index, .failure(OverlayPolicyError.invalidSteak)) }
+                            return (index, .success(steak))
                         } catch {
-                            return .uncertain
+                            return (index, .failure(error))
                         }
                     }
                 }
                 for await result in group {
-                    switch result {
-                    case .success(let index, let host, let steak):
-                        indexed.append((index, host, steak))
-                    case .uncertain:
-                        uncertain = true
-                    }
+                    indexed.append(result)
                 }
             }
             start = end
         }
-        if uncertain || Task.isCancelled {
-            throw OverlayPolicyError.uncertainDelivery
-        }
-        guard indexed.count == submissions.count else {
-            throw OverlayPolicyError.uncertainDelivery
-        }
-        return Dictionary(
-            uniqueKeysWithValues: indexed.sorted { $0.0 < $1.0 }.map { ($0.1, $0.2) }
-        )
+        // A submission may have reached a host before cancellation, so its
+        // delivery is uncertain rather than cancelled.
+        if Task.isCancelled { throw OverlayPolicyError.uncertainDelivery }
+        return indexed.sorted { $0.0 < $1.0 }.map { (submissions[$0.0].0, $0.1) }
     }
 
-    private func validateAcknowledgments(_ results: [OverlayHost: Steak]) throws {
-        let ordered = results.keys.sorted()
-        if !ordered.allSatisfy({ host in
-            results[host].map {
-                Self.satisfies(
-                    acknowledgmentFromEveryHost,
-                    steak: $0,
-                    allTopics: topics
-                )
-            } == true
-        }) {
-            throw OverlayPolicyError.acknowledgmentFailed
-        }
-        if !ordered.contains(where: { host in
-            results[host].map {
-                Self.satisfies(
-                    acknowledgmentFromAnyHost,
-                    steak: $0,
-                    allTopics: topics
-                )
-            } == true
-        }) {
-            throw OverlayPolicyError.acknowledgmentFailed
-        }
+    private func requirementsMet(
+        _ acknowledged: [OverlayHost: Set<OverlayTopic>],
+        hosts: Dictionary<OverlayHost, Set<OverlayTopic>>.Keys
+    ) -> Bool {
+        let none: Set<OverlayTopic> = []
+        guard !acknowledged.isEmpty else { return false }
+        guard
+            hosts.allSatisfy({
+                Self.satisfies(acknowledgmentFromEveryHost, acknowledged[$0] ?? none, topics)
+            })
+        else { return false }
+        guard
+            acknowledged.values.contains(where: {
+                Self.satisfies(acknowledgmentFromAnyHost, $0, topics)
+            })
+        else { return false }
         for (host, requirement) in acknowledgmentByHost {
-            guard let steak = results[host],
-                Self.satisfies(requirement, steak: steak, allTopics: topics)
-            else {
-                throw OverlayPolicyError.acknowledgmentFailed
+            guard Self.satisfies(requirement, acknowledged[host] ?? none, topics) else {
+                return false
             }
         }
+        return true
     }
 
     private static func validate(
@@ -268,16 +319,19 @@ public struct OverlayTopicBroadcaster: Sendable {
         }
     }
 
-    private static func satisfies(
-        _ requirement: AckFrom,
-        steak: Steak,
-        allTopics: [OverlayTopic]
-    ) -> Bool {
-        let acknowledged = Set(
+    private static func acknowledgedTopics(in steak: Steak) -> Set<OverlayTopic> {
+        Set(
             steak.instructions.compactMap { topic, instruction in
                 instruction.acknowledgesTopic ? topic : nil
             }
         )
+    }
+
+    private static func satisfies(
+        _ requirement: AckFrom,
+        _ acknowledged: Set<OverlayTopic>,
+        _ allTopics: [OverlayTopic]
+    ) -> Bool {
         switch requirement.requirement {
         case .none:
             return true
@@ -289,9 +343,4 @@ public struct OverlayTopicBroadcaster: Sendable {
             return Set(allTopics).isSubset(of: acknowledged)
         }
     }
-}
-
-private enum OverlaySubmissionOutcome: Sendable {
-    case success(Int, OverlayHost, Steak)
-    case uncertain
 }

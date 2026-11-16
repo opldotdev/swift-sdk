@@ -13,11 +13,60 @@ public enum OverlayPolicyError: Error, Equatable, Sendable {
     case invalidAtomicBEEF
     case uncertainDelivery
     case acknowledgmentFailed
+    /// A host's STEAK was empty or acknowledged a topic it was not sent.
+    case invalidSteak
 }
 
 /// A bounded service that resolves one overlay lookup question.
 public protocol OverlayLookupResolving: Sendable {
     func resolve(_ question: LookupQuestion) async throws -> LookupAnswer
+}
+
+/// Which advertised hosts discovery may contact.
+public enum OverlayDiscoveredHostPolicy: Hashable, Sendable {
+    /// Only hosts that may be public network endpoints: no loopback, private,
+    /// link-local, shared, multicast or reserved address, and no `localhost`,
+    /// `.local` or `.internal` name. `@bsv/sdk` applies the same address rules
+    /// to every request through `createPublicNetworkFetch`
+    /// (`storage/PublicHTTPSFetch.ts:114-158`). This is the default, because
+    /// anyone can publish a one-satoshi advertisement.
+    case publicNetworkOnly
+    /// Any `https://` origin, for private deployments and tests.
+    case anyHTTPSOrigin
+}
+
+/// A host that gave no usable answer, with the reason, for logging.
+public struct OverlayHostFailure: Sendable {
+    public let host: OverlayHost
+    public let error: any Error
+
+    public init(host: OverlayHost, error: any Error) {
+        self.host = host
+        self.error = error
+    }
+}
+
+/// An output a host returned that the resolver left out, with the reason.
+public struct LookupOutputRejection: Sendable {
+    public let host: OverlayHost
+    public let output: OutputListItem
+    public let error: any Error
+
+    public init(host: OverlayHost, output: OutputListItem, error: any Error) {
+        self.host = host
+        self.output = output
+        self.error = error
+    }
+}
+
+/// A lookup result with the hosts and outputs that were left out of it.
+public struct LookupResolution: Sendable {
+    /// The merged answer, or nil when no host gave a usable one.
+    public let answer: LookupAnswer?
+    /// Hosts whose request failed, in sorted host order.
+    public let hostFailures: [OverlayHostFailure]
+    /// Outputs left out because their transaction or output could not be read.
+    public let rejectedOutputs: [LookupOutputRejection]
 }
 
 /// An immutable, bounded resolver for SHIP and SLAP lookup services.
@@ -32,8 +81,15 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
     private let additionalHosts: [OverlayService: [OverlayHost]]
     private let beefLimits: BEEFLimits
     private let adminTokenLimits: OverlayAdminTokenLimits
+    private let discoveredHostPolicy: OverlayDiscoveredHostPolicy
     private let limits: OverlayLimits
 
+    /// Hosts given here that are `https://` origins are normalized as
+    /// discovered hosts are (lowercase host, no default port, no trailing
+    /// slash), so one origin is queried once. Two spellings of one origin in
+    /// the same list are a duplicate, as in `@bsv/sdk` (`LookupResolver.ts:551-568`).
+    /// Other hosts are used as given. `discoveredHostPolicy` applies only to
+    /// hosts found through SLAP advertisements.
     public init(
         facilitator: any LookupFacilitator,
         slapTrackers: [OverlayHost],
@@ -41,29 +97,67 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
         additionalHosts: [OverlayService: [OverlayHost]] = [:],
         beefLimits: BEEFLimits,
         adminTokenLimits: OverlayAdminTokenLimits = .standard,
+        discoveredHostPolicy: OverlayDiscoveredHostPolicy = .publicNetworkOnly,
         limits: OverlayLimits = .standard
     ) throws {
-        try Self.validateHosts(slapTrackers, limits: limits)
-        for hosts in hostOverrides.values {
+        let trackers = Self.normalized(slapTrackers, limits: limits)
+        let overrides = hostOverrides.mapValues { Self.normalized($0, limits: limits) }
+        let additional = additionalHosts.mapValues { Self.normalized($0, limits: limits) }
+        try Self.validateHosts(trackers, limits: limits)
+        for hosts in overrides.values {
             try Self.validateHosts(hosts, limits: limits)
         }
-        for hosts in additionalHosts.values {
+        for hosts in additional.values {
             try Self.validateHosts(hosts, limits: limits)
         }
         self.facilitator = facilitator
-        self.slapTrackers = Self.uniqueSorted(slapTrackers)
-        self.hostOverrides = hostOverrides.mapValues(Self.uniqueSorted)
-        self.additionalHosts = additionalHosts.mapValues(Self.uniqueSorted)
+        self.slapTrackers = trackers.sorted()
+        self.hostOverrides = overrides.mapValues { $0.sorted() }
+        self.additionalHosts = additional.mapValues { $0.sorted() }
         self.beefLimits = beefLimits
         self.adminTokenLimits = adminTokenLimits
+        self.discoveredHostPolicy = discoveredHostPolicy
         self.limits = limits
     }
 
+    /// Resolves `question` and returns the merged answer.
+    ///
+    /// Throws ``OverlayPolicyError/noSuccessfulResponses`` when no host
+    /// answered, and ``OverlayPolicyError/invalidLookupOutput`` when hosts
+    /// answered only with outputs that could not be read. Use
+    /// ``resolveDetailed(_:)`` to see which hosts failed and why.
     public func resolve(_ question: LookupQuestion) async throws -> LookupAnswer {
+        let resolution = try await resolveDetailed(question)
+        guard let answer = resolution.answer else {
+            throw resolution.rejectedOutputs.isEmpty
+                ? OverlayPolicyError.noSuccessfulResponses
+                : OverlayPolicyError.invalidLookupOutput
+        }
+        return answer
+    }
+
+    /// Resolves `question` and reports each failed host and each output left
+    /// out, with its reason.
+    ///
+    /// As in `@bsv/sdk`, one host's bad output does not fail the lookup: an
+    /// output whose transaction cannot be read from its BEEF, whose `txid`
+    /// disagrees with its BEEF, or whose index is out of range is left out
+    /// (`resolveTxIdForOutput` in `LookupResolver.ts`). The answer is nil when
+    /// no host answered, or when every output any host returned was left out.
+    public func resolveDetailed(_ question: LookupQuestion) async throws -> LookupResolution {
         let hosts = try await competentHosts(for: question.service)
         guard !hosts.isEmpty else { throw OverlayPolicyError.noCompetentHosts }
-        let responses = try await query(question, at: hosts)
-        return try aggregate(responses)
+        let results = try await query(question, at: hosts)
+        var answers: [(OverlayHost, LookupAnswer)] = []
+        var failures: [OverlayHostFailure] = []
+        for (host, result) in results {
+            switch result {
+            case .success(let answer): answers.append((host, answer))
+            case .failure(let error): failures.append(OverlayHostFailure(host: host, error: error))
+            }
+        }
+        let (answer, rejected) = try aggregate(answers)
+        return LookupResolution(answer: answer, hostFailures: failures, rejectedOutputs: rejected)
     }
 
     /// Returns the explicit or discovered hosts for one lookup service.
@@ -95,10 +189,12 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
             query: queryBytes,
             limits: limits
         )
-        let responses = try await query(question, at: slapTrackers)
+        let results = try await query(question, at: slapTrackers)
+        guard results.contains(where: { if case .success = $0.1 { true } else { false } }) else {
+            throw OverlayPolicyError.noSuccessfulResponses
+        }
         var discovered: Set<OverlayHost> = []
-        for response in responses {
-            guard case .outputList(let outputs) = response else { continue }
+        for case (_, .success(.outputList(let outputs))) in results {
             for output in outputs {
                 guard
                     let token = verifiedAdvertisement(
@@ -107,7 +203,8 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
                         adminTokenLimits: adminTokenLimits
                     ),
                     token.subject == .slap(service),
-                    let host = advertisedHTTPSHost(token, limits: limits)
+                    let host = advertisedHTTPSHost(
+                        token, policy: discoveredHostPolicy, limits: limits)
                 else { continue }
                 discovered.insert(host)
                 guard discovered.count <= limits.maximumResolutionHostCount else {
@@ -122,18 +219,22 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
         return discovered.sorted()
     }
 
+    /// Each host's answer or failure, in host order. Only cancellation and
+    /// host-count limits throw.
     private func query(
         _ question: LookupQuestion,
         at hosts: [OverlayHost]
-    ) async throws -> [LookupAnswer] {
+    ) async throws -> [(OverlayHost, Result<LookupAnswer, any Error>)] {
         try Self.validateHosts(hosts, limits: limits)
-        var indexed: [(Int, LookupAnswer)] = []
+        var indexed: [(Int, Result<LookupAnswer, any Error>)] = []
         let width = limits.maximumConcurrentRequestCount
         var start = 0
         while start < hosts.count {
             try Task.checkCancellation()
             let end = min(hosts.count, start + width)
-            try await withThrowingTaskGroup(of: (Int, LookupAnswer?).self) { group in
+            try await withThrowingTaskGroup(
+                of: (Int, Result<LookupAnswer, any Error>).self
+            ) { group in
                 for index in start..<end {
                     let host = hosts[index]
                     group.addTask {
@@ -144,25 +245,22 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
                                 at: host
                             )
                             try Task.checkCancellation()
-                            return (index, answer)
+                            return (index, .success(answer))
                         } catch is CancellationError {
                             throw CancellationError()
                         } catch {
-                            return (index, nil)
+                            return (index, .failure(error))
                         }
                     }
                 }
                 for try await result in group {
-                    if let answer = result.1 {
-                        indexed.append((result.0, answer))
-                    }
+                    indexed.append(result)
                 }
             }
             start = end
         }
         try Task.checkCancellation()
-        guard !indexed.isEmpty else { throw OverlayPolicyError.noSuccessfulResponses }
-        return indexed.sorted { $0.0 < $1.0 }.map(\.1)
+        return indexed.sorted { $0.0 < $1.0 }.map { (hosts[$0.0], $0.1) }
     }
 
     /// Merges the hosts' answers.
@@ -172,36 +270,52 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
     /// `LookupResolver.query` does (`LookupResolver.ts:1508-1528`). When every
     /// answering host answers freeform, the first freeform answer in sorted
     /// host order is returned.
-    private func aggregate(_ responses: [LookupAnswer]) throws -> LookupAnswer {
-        let hasOutputs = responses.contains { if case .outputList = $0 { true } else { false } }
+    private func aggregate(
+        _ answers: [(OverlayHost, LookupAnswer)]
+    ) throws -> (LookupAnswer?, [LookupOutputRejection]) {
+        let hasOutputs = answers.contains { if case .outputList = $0.1 { true } else { false } }
         if !hasOutputs {
-            guard case .freeform(let bytes) = responses.first else {
-                throw OverlayPolicyError.noSuccessfulResponses
-            }
-            return try LookupAnswer(freeform: bytes, limits: limits)
+            guard case .freeform(let bytes)? = answers.first?.1 else { return (nil, []) }
+            return (try LookupAnswer(freeform: bytes, limits: limits), [])
         }
 
         var outputsByKey: [OverlayOutputKey: OutputListItem] = [:]
-        for response in responses {
-            guard case .outputList(let outputs) = response else { continue }
+        var rejected: [LookupOutputRejection] = []
+        var outputCount = 0
+        for case (let host, .outputList(let outputs)) in answers {
+            outputCount += outputs.count
             for output in outputs {
-                let key = try outputKey(for: output)
+                let key: OverlayOutputKey
+                do {
+                    key = try outputKey(for: output)
+                } catch {
+                    rejected.append(LookupOutputRejection(host: host, output: output, error: error))
+                    continue
+                }
                 if outputsByKey[key] == nil {
                     outputsByKey[key] = output
                 }
             }
         }
+        if outputCount > 0, outputsByKey.isEmpty { return (nil, rejected) }
         let outputs = outputsByKey.keys.sorted().compactMap { outputsByKey[$0] }
-        return try LookupAnswer(outputList: outputs, limits: limits)
+        return (try LookupAnswer(outputList: outputs, limits: limits), rejected)
     }
 
     private func outputKey(for output: OutputListItem) throws -> OverlayOutputKey {
-        let transaction = try overlayLookupTransaction(for: output, beefLimits: beefLimits)
+        let transaction = try output.transaction(beefLimits: beefLimits)
         guard Int(output.outputIndex) < transaction.outputs.count else {
             throw OverlayPolicyError.invalidLookupOutput
         }
         let transactionID = try transaction.transactionID(limits: beefLimits.transactionLimits)
         return OverlayOutputKey(transactionID: transactionID, outputIndex: output.outputIndex)
+    }
+
+    private static func normalized(_ hosts: [OverlayHost], limits: OverlayLimits) -> [OverlayHost] {
+        hosts.map { host in
+            OverlayAdvertisementURI.httpsOrigin(host.rawValue)
+                .flatMap { try? OverlayHost(rawValue: $0, limits: limits) } ?? host
+        }
     }
 
     private static func validateHosts(
@@ -225,27 +339,21 @@ public struct LookupResolver: OverlayLookupResolving, Sendable {
     }
 }
 
-/// The transaction that holds a lookup output.
-///
-/// With a `transactionID` the output names its transaction, and that
-/// transaction is taken from the BEEF; an Atomic BEEF must have it as its
-/// subject. Without one, an Atomic BEEF gives its subject and a standard BEEF
-/// gives its last transaction once reordered parents-first.
-package func overlayLookupTransaction(
-    for output: OutputListItem,
-    beefLimits: BEEFLimits
-) throws -> Transaction {
-    do {
-        if output.beef.count >= 4,
-            output.beef[0] == 1,
-            output.beef[1] == 1,
-            output.beef[2] == 1,
-            output.beef[3] == 1
-        {
-            let atomic = try AtomicBEEF(
-                bytes: output.beef, limits: beefLimits, transactionOrder: .any
-            )
-            if let named = output.transactionID, named != atomic.subjectTransactionID {
+extension OutputListItem {
+    /// The transaction that holds this output.
+    ///
+    /// With a ``transactionID`` the output names its transaction, which is
+    /// taken from the BEEF; an Atomic BEEF must have it as its subject.
+    /// Without one, an Atomic BEEF gives its subject and a standard BEEF gives
+    /// its last transaction once reordered parents-first.
+    ///
+    /// Throws the BEEF decoding error when `beef` cannot be read, and
+    /// ``OverlayPolicyError/invalidLookupOutput`` when the BEEF lacks the
+    /// named transaction or names another subject.
+    public func transaction(beefLimits: BEEFLimits) throws -> Transaction {
+        if beef.count >= 4, beef[0] == 1, beef[1] == 1, beef[2] == 1, beef[3] == 1 {
+            let atomic = try AtomicBEEF(bytes: beef, limits: beefLimits, transactionOrder: .any)
+            if let named = transactionID, named != atomic.subjectTransactionID {
                 throw OverlayPolicyError.invalidLookupOutput
             }
             guard
@@ -253,21 +361,17 @@ package func overlayLookupTransaction(
                     for: atomic.subjectTransactionID,
                     limits: beefLimits.transactionLimits
                 )
-            else {
-                throw OverlayPolicyError.invalidLookupOutput
-            }
+            else { throw OverlayPolicyError.invalidLookupOutput }
             return transaction
         }
-        let beef = try BEEF(bytes: output.beef, limits: beefLimits, transactionOrder: .any)
-        if let named = output.transactionID {
+        let standard = try BEEF(bytes: beef, limits: beefLimits, transactionOrder: .any)
+        if let named = transactionID {
             guard
-                let transaction = try beef.transaction(
+                let transaction = try standard.transaction(
                     for: named,
                     limits: beefLimits.transactionLimits
                 )
-            else {
-                throw OverlayPolicyError.invalidLookupOutput
-            }
+            else { throw OverlayPolicyError.invalidLookupOutput }
             return transaction
         }
         // Lookup answers come from `@bsv/sdk` writers, which can list a child
@@ -277,10 +381,21 @@ package func overlayLookupTransaction(
         // instead; the two differ only when the writer put a parent last. This
         // keeps the reordered choice: a transaction nothing else in the answer
         // spends.
-        guard let transaction = beef.transactions.last?.transaction else {
+        guard let transaction = standard.transactions.last?.transaction else {
             throw OverlayPolicyError.invalidLookupOutput
         }
         return transaction
+    }
+}
+
+/// ``OutputListItem/transaction(beefLimits:)`` with every failure reported as
+/// ``OverlayPolicyError/invalidLookupOutput``.
+package func overlayLookupTransaction(
+    for output: OutputListItem,
+    beefLimits: BEEFLimits
+) throws -> Transaction {
+    do {
+        return try output.transaction(beefLimits: beefLimits)
     } catch let error as OverlayPolicyError {
         throw error
     } catch {
@@ -298,7 +413,7 @@ package func verifiedAdvertisement(
     beefLimits: BEEFLimits,
     adminTokenLimits: OverlayAdminTokenLimits
 ) -> OverlayAdminToken? {
-    guard let transaction = try? overlayLookupTransaction(for: output, beefLimits: beefLimits),
+    guard let transaction = try? output.transaction(beefLimits: beefLimits),
         Int(output.outputIndex) < transaction.outputs.count
     else { return nil }
     let selected = transaction.outputs[Int(output.outputIndex)]
@@ -307,12 +422,16 @@ package func verifiedAdvertisement(
 }
 
 /// The `https://` origin an advertisement names, as a host the HTTPS
-/// facilitators accept, or nil when it names another transport.
+/// facilitators accept, or nil when it names another transport or a host
+/// `policy` excludes.
 package func advertisedHTTPSHost(
     _ token: OverlayAdminToken,
+    policy: OverlayDiscoveredHostPolicy,
     limits: OverlayLimits
 ) -> OverlayHost? {
-    guard let origin = OverlayAdvertisementURI.httpsOrigin(token.host.rawValue) else {
+    let uri = token.host.rawValue
+    guard let origin = OverlayAdvertisementURI.httpsOrigin(uri) else { return nil }
+    if policy == .publicNetworkOnly, !OverlayAdvertisementURI.isPublicHTTPSOrigin(uri) {
         return nil
     }
     return try? OverlayHost(rawValue: origin, limits: limits)

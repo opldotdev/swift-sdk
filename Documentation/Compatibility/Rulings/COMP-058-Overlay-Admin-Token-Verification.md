@@ -43,9 +43,20 @@ live discovery applies:
   `https+bsvauth`, `https+bsvauth+smf`, `https+bsvauth+scrypt-offchain` or
   `https+rtt` origin, a `wss` URL, or a `js8c+bsvauth+smf` coordinate URI.
   Localhost, punycode labels, credentials, fragments, and control characters
-  are rejected. The Swift parser reads the same ASCII forms TS parses with the
-  WHATWG URL parser, and is stricter only on forms no writer emits (any `@`,
-  backslashes, non-ASCII host text).
+  are rejected.
+- Hosts are parsed as the WHATWG URL parser in TS parses them. A host that
+  ends in a number must be a valid IPv4 address in one of the WHATWG forms
+  (`2130706433`, `0x7f.1`, `1.2.3`, octal parts), and is written as a dotted
+  quad, so `https://2130706433/` is the origin `https://127.0.0.1`. Hosts such
+  as `1.2.3.4.5`, `256.1.1.1` and `a.b.c.1` are rejected. Bracketed IPv6 hosts
+  are validated and written in canonical form (`[0:0:0:0:0:0:0:1]` is `[::1]`).
+  Before this, Swift kept those hosts as written, so one address under two
+  spellings was two hosts, and malformed IP hosts that TS rejects were accepted.
+- Swift accepts nothing TS rejects. It rejects a few forms the WHATWG parser
+  repairs and no advertisement writer emits: percent-encoded or non-ASCII host
+  text (TS applies IDNA), any `@` in the authority, backslashes, dot segments
+  or other text in a path that must be `/`, extra slashes after the scheme, and
+  leading or trailing spaces.
 
 Discovery (COMP-061) also requires the advertising output to hold exactly one
 satoshi, as `LookupResolver.ts` and `SHIPBroadcaster.ts` do.

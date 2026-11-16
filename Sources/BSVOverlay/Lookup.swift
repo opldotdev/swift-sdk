@@ -27,8 +27,13 @@ public struct LookupQuestion: Hashable, Sendable, CustomStringConvertible,
 ///
 /// `beef` holds the output's transaction, normally as Atomic BEEF. When
 /// `transactionID` is present it names the transaction that holds the output,
-/// which matters when `beef` is a standard BEEF carrying several transactions.
-/// `context` is the lookup service's optional per-output data.
+/// and `beef` alone is not enough to find it: `beef` may be a standard BEEF
+/// carrying several transactions. Use ``transaction(beefLimits:)`` to read the
+/// transaction the output belongs to.
+///
+/// `context` is the lookup service's optional per-output data. It is host
+/// data that nothing verifies. When several hosts return the same outpoint,
+/// ``LookupResolver`` keeps the first host's item, context included.
 public struct OutputListItem: Hashable, Sendable, CustomStringConvertible,
     CustomDebugStringConvertible, CustomReflectable
 {

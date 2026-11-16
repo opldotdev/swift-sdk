@@ -1,10 +1,11 @@
 import BSVCore
 import BSVCrypto
 import BSVKeys
-import BSVOverlay
 import BSVScript
 import BSVTransaction
 import Testing
+
+@testable import BSVOverlay
 
 /// Overlay names, advertisements, discovery, and broadcast policy checked
 /// against `@bsv/sdk` 4.1.1 (ts-stack `3b1abc569`, `packages/sdk/src/overlay-tools`).
@@ -366,6 +367,285 @@ struct OverlayTSParityTests {
         }
     }
 
+    // MARK: S5 URI hosts
+
+    @Test("S5: advertised IP hosts are parsed and written as WHATWG URL does")
+    func whatwgHosts() throws {
+        // `new URL(uri).origin` in Bun, the parser `@bsv/sdk` uses
+        // (`OverlayAdminTokenTemplate.ts:81-95`, `SHIPBroadcaster.ts:102-125`).
+        let origins: [(String, String?)] = [
+            ("https://1.2.3.4.5/", nil),
+            ("https://256.1.1.1/", nil),
+            ("https://a.b.c.1/", nil),
+            ("https://09.1.1.1/", nil),
+            ("https://1.2.3.08/", nil),
+            ("https://example.0x10/", nil),
+            ("https://4294967296/", nil),
+            ("https://[1::2::3]/", nil),
+            ("https://[1:2:3:4:5:6:7:8:9]/", nil),
+            ("https://2130706433/", "https://127.0.0.1"),
+            ("https://0x7f.1/", "https://127.0.0.1"),
+            ("https://0x/", "https://0.0.0.0"),
+            ("https://1.2.3/", "https://1.2.0.3"),
+            ("https://010.0.0.1/", "https://8.0.0.1"),
+            ("https://0300.0250.1.1/", "https://192.168.1.1"),
+            ("https://8.8.8.8./", "https://8.8.8.8"),
+            ("https://4294967295/", "https://255.255.255.255"),
+            ("https://[0:0:0:0:0:0:0:1]/", "https://[::1]"),
+            ("https://[::FFFF:1.2.3.4]/", "https://[::ffff:102:304]"),
+            ("https://[2001:db8:0:0:1:0:0:1]/", "https://[2001:db8::1:0:0:1]"),
+            ("https://[1:0:0:2:0:0:0:3]/", "https://[1:0:0:2::3]"),
+            ("https://[::]/", "https://[::]"),
+            ("https://[::1.2.3.4]/", "https://[::102:304]"),
+        ]
+        for (uri, origin) in origins {
+            #expect(OverlayAdvertisementURI.httpsOrigin(uri) == origin, "\(uri)")
+            #expect(OverlayAdvertisementURI.isValid(uri) == (origin != nil), "\(uri)")
+        }
+        // The same rules hold for every scheme with a host.
+        #expect(!OverlayAdvertisementURI.isValid("wss://256.1.1.1/socket"))
+        #expect(!OverlayAdvertisementURI.isValid("https+bsvauth://[1::2::3]"))
+    }
+
+    // MARK: S6 public hosts
+
+    @Test("S6: only public network addresses pass the discovered-host filter")
+    func publicAddresses() throws {
+        // `isPublicNetworkAddress` in `@bsv/sdk`, run in Bun
+        // (`storage/PublicHTTPSFetch.ts:114-158`).
+        let verdicts: [(String, Bool)] = [
+            ("127.0.0.1", false), ("192.168.1.1", false), ("10.1.2.3", false),
+            ("100.64.0.1", false), ("169.254.1.1", false), ("172.16.0.1", false),
+            ("224.0.0.1", false), ("198.18.0.1", false), ("203.0.113.1", false),
+            ("0.0.0.0", false), ("8.8.8.8", true), ("1.1.1.1", true),
+            ("[::1]", false), ("[::]", false), ("[fe80::1]", false), ("[fd00::1]", false),
+            ("[::ffff:7f00:1]", false), ("[64:ff9b::a00:1]", false),
+            ("[2002:c0a8:101::]", false), ("[2001:db8::1]", false), ("[ff02::1]", false),
+            ("[3ff0::1]", false), ("[2001:100::1]", false), ("[::102:304]", false),
+            ("[2606:4700::1111]", true), ("[2001:4860:4860::8888]", true),
+        ]
+        for (host, isPublic) in verdicts {
+            #expect(
+                OverlayAdvertisementURI.isPublicHTTPSOrigin("https://\(host)") == isPublic,
+                "\(host)")
+        }
+        for name in ["printer.local", "db.internal", "box.home.arpa", "a.localhost", "localhost."] {
+            #expect(!OverlayAdvertisementURI.isPublicHTTPSOrigin("https://\(name)"), "\(name)")
+        }
+        #expect(OverlayAdvertisementURI.isPublicHTTPSOrigin("https://overlay.example"))
+        // A numeric alias of a private address is caught after canonicalization.
+        #expect(!OverlayAdvertisementURI.isPublicHTTPSOrigin("https://2130706433/"))
+    }
+
+    @Test("S6 and S7: discovery skips private hosts and merges with caller hosts")
+    func discoveryHostPolicy() async throws {
+        let tracker = try OverlayHost(rawValue: "https://tracker.example")
+        let service = try OverlayService(rawValue: "ls_records")
+        var key: UInt8 = 70
+        func ad(_ host: String) throws -> OutputListItem {
+            key += 1
+            return try advertisementItem("SLAP", host: host, subject: service.rawValue, key: key)
+        }
+        let outputs = try [
+            ad("https://127.0.0.1"), ad("https://2130706433/"), ad("https://192.168.1.1"),
+            ad("https://[::1]"), ad("https://printer.local"), ad("https://8.8.8.8"),
+            ad("https://service.example/"),
+        ]
+        let facilitator = ParityLookupMock(responses: [
+            tracker: try LookupAnswer(outputList: outputs)
+        ])
+        let publicOnly = try LookupResolver(
+            facilitator: facilitator,
+            slapTrackers: [tracker],
+            additionalHosts: [service: [try OverlayHost(rawValue: "https://Service.example:443/")]],
+            beefLimits: try beefLimits()
+        )
+        #expect(
+            try await publicOnly.competentHosts(for: service) == [
+                try OverlayHost(rawValue: "https://8.8.8.8"),
+                try OverlayHost(rawValue: "https://service.example"),
+            ])
+
+        let any = try LookupResolver(
+            facilitator: facilitator,
+            slapTrackers: [tracker],
+            beefLimits: try beefLimits(),
+            discoveredHostPolicy: .anyHTTPSOrigin
+        )
+        #expect(
+            try await any.competentHosts(for: service).map(\.rawValue) == [
+                "https://127.0.0.1", "https://192.168.1.1", "https://8.8.8.8",
+                "https://[::1]", "https://printer.local", "https://service.example",
+            ])
+    }
+
+    @Test("S7: caller hosts are normalized, and one origin twice in a list is a duplicate")
+    func callerHostNormalization() async throws {
+        let service = try OverlayService(rawValue: "ls_records")
+        let item = try advertisementItem("SLAP", host: "https://x.example", subject: service.rawValue, key: 80)
+        let host = try OverlayHost(rawValue: "https://a.example")
+        let facilitator = ParityLookupMock(responses: [host: try LookupAnswer(outputList: [item])])
+        let resolver = try LookupResolver(
+            facilitator: facilitator,
+            slapTrackers: [],
+            hostOverrides: [service: [try OverlayHost(rawValue: "https://A.example/")]],
+            additionalHosts: [service: [host]],
+            beefLimits: try beefLimits()
+        )
+        #expect(try await resolver.competentHosts(for: service) == [host])
+        _ = try await resolver.resolve(LookupQuestion(service: service, query: []))
+        #expect(await facilitator.requestCount() == 1)
+
+        // `configuredHosts` in `@bsv/sdk` (`LookupResolver.ts:551-568`).
+        #expect(throws: OverlayError.duplicateValue(name: "hosts")) {
+            _ = try LookupResolver(
+                facilitator: facilitator,
+                slapTrackers: [],
+                hostOverrides: [
+                    service: [try OverlayHost(rawValue: "https://a.example/"), host]
+                ],
+                beefLimits: try beefLimits()
+            )
+        }
+    }
+
+    // MARK: S3 bad outputs
+
+    @Test("S3: one host's unreadable output is left out, with its reason")
+    func badOutputIsSkipped() async throws {
+        let service = try OverlayService(rawValue: "ls_records")
+        let a = try OverlayHost(rawValue: "https://a.example")
+        let b = try OverlayHost(rawValue: "https://b.example")
+        let good = try advertisementItem("SLAP", host: "https://x.example", subject: service.rawValue, key: 90)
+        // Its `txid` names a transaction its BEEF does not hold, which
+        // `resolveTxIdForOutput` in `@bsv/sdk` skips.
+        let wrongID = try OutputListItem(
+            beef: good.beef, outputIndex: 0,
+            transactionID: try TransactionID(displayHex: String(repeating: "ab", count: 32)))
+        let outOfRange = try OutputListItem(beef: good.beef, outputIndex: 9)
+        let unreadable = try OutputListItem(beef: [1, 2, 3], outputIndex: 0)
+        let resolver = try LookupResolver(
+            facilitator: ParityLookupMock(responses: [
+                a: try LookupAnswer(outputList: [wrongID, outOfRange, unreadable]),
+                b: try LookupAnswer(outputList: [good]),
+            ]),
+            slapTrackers: [],
+            hostOverrides: [service: [a, b, try OverlayHost(rawValue: "https://c.example")]],
+            beefLimits: try beefLimits()
+        )
+        let question = try LookupQuestion(service: service, query: [])
+        #expect(try await resolver.resolve(question) == .outputList([good]))
+
+        let detailed = try await resolver.resolveDetailed(question)
+        #expect(detailed.answer == .outputList([good]))
+        #expect(detailed.rejectedOutputs.map(\.host) == [a, a, a])
+        #expect(detailed.rejectedOutputs.map(\.output) == [wrongID, outOfRange, unreadable])
+        #expect(detailed.rejectedOutputs[0].error as? OverlayPolicyError == .invalidLookupOutput)
+        #expect(detailed.rejectedOutputs[2].error is BEEFError)
+        #expect(detailed.hostFailures.map(\.host.rawValue) == ["https://c.example"])
+
+        // When every output is unreadable there is no answer.
+        let allBad = try LookupResolver(
+            facilitator: ParityLookupMock(responses: [a: try LookupAnswer(outputList: [unreadable])]),
+            slapTrackers: [],
+            hostOverrides: [service: [a]],
+            beefLimits: try beefLimits()
+        )
+        await #expect(throws: OverlayPolicyError.invalidLookupOutput) {
+            _ = try await allBad.resolve(question)
+        }
+        #expect(try await allBad.resolveDetailed(question).answer == nil)
+    }
+
+    // MARK: Broadcast acknowledgment
+
+    @Test("A failed host does not fail a broadcast another host acknowledged")
+    func failedHostIsTolerated() async throws {
+        let topic = try OverlayTopic(rawValue: "tm_a")
+        let good = try OverlayHost(rawValue: "https://good.example")
+        let down = try OverlayHost(rawValue: "https://down.example")
+        let empty = try OverlayHost(rawValue: "https://empty.example")
+        let discovery = try LookupAnswer(outputList: [
+            advertisementItem("SHIP", host: good.rawValue, subject: "tm_a", key: 100),
+            advertisementItem("SHIP", host: down.rawValue, subject: "tm_a", key: 101),
+            advertisementItem("SHIP", host: empty.rawValue, subject: "tm_a", key: 102),
+        ])
+        let facilitator = ParityTopicMock(steaks: [
+            good: try Steak(instructions: [topic: try AdmittanceInstructions(outputsToAdmit: [0])]),
+            empty: try Steak(),
+        ])
+        let limits = try beefLimits()
+        let atomic = try atomicBEEF(limits: limits)
+        func broadcaster(
+            every: AckFrom? = nil, byHost: [OverlayHost: AckFrom] = [:]
+        ) throws -> OverlayTopicBroadcaster {
+            try OverlayTopicBroadcaster(
+                topics: [topic], facilitator: facilitator,
+                resolver: ParityResolverMock(answer: discovery),
+                acknowledgmentFromEveryHost: every, acknowledgmentByHost: byHost,
+                beefLimits: limits)
+        }
+
+        // `SHIPBroadcaster` defaults: some host must acknowledge every topic.
+        let result = try await broadcaster().broadcast(atomic)
+        #expect(result.transactionID == atomic.subjectTransactionID)
+        let report = try await broadcaster().broadcastDetailed(atomic)
+        #expect(report.failure == nil)
+        #expect(report.acknowledgedTopics == [good: [topic]])
+        #expect(report.hostFailures.map(\.host) == [down, empty])
+        #expect(report.hostFailures[1].error as? OverlayPolicyError == .invalidSteak)
+
+        // A requirement on every host, or on the failed host, is not met, and
+        // the failed host's delivery is uncertain.
+        await #expect(throws: OverlayPolicyError.uncertainDelivery) {
+            _ = try await broadcaster(every: try AckFrom(requirement: .all)).broadcast(atomic)
+        }
+        await #expect(throws: OverlayPolicyError.uncertainDelivery) {
+            _ = try await broadcaster(byHost: [down: try AckFrom(requirement: .any)])
+                .broadcast(atomic)
+        }
+    }
+
+    @Test("Hosts past the host limit are left out, not an error")
+    func hostLimitTruncates() async throws {
+        let topic = try OverlayTopic(rawValue: "tm_a")
+        let first = try OverlayHost(rawValue: "https://first.example")
+        let discovery = try LookupAnswer(outputList: [
+            advertisementItem("SHIP", host: first.rawValue, subject: "tm_a", key: 110),
+            advertisementItem("SHIP", host: "https://second.example", subject: "tm_a", key: 111),
+        ])
+        let acknowledged = try Steak(
+            instructions: [topic: try AdmittanceInstructions(outputsToAdmit: [0])])
+        let facilitator = ParityTopicMock(steaks: [
+            first: acknowledged, try OverlayHost(rawValue: "https://second.example"): acknowledged,
+        ])
+        let limits = try beefLimits()
+        let broadcaster = try OverlayTopicBroadcaster(
+            topics: [topic], facilitator: facilitator,
+            resolver: ParityResolverMock(answer: discovery),
+            beefLimits: limits,
+            limits: try overlayLimits(maximumNameBytes: 256, maximumHosts: 1)
+        )
+        let report = try await broadcaster.broadcastDetailed(try atomicBEEF(limits: limits))
+        #expect(report.acknowledgedTopics.keys.map(\.rawValue) == [first.rawValue])
+    }
+
+    @Test("N3: an acknowledgment host that is not an https origin is rejected up front")
+    func acknowledgmentHostMustBeOrigin() throws {
+        let topic = try OverlayTopic(rawValue: "tm_a")
+        for raw in ["overlay.example", "https://overlay.example/path", "http://overlay.example"] {
+            #expect(throws: OverlayError.invalidHost, "\(raw)") {
+                _ = try OverlayTopicBroadcaster(
+                    topics: [topic],
+                    facilitator: ParityTopicMock(steaks: [:]),
+                    resolver: ParityResolverMock(answer: try LookupAnswer(outputList: [])),
+                    acknowledgmentByHost: [try OverlayHost(rawValue: raw): try AckFrom(requirement: .any)],
+                    beefLimits: try beefLimits()
+                )
+            }
+        }
+    }
+
     // MARK: Helpers
 
     private func privateKey(_ value: UInt8) throws -> PrivateKey {
@@ -470,7 +750,8 @@ struct OverlayTSParityTests {
 
     private func overlayLimits(
         maximumNameBytes: Int,
-        maximumHostBytes: Int = 2_048
+        maximumHostBytes: Int = 2_048,
+        maximumHosts: Int = 64
     ) throws -> OverlayLimits {
         try OverlayLimits(
             maximumTaggedBEEFByteCount: 1_024,
@@ -483,7 +764,8 @@ struct OverlayTSParityTests {
             maximumLookupQueryByteCount: 1_024,
             maximumLookupOutputCount: 16,
             maximumLookupOutputBEEFByteCount: 1_024,
-            maximumFreeformByteCount: 1_024
+            maximumFreeformByteCount: 1_024,
+            maximumResolutionHostCount: maximumHosts
         )
     }
 }
@@ -499,10 +781,15 @@ private actor ParityLookupMock: LookupFacilitator {
         self.responses = responses
     }
 
+    private var count = 0
+
     func lookup(question: LookupQuestion, at host: OverlayHost) async throws -> LookupAnswer {
+        count += 1
         guard let answer = responses[host] else { throw ParityMockError.failed }
         return answer
     }
+
+    func requestCount() -> Int { count }
 }
 
 private struct ParityResolverMock: OverlayLookupResolving {
