@@ -8,7 +8,9 @@ import Foundation
 /// tracker that failed, a STEAK that was empty or acknowledged a topic that
 /// was not sent, an output whose transaction could not be read, an
 /// advertisement that could not be used, and advertised hosts past the host
-/// limit. Errors are logged in full. Hosts are written as scheme, host and
+/// limit. Errors are logged with their type; the description of one this
+/// SDK defines is public, and of any other, such as an error thrown by a
+/// caller's facilitator, private, as in `AuthLog`. Hosts are written as scheme, host and
 /// port only, so a caller host carrying a user name, password, path or query
 /// does not put it in the log; no payload bytes are written.
 ///
@@ -18,19 +20,21 @@ package enum OverlayLog {
     package static let subsystem = BSVLog.subsystem
     package static let category = "BSVOverlay"
 
-    static func hostFailure(_ operation: String, _ failure: OverlayHostFailure) {
-        error(
-            "\(operation): host \(location(failure.host)) failed: "
-                + "\(type(of: failure.error)): \(String(reflecting: failure.error))"
-        )
+    package static func hostFailure(_ operation: String, _ failure: OverlayHostFailure) {
+        BSVLog.error(
+            category: category,
+            prefix: "\(operation): host \(location(failure.host)) failed: "
+                + "\(type(of: failure.error)): ",
+            describing: failure.error)
     }
 
-    static func rejectedOutput(_ operation: String, _ rejection: LookupOutputRejection) {
-        error(
-            "\(operation): output \(rejection.output.outputIndex) from host "
+    package static func rejectedOutput(_ operation: String, _ rejection: LookupOutputRejection) {
+        BSVLog.error(
+            category: category,
+            prefix: "\(operation): output \(rejection.output.outputIndex) from host "
                 + "\(location(rejection.host)) left out: "
-                + "\(type(of: rejection.error)): \(String(reflecting: rejection.error))"
-        )
+                + "\(type(of: rejection.error)): ",
+            describing: rejection.error)
     }
 
     static func skippedAdvertisement(_ operation: String, output: OutputListItem, reason: String) {

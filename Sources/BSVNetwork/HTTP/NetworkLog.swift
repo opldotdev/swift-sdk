@@ -7,6 +7,8 @@ import Foundation
 /// A line names the call, the method, and the host and path. It never holds a query string,
 /// a request header or a request body, because those can carry API keys and callback tokens.
 /// Provider bodies go through `sanitizedProviderText` first, with the caller's secrets redacted.
+/// The description of an error thrown by caller code, such as a custom `HTTPTransport`, is
+/// private: `<private>` to a `BSVLog` handler unless it reveals private details.
 package enum NetworkLog {
     package static let subsystem = BSVLog.subsystem
     package static let category = "BSVNetwork"
@@ -35,15 +37,20 @@ package enum NetworkLog {
     }
 
     /// A request that got no usable response: the underlying error and its type.
+    ///
+    /// The error's description is private unless this SDK defines its type:
+    /// a caller's `HTTPTransport` may put a URL with its query, a header or a
+    /// body in its errors.
     package static func failure(
         _ operation: String,
         request: HTTPRequest,
         underlying: any Error
     ) {
-        error(
-            "\(operation): \(request.method.rawValue) \(location(request.url)) failed: "
-                + "\(type(of: underlying)): \(String(reflecting: underlying))"
-        )
+        BSVLog.error(
+            category: category,
+            prefix: "\(operation): \(request.method.rawValue) \(location(request.url)) failed: "
+                + "\(type(of: underlying)): ",
+            describing: underlying)
     }
 
     package static func line(

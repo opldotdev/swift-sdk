@@ -7,6 +7,10 @@ import Darwin
 import Glibc
 #elseif canImport(Musl)
 import Musl
+#elseif canImport(Android)
+import Android
+#elseif os(Windows)
+import WinSDK
 #endif
 
 /// The SDK's diagnostic log, shared by every module.
@@ -57,7 +61,17 @@ public enum BSVLog {
     }
 
     /// Receives each line. It is called synchronously on the thread that
-    /// writes the line, from any thread, so it must be quick and thread-safe.
+    /// writes the line, from any thread and from several threads at once, so
+    /// it must be quick and thread-safe.
+    ///
+    /// The handler is called outside the SDK's lock, so it may call
+    /// `setHandler` or make SDK calls. A call that writes a line, such as a
+    /// failed signature check, calls the handler again from inside it, and a
+    /// handler that does so on every line recurses without end. A line
+    /// already being written when `setHandler` returns can still reach the
+    /// handler that was replaced or removed, with that handler's own
+    /// `revealingPrivateDetails` setting; every line written after it returns
+    /// goes to the new handler.
     public typealias Handler = @Sendable (Entry) -> Void
 
     /// Installs `handler` for every line the SDK writes from now on, in place
@@ -105,35 +119,99 @@ public enum BSVLog {
             hasPrivateDetail: true))
     }
 
+    /// Writes `prefix`, the description of `error` and `suffix` as one line.
+    /// The description is public when the error's type is defined by this
+    /// SDK, whose errors carry counts, sizes, names it chose and redacted
+    /// provider text, and private otherwise, since an error thrown by caller
+    /// code, such as a custom transport or wallet, may hold whatever that
+    /// code put in it.
+    package static func error(
+        category: String,
+        prefix: String,
+        describing error: any Error,
+        suffix: String = ""
+    ) {
+        self.error(
+            category: category,
+            prefix: prefix,
+            detail: String(reflecting: error),
+            detailIsPrivate: !isSDKError(error),
+            suffix: suffix)
+    }
+
+    /// Whether `error` is a type one of this SDK's modules defines.
+    package static func isSDKError(_ error: any Error) -> Bool {
+        let module = String(reflecting: type(of: error)).prefix { $0 != "." }
+        return sdkModules.contains(String(module))
+    }
+
+    private static let sdkModules: Set<String> = [
+        "BSV", "BSVAirGap", "BSVAuth", "BSVBigNum", "BSVCompat", "BSVCore", "BSVCrypto",
+        "BSVIdentity", "BSVInterpreter", "BSVKVStore", "BSVKeys", "BSVMessage", "BSVNetwork",
+        "BSVOverlay", "BSVRegistry", "BSVSPV", "BSVScript", "BSVStorage", "BSVTransaction",
+        "BSVWallet",
+    ]
+
     /// What a private detail reads as, as the system log shows it.
     package static let privatePlaceholder = "<private>"
 
     private static let store = HandlerStore()
 
     /// The installed handler, behind a lock so any thread can write lines
-    /// while a caller installs or removes one.
+    /// while a caller installs or removes one. The lock is held only to read
+    /// or replace the handler, never while it runs.
     private final class HandlerStore: @unchecked Sendable {
-        private let mutex: UnsafeMutablePointer<pthread_mutex_t>
+        private let lock = PlatformLock()
         private var handler: Handler?
         private var revealsPrivateDetails = false
 
-        init() {
-            mutex = .allocate(capacity: 1)
-            mutex.initialize(to: pthread_mutex_t())
-            pthread_mutex_init(mutex, nil)
-        }
-
         func set(_ handler: Handler?, revealingPrivateDetails: Bool) {
-            pthread_mutex_lock(mutex)
-            self.handler = handler
-            revealsPrivateDetails = handler != nil && revealingPrivateDetails
-            pthread_mutex_unlock(mutex)
+            lock.withLock {
+                self.handler = handler
+                revealsPrivateDetails = handler != nil && revealingPrivateDetails
+            }
         }
 
         func get() -> (Handler?, Bool) {
-            pthread_mutex_lock(mutex)
-            defer { pthread_mutex_unlock(mutex) }
-            return (handler, revealsPrivateDetails)
+            lock.withLock { (handler, revealsPrivateDetails) }
         }
+    }
+}
+
+/// A mutual-exclusion lock from the platform's C library, since BSVCore does
+/// not import Foundation.
+private final class PlatformLock: @unchecked Sendable {
+    #if os(Windows)
+    private let primitive: UnsafeMutablePointer<SRWLOCK>
+    #else
+    private let primitive: UnsafeMutablePointer<pthread_mutex_t>
+    #endif
+
+    init() {
+        primitive = .allocate(capacity: 1)
+        #if os(Windows)
+        InitializeSRWLock(primitive)
+        #else
+        primitive.initialize(to: pthread_mutex_t())
+        pthread_mutex_init(primitive, nil)
+        #endif
+    }
+
+    deinit {
+        #if !os(Windows)
+        pthread_mutex_destroy(primitive)
+        #endif
+        primitive.deallocate()
+    }
+
+    func withLock<Result>(_ body: () throws -> Result) rethrows -> Result {
+        #if os(Windows)
+        AcquireSRWLockExclusive(primitive)
+        defer { ReleaseSRWLockExclusive(primitive) }
+        #else
+        pthread_mutex_lock(primitive)
+        defer { pthread_mutex_unlock(primitive) }
+        #endif
+        return try body()
     }
 }

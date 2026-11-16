@@ -93,6 +93,40 @@ struct BSVLogSinkTests {
         })
     }
 
+    @Test("a caller's transport or facilitator error text is private; an SDK error is public")
+    func callerErrorTextIsPrivate() throws {
+        let marker = UUID().uuidString
+        let lines = LogLines(marker: marker)
+        BSVLog.setHandler(lines.record)
+        defer { BSVLog.setHandler(nil) }
+        let request = HTTPRequest(
+            method: .get, url: try #require(URL(string: "https://api.example/v1/tx?key=k")))
+        let callerError = CallerWalletError.failed("https://api.example/v1/tx?key=secret-\(marker)")
+
+        NetworkLog.failure("Caller \(marker)", request: request, underlying: callerError)
+        NetworkLog.failure("SDK \(marker)", request: request, underlying: NetworkServiceError.timedOut)
+        let host = try OverlayHost(rawValue: "https://overlay.example")
+        OverlayLog.hostFailure("Caller \(marker)", OverlayHostFailure(host: host, error: callerError))
+        OverlayLog.hostFailure(
+            "SDK \(marker)",
+            OverlayHostFailure(host: host, error: OverlayHTTPError.rejected(statusCode: 503)))
+
+        let entries = lines.entries
+        #expect(entries.map(\.category) == ["BSVNetwork", "BSVNetwork", "BSVOverlay", "BSVOverlay"])
+        #expect(entries.map(\.hasPrivateDetail) == [true, false, true, false])
+        #expect(entries.allSatisfy { !$0.message.contains("secret-") })
+        #expect(entries[0].message == "Caller \(marker): GET api.example/v1/tx failed: CallerWalletError: <private>")
+        #expect(entries[1].message.hasSuffix("failed: NetworkServiceError: BSVNetwork.NetworkServiceError.timedOut"))
+        #expect(entries[2].message == "Caller \(marker): host https://overlay.example failed: CallerWalletError: <private>")
+        #expect(entries[3].message.contains("OverlayHTTPError.rejected(statusCode: 503"))
+
+        BSVLog.setHandler(lines.record, revealingPrivateDetails: true)
+        NetworkLog.failure("Revealed \(marker)", request: request, underlying: callerError)
+        #expect(lines.entries.last?.message.contains("secret-\(marker)") == true)
+        #expect(BSVLog.isSDKError(OverlayPolicyError.invalidSteak))
+        #expect(!BSVLog.isSDKError(callerError))
+    }
+
     @Test("certificate verification logs a match by byte or received order and an unexplained failure")
     func certificateVerificationLines() async throws {
         let lines = LogLines(marker: "Certificate verification:")
@@ -130,6 +164,68 @@ struct BSVLogSinkTests {
         #expect(messages.contains { $0.hasPrefix(
             "Certificate verification: the signature did not verify; a field name of 6 bytes") })
         #expect(lines.entries.allSatisfy { $0.category == "BSVWallet" && !$0.hasPrivateDetail })
+    }
+
+    @Test("a handler may log and replace the handler from inside itself")
+    func reentrantHandler() {
+        let marker = UUID().uuidString
+        let outer = LogLines(marker: marker)
+        let replacement = LogLines(marker: marker)
+        let reentrant: BSVLog.Handler = { entry in
+            outer.record(entry)
+            guard entry.message == "first \(marker)" else { return }
+            // Writing a line from inside the handler calls it again.
+            WalletLog.error("nested \(marker)")
+            BSVLog.setHandler(replacement.record)
+        }
+        BSVLog.setHandler(reentrant)
+        defer { BSVLog.setHandler(nil) }
+
+        WalletLog.error("first \(marker)")
+        WalletLog.error("after \(marker)")
+
+        #expect(outer.entries.map(\.message) == ["first \(marker)", "nested \(marker)"])
+        #expect(replacement.entries.map(\.message) == ["after \(marker)"])
+    }
+
+    @Test("lines written from many tasks while the handler is swapped each reach one handler")
+    func concurrentLinesAndSwaps() async {
+        let marker = UUID().uuidString
+        let first = LogLines(marker: marker)
+        let second = LogLines(marker: marker)
+        BSVLog.setHandler(first.record)
+        defer { BSVLog.setHandler(nil) }
+        let writers = 16
+        let linesPerWriter = 200
+
+        await withTaskGroup(of: Void.self) { group in
+            for writer in 0..<writers {
+                group.addTask {
+                    for line in 0..<linesPerWriter {
+                        AuthLog.reported(
+                            "\(marker) \(writer) \(line)",
+                            CallerWalletError.failed("secret"),
+                            as: AuthError.certificateValidationFailed)
+                    }
+                }
+            }
+            group.addTask {
+                for swap in 0..<500 {
+                    if swap.isMultiple(of: 2) {
+                        BSVLog.setHandler(second.record, revealingPrivateDetails: true)
+                    } else {
+                        BSVLog.setHandler(first.record)
+                    }
+                }
+            }
+        }
+
+        let all = first.entries + second.entries
+        #expect(all.count == writers * linesPerWriter)
+        #expect(Set(all.map(\.message)).count == writers * linesPerWriter)
+        // Each handler sees details only as it was installed to.
+        #expect(first.entries.allSatisfy { $0.message.contains("<private>") })
+        #expect(second.entries.allSatisfy { $0.message.contains("CallerWalletError.failed(\"secret\")") })
     }
 
     private func certifierKey() throws -> PrivateKey {

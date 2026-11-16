@@ -79,14 +79,8 @@ package enum AuthLog {
 
     /// Whether `error` is a type this SDK defines.
     package static func isSDKError(_ error: any Error) -> Bool {
-        let module = String(reflecting: type(of: error)).prefix { $0 != "." }
-        return sdkModules.contains(String(module))
+        BSVLog.isSDKError(error)
     }
-
-    private static let sdkModules: Set<String> = [
-        "BSVAuth", "BSVCore", "BSVCrypto", "BSVKeys", "BSVMessage", "BSVScript",
-        "BSVTransaction", "BSVWallet",
-    ]
 
     /// Records why a check failed when the caller receives only `reported`.
     package static func rejected<Reported: Error>(
