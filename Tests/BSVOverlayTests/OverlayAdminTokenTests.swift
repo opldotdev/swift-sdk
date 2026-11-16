@@ -9,11 +9,11 @@ struct OverlayAdminTokenTests {
     @Test("verifies a signed SHIP administration token")
     func verifiesSHIPToken() throws {
         let identityKey = try privateKey(2)
-        let lockingKey = try privateKey(3)
+        let lockingKey = try linkedKey(identityKey, protocolText: "SHIP")
         let script = try signedScript(
             protocolText: "SHIP",
             identityKey: identityKey.publicKey,
-            host: "overlay.example",
+            host: "https://overlay.example",
             subject: "tm_payments",
             lockingKey: lockingKey
         )
@@ -22,18 +22,18 @@ struct OverlayAdminTokenTests {
         #expect(token.overlayProtocol == .ship)
         #expect(token.identityPublicKey == identityKey.publicKey)
         #expect(token.lockingPublicKey == lockingKey.publicKey)
-        #expect(token.host.rawValue == "overlay.example")
+        #expect(token.host.rawValue == "https://overlay.example")
         #expect(token.subject == .ship(try OverlayTopic(rawValue: "tm_payments")))
     }
 
     @Test("verifies a signed SLAP administration token")
     func verifiesSLAPToken() throws {
         let identityKey = try privateKey(4)
-        let lockingKey = try privateKey(5)
+        let lockingKey = try linkedKey(identityKey, protocolText: "SLAP")
         let script = try signedScript(
             protocolText: "SLAP",
             identityKey: identityKey.publicKey,
-            host: "lookup.example",
+            host: "https://lookup.example",
             subject: "ls_ship",
             lockingKey: lockingKey
         )
@@ -46,11 +46,11 @@ struct OverlayAdminTokenTests {
     @Test("rejects malformed token structure and fields")
     func rejectsMalformedFields() throws {
         let identityKey = try privateKey(6)
-        let lockingKey = try privateKey(7)
+        let lockingKey = try linkedKey(identityKey, protocolText: "SHIP")
         let fields = baseFields(
             protocolText: "SHIP",
             identityKey: identityKey.publicKey,
-            host: "overlay.example",
+            host: "https://overlay.example",
             subject: "tm_test"
         )
         let unsigned = try PushDrop.lockingScript(
@@ -78,7 +78,7 @@ struct OverlayAdminTokenTests {
                 try signedScript(
                     protocolText: "OTHER",
                     identityKey: identityKey.publicKey,
-                    host: "overlay.example",
+                    host: "https://overlay.example",
                     subject: "tm_test",
                     lockingKey: lockingKey
                 ))
@@ -96,7 +96,7 @@ struct OverlayAdminTokenTests {
                 try signedScript(
                     protocolText: "SHIP",
                     identityKey: identityKey.publicKey,
-                    host: "overlay.example",
+                    host: "https://overlay.example",
                     subject: "ls_ship",
                     lockingKey: lockingKey
                 ))
@@ -109,7 +109,7 @@ struct OverlayAdminTokenTests {
                     identityKey: identityKey.publicKey,
                     host: "bad host",
                     subject: "ls_ship",
-                    lockingKey: lockingKey
+                    lockingKey: try linkedKey(identityKey, protocolText: "SLAP")
                 ))
         }
     }
@@ -117,11 +117,11 @@ struct OverlayAdminTokenTests {
     @Test("rejects invalid and mismatched signatures")
     func rejectsInvalidSignatures() throws {
         let identityKey = try privateKey(8)
-        let lockingKey = try privateKey(9)
+        let lockingKey = try linkedKey(identityKey, protocolText: "SHIP")
         let fields = baseFields(
             protocolText: "SHIP",
             identityKey: identityKey.publicKey,
-            host: "overlay.example",
+            host: "https://overlay.example",
             subject: "tm_test"
         )
 
@@ -148,11 +148,11 @@ struct OverlayAdminTokenTests {
     @Test("limits are applied by PushDrop before administration fields are indexed")
     func appliesLimitsBeforeFieldIndexing() throws {
         let identityKey = try privateKey(11)
-        let lockingKey = try privateKey(12)
+        let lockingKey = try linkedKey(identityKey, protocolText: "SHIP")
         let script = try signedScript(
             protocolText: "SHIP",
             identityKey: identityKey.publicKey,
-            host: "overlay.example",
+            host: "https://overlay.example",
             subject: "tm_test",
             lockingKey: lockingKey
         )
@@ -168,12 +168,12 @@ struct OverlayAdminTokenTests {
     @Test("diagnostics and reflection redact token values")
     func redactsDiagnostics() throws {
         let identityKey = try privateKey(13)
-        let lockingKey = try privateKey(14)
+        let lockingKey = try linkedKey(identityKey, protocolText: "SHIP")
         let token = try OverlayAdminTokenCodec.decode(
             try signedScript(
                 protocolText: "SHIP",
                 identityKey: identityKey.publicKey,
-                host: "private-overlay-173.example",
+                host: "https://private-overlay-173.example",
                 subject: "tm_test",
                 lockingKey: lockingKey
             ))
@@ -186,6 +186,17 @@ struct OverlayAdminTokenTests {
 
     private func privateKey(_ value: UInt8) throws -> PrivateKey {
         try PrivateKey(Array(repeating: 0, count: 31) + [value])
+    }
+
+    /// The key a `@bsv/sdk` wallet locks an advertisement to: the identity's
+    /// BRC-42 child for counterparty "anyone" (`OverlayAdminTokenTemplate.ts:291-301`).
+    private func linkedKey(_ identity: PrivateKey, protocolText: String) throws -> PrivateKey {
+        let protocolID = protocolText == "SLAP"
+            ? "service lookup availability" : "service host interconnect"
+        return try identity.derivedChild(
+            with: try privateKey(1).publicKey,
+            invoiceNumber: "2-\(protocolID)-1"
+        )
     }
 
     private func baseFields(

@@ -49,7 +49,6 @@ struct OverlayHTTPFacilitatorTests {
     func strictLookupJSON() async throws {
         let bodies = [
             #"{"type":"freeform","type":"freeform","result":1}"#,
-            #"{"type":"freeform","result":1,"extra":2}"#,
             #"{"type":"output-list","outputs":[{"beef":"AQ==","outputIndex":true}]}"#,
             #"{"type":"formula","result":{}}"#,
         ]
@@ -122,7 +121,9 @@ struct OverlayHTTPFacilitatorTests {
         }
         #expect(outputs.count == 1)
         #expect(outputs[0].outputIndex == 0)
-        #expect(outputs[0].beef == fixture.beef)
+        // Each output carries its own transaction as Atomic BEEF.
+        #expect(outputs[0].beef == [1, 1, 1, 1] + fixture.transactionID.wireBytes + fixture.beef)
+        #expect(outputs[0].transactionID == fixture.transactionID)
 
         var noncanonical = fixture.response
         noncanonical.replaceSubrange(0...0, with: [0xfd, 0x01, 0x00])
@@ -166,7 +167,7 @@ struct OverlayHTTPFacilitatorTests {
         let request = try #require(await transport.lastRequest())
         #expect(request.url.absoluteString == "https://overlay.example/submit")
         #expect(request.body == Data([1, 2, 3]))
-        #expect(request.headers["X-Topics"] == #"["tm_test"]"#)
+        #expect(request.headers["X-Topics"] == "tm_test")
         #expect(await transport.requestCount() == 1)
     }
 
@@ -183,7 +184,7 @@ struct OverlayHTTPFacilitatorTests {
         )
         for value in [
             "http://overlay.example", "https://user@overlay.example",
-            "https://overlay.example/path", "https://overlay.example/",
+            "https://overlay.example/path", "https://overlay.example?x=1",
         ] {
             await #expect(throws: OverlayHTTPError.invalidHost) {
                 try await lookup.lookup(
@@ -269,6 +270,7 @@ struct OverlayHTTPFacilitatorTests {
     private func binaryFixture() throws -> (
         configuration: OverlayHTTPConfiguration,
         beef: [UInt8],
+        transactionID: TransactionID,
         response: [UInt8]
     ) {
         let limits = try beefLimits()
@@ -295,6 +297,7 @@ struct OverlayHTTPFacilitatorTests {
         return (
             try OverlayHTTPConfiguration(beefLimits: limits),
             beef,
+            transactionID,
             response
         )
     }

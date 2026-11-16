@@ -37,6 +37,8 @@ enum OverlayHTTPCodec {
         return result
     }
 
+    /// The `X-Topics` value `@bsv/sdk` sends: topic names joined by commas
+    /// (`SHIPBroadcaster.ts:344`). Names cannot contain a comma.
     static func topicsHeader(
         _ topics: [OverlayTopic],
         limits: OverlayLimits
@@ -44,87 +46,100 @@ enum OverlayHTTPCodec {
         guard !topics.isEmpty, topics.count <= limits.maximumTopicCount else {
             throw OverlayHTTPError.invalidQuery
         }
-        var bytes: [UInt8] = [0x5b]
-        bytes.reserveCapacity(min(8_192, 2 + topics.count * 16))
-        for index in topics.indices {
-            if index > 0 { try append([0x2c], to: &bytes, maximum: 8_192) }
-            try append([0x22], to: &bytes, maximum: 8_192)
-            try append(Array(topics[index].rawValue.utf8), to: &bytes, maximum: 8_192)
-            try append([0x22], to: &bytes, maximum: 8_192)
-        }
-        try append([0x5d], to: &bytes, maximum: 8_192)
-        guard let result = String(bytes: bytes, encoding: .utf8) else {
-            throw OverlayHTTPError.invalidQuery
-        }
-        return result
+        let value = topics.map(\.rawValue).joined(separator: ",")
+        guard value.utf8.count <= 8_192 else { throw OverlayHTTPError.resourceLimit }
+        return value
     }
 
+    /// The `/submit` body. With off-chain values it is
+    /// `CompactSize(beef.count) || beef || offChainValues`, which `@bsv/sdk`
+    /// sends with `x-includes-off-chain-values: true` (`SHIPBroadcaster.ts:346-355`).
+    static func submitBody(_ taggedBEEF: TaggedBEEF) throws -> [UInt8] {
+        guard !taggedBEEF.offChainValues.isEmpty else { return taggedBEEF.beef }
+        let prefix = CompactSize.encode(UInt64(taggedBEEF.beef.count))
+        var count = 0
+        for value in [prefix.count, taggedBEEF.beef.count, taggedBEEF.offChainValues.count] {
+            let (next, overflow) = count.addingReportingOverflow(value)
+            guard !overflow, next <= OverlayHTTPConfiguration.maximumAllowedRequestByteCount
+            else { throw OverlayHTTPError.resourceLimit }
+            count = next
+        }
+        var body: [UInt8] = []
+        body.reserveCapacity(count)
+        body.append(contentsOf: prefix)
+        body.append(contentsOf: taggedBEEF.beef)
+        body.append(contentsOf: taggedBEEF.offChainValues)
+        return body
+    }
+
+    /// A JSON lookup answer in the `@bsv/sdk` shape (`LookupResolver.ts:43-52,327-447`).
+    ///
+    /// An output's `beef` and `context` are JSON byte arrays, or the
+    /// numeric-key objects `JSON.stringify(Uint8Array)` once produced. `beef`
+    /// may also be base64 text, the form Go overlay hosts write. `txid` names
+    /// the output's transaction. Unknown keys are ignored, as in `@bsv/sdk`.
+    ///
+    /// Output lists are read with ``OverlayJSONReader`` so that a byte array
+    /// costs one byte per element. A freeform `result` is re-encoded through
+    /// `JSONSerialization`, so its text may be at most twice the freeform limit.
     static func lookupJSONResponse(
         _ bytes: [UInt8],
-        limits: OverlayLimits
+        configuration: OverlayHTTPConfiguration
     ) throws -> LookupAnswer {
-        guard bytes.count <= limits.maximumLookupAnswerByteCount,
-            StrictOverlayJSONPreflight.accepts(bytes),
-            let value = try? JSONSerialization.jsonObject(with: Data(bytes)),
-            let object = value as? [String: Any],
-            let type = object["type"] as? String
+        let limits = configuration.overlayLimits
+        guard bytes.count <= limits.maximumLookupAnswerByteCount else {
+            throw OverlayHTTPError.resourceLimit
+        }
+        guard StrictOverlayJSONPreflight.accepts(bytes),
+            bytes.first(where: { ![0x20, 0x09, 0x0a, 0x0d].contains($0) }) == 0x7b
         else { throw OverlayHTTPError.malformedResponse }
+
+        let reader = OverlayJSONReader(bytes)
+        var type: String?
+        var outputs: Range<Int>?
+        var result: Range<Int>?
+        try reader.readObject { key in
+            switch key {
+            case "type":
+                guard reader.next == 0x22 else { throw OverlayHTTPError.malformedResponse }
+                type = try reader.readString()
+            case "outputs":
+                outputs = try reader.valueRange()
+            case "result":
+                result = try reader.valueRange()
+            default:
+                try reader.skipValue()
+            }
+        }
 
         switch type {
         case "output-list":
-            guard Set(object.keys).isSubset(of: ["type", "outputs"]),
-                object["result"] == nil
-            else { throw OverlayHTTPError.malformedResponse }
-            let rawOutputs: [Any]
-            if object["outputs"] == nil || object["outputs"] is NSNull {
-                rawOutputs = []
-            } else if let outputs = object["outputs"] as? [Any] {
-                rawOutputs = outputs
-            } else {
-                throw OverlayHTTPError.malformedResponse
-            }
-            guard rawOutputs.count <= limits.maximumLookupOutputCount else {
-                throw OverlayHTTPError.resourceLimit
-            }
-            var outputs: [OutputListItem] = []
-            outputs.reserveCapacity(rawOutputs.count)
-            for raw in rawOutputs {
-                guard let item = raw as? [String: Any],
-                    Set(item.keys) == ["beef", "outputIndex"],
-                    let text = item["beef"] as? String,
-                    let beef = try? Base64Encoding.decode(
-                        text,
-                        maximumDecodedByteCount: limits.maximumLookupOutputBEEFByteCount
-                    ),
-                    Base64Encoding.encode(beef) == text,
-                    let index = uint32(item["outputIndex"])
-                else { throw OverlayHTTPError.malformedResponse }
-                do {
-                    outputs.append(
-                        try OutputListItem(
-                            beef: beef,
-                            outputIndex: index,
-                            limits: limits
-                        )
+            let items =
+                try outputs.map {
+                    try lookupOutputs(
+                        OverlayJSONReader(bytes, offset: $0.lowerBound),
+                        configuration: configuration
                     )
-                } catch {
-                    throw OverlayHTTPError.resourceLimit
-                }
-            }
+                } ?? []
             do {
-                return try LookupAnswer(outputList: outputs, limits: limits)
+                return try LookupAnswer(outputList: items, limits: limits)
             } catch {
                 throw OverlayHTTPError.resourceLimit
             }
 
         case "freeform":
-            guard Set(object.keys) == ["type", "result"],
-                let result = object["result"]
-            else { throw OverlayHTTPError.malformedResponse }
+            guard let result else { throw OverlayHTTPError.malformedResponse }
+            let (doubled, overflow) = limits.maximumFreeformByteCount.multipliedReportingOverflow(
+                by: 2)
+            guard overflow || result.count <= doubled else {
+                throw OverlayHTTPError.resourceLimit
+            }
             let encoded: Data
             do {
+                let value = try JSONSerialization.jsonObject(
+                    with: Data(bytes[result]), options: .fragmentsAllowed)
                 encoded = try JSONSerialization.data(
-                    withJSONObject: result,
+                    withJSONObject: value,
                     options: [.fragmentsAllowed, .sortedKeys, .withoutEscapingSlashes]
                 )
             } catch {
@@ -141,6 +156,92 @@ enum OverlayHTTPCodec {
         }
     }
 
+    /// The `outputs` value of a JSON output list. `null` reads as no outputs,
+    /// for Go hosts that marshal an empty slice that way.
+    private static func lookupOutputs(
+        _ reader: OverlayJSONReader,
+        configuration: OverlayHTTPConfiguration
+    ) throws -> [OutputListItem] {
+        let limits = configuration.overlayLimits
+        if reader.readNull() { return [] }
+        guard reader.next == 0x5b else { throw OverlayHTTPError.malformedResponse }
+        let maximumContext = configuration.lookupContextByteLimit
+        var outputs: [OutputListItem] = []
+        try reader.readArray {
+            guard outputs.count < limits.maximumLookupOutputCount else {
+                throw OverlayHTTPError.resourceLimit
+            }
+            guard reader.next == 0x7b else { throw OverlayHTTPError.malformedResponse }
+            var index: UInt32?
+            var beef: [UInt8]?
+            var context: [UInt8]?
+            var transactionID: TransactionID?
+            try reader.readObject { key in
+                switch key {
+                case "outputIndex":
+                    guard let value = try reader.readUInt32() else {
+                        throw OverlayHTTPError.malformedResponse
+                    }
+                    index = value
+                case "beef":
+                    beef = try beefBytes(
+                        reader, maximum: limits.maximumLookupOutputBEEFByteCount)
+                case "context":
+                    context = try reader.readByteArray(maximum: maximumContext)
+                case "txid":
+                    guard reader.next == 0x22 else { throw OverlayHTTPError.malformedResponse }
+                    let text = try reader.readString()
+                    guard text.utf8.count == 64,
+                        let parsed = try? TransactionID(displayHex: text.lowercased())
+                    else { throw OverlayHTTPError.malformedResponse }
+                    transactionID = parsed
+                default:
+                    try reader.skipValue()
+                }
+            }
+            guard let index, let beef, !beef.isEmpty else {
+                throw OverlayHTTPError.malformedResponse
+            }
+            do {
+                outputs.append(
+                    try OutputListItem(
+                        beef: beef,
+                        outputIndex: index,
+                        context: context,
+                        transactionID: transactionID,
+                        limits: limits
+                    )
+                )
+            } catch {
+                throw OverlayHTTPError.resourceLimit
+            }
+        }
+        return outputs
+    }
+
+    /// A lookup output's `beef`: a byte array (see
+    /// ``OverlayJSONReader/readByteArray(maximum:)``) or canonical base64 text.
+    private static func beefBytes(_ reader: OverlayJSONReader, maximum: Int) throws -> [UInt8] {
+        guard reader.next == 0x22 else { return try reader.readByteArray(maximum: maximum) }
+        let text = try reader.readString()
+        guard
+            let beef = try? Base64Encoding.decode(text, maximumDecodedByteCount: maximum),
+            Base64Encoding.encode(beef) == text
+        else { throw OverlayHTTPError.malformedResponse }
+        return beef
+    }
+
+    /// The aggregated answer Overlay Express sends for `X-Aggregation: yes`
+    /// (`OverlayExpress.ts:3063-3093`): a count, then per output its display
+    /// transaction ID, output index and context, then one BEEF holding every
+    /// transaction.
+    ///
+    /// Like `parseOctetStreamLookup` and `extractAtomicOutputs` in `@bsv/sdk`
+    /// (`LookupResolver.ts:877-950`), each output gets its own transaction as
+    /// Atomic BEEF, plus its transaction ID and context. If that transaction's
+    /// ancestry in the shared BEEF is incomplete, so that no valid Atomic BEEF
+    /// can be built, the output keeps the shared BEEF and names its
+    /// transaction with `transactionID` instead.
     static func lookupBinaryResponse(
         _ bytes: [UInt8],
         configuration: OverlayHTTPConfiguration
@@ -163,10 +264,11 @@ enum OverlayHTTPCodec {
         struct Metadata {
             let transactionID: TransactionID
             let outputIndex: UInt32
+            let context: [UInt8]?
         }
+        let maximumContext = configuration.lookupContextByteLimit
         var metadata: [Metadata] = []
         metadata.reserveCapacity(min(Int(countValue), cursor.remaining / 34))
-        var aggregateContext = 0
         for _ in 0..<Int(countValue) {
             do {
                 let displayBytes = try cursor.read(count: 32)
@@ -176,17 +278,16 @@ enum OverlayHTTPCodec {
                     throw OverlayHTTPError.resourceLimit
                 }
                 let contextCount = try cursor.readCompactSize(canonicality: .required).value
-                guard contextCount <= UInt64(configuration.maximumContextByteCount),
-                    contextCount <= UInt64(Int.max)
-                else { throw OverlayHTTPError.resourceLimit }
-                let (next, overflow) = aggregateContext.addingReportingOverflow(Int(contextCount))
-                guard !overflow, next <= configuration.maximumContextByteCount else {
+                guard contextCount <= UInt64(maximumContext) else {
                     throw OverlayHTTPError.resourceLimit
                 }
-                aggregateContext = next
-                _ = try cursor.read(count: Int(contextCount))
+                let context = try cursor.read(count: Int(contextCount))
                 metadata.append(
-                    Metadata(transactionID: transactionID, outputIndex: UInt32(outputIndex))
+                    Metadata(
+                        transactionID: transactionID,
+                        outputIndex: UInt32(outputIndex),
+                        context: context.isEmpty ? nil : context
+                    )
                 )
             } catch let error as OverlayHTTPError {
                 throw error
@@ -200,6 +301,8 @@ enum OverlayHTTPCodec {
         }
         let sharedBytes: [UInt8]
         let beef: BEEF
+        let identifiers: [TransactionID]
+        var entries: [TransactionID: BEEFTransaction] = [:]
         do {
             sharedBytes = try cursor.read(count: cursor.remaining)
             // Overlay services write BEEF with `@bsv/sdk`, whose writer can list a
@@ -209,34 +312,55 @@ enum OverlayHTTPCodec {
                 limits: configuration.beefLimits,
                 transactionOrder: .any
             )
+            identifiers = try beef.transactions.map {
+                try $0.transactionID(limits: configuration.beefLimits.transactionLimits)
+            }
         } catch {
+            NetworkLog.error(
+                "OverlayHTTPCodec.lookupBinaryResponse: shared BEEF unreadable: "
+                    + "\(type(of: error)): \(String(reflecting: error))")
             throw OverlayHTTPError.malformedResponse
         }
+        for (transactionID, entry) in zip(identifiers, beef.transactions) {
+            entries[transactionID] = entry
+        }
+        // Each distinct transaction gets its own Atomic BEEF. For a chain of
+        // unproven transactions those grow with the chain, so their total is
+        // bounded as it is built, as `extractAtomicOutputs` in @bsv/sdk does
+        // (`LookupResolver.ts:917-938`), rather than only once every one exists.
+        var generatedByteCount = 0
+        var extractedByteCount = 0
+        var atomicByTransactionID: [TransactionID: [UInt8]] = [:]
         var outputs: [OutputListItem] = []
         outputs.reserveCapacity(metadata.count)
         for item in metadata {
-            let transaction: Transaction
-            do {
-                guard
-                    let found = try beef.transaction(
-                        for: item.transactionID,
-                        limits: configuration.beefLimits.transactionLimits
-                    )
-                else { throw OverlayHTTPError.malformedResponse }
-                transaction = found
-            } catch let error as OverlayHTTPError {
-                throw error
-            } catch {
-                throw OverlayHTTPError.malformedResponse
+            guard let transaction = entries[item.transactionID]?.transaction,
+                UInt64(item.outputIndex) < UInt64(transaction.outputs.count)
+            else { throw OverlayHTTPError.malformedResponse }
+            let outputBEEF: [UInt8]
+            if let cached = atomicByTransactionID[item.transactionID] {
+                outputBEEF = cached
+            } else {
+                outputBEEF = try atomicOutputBEEF(
+                    beef, subject: item.transactionID, identifiers: identifiers,
+                    shared: sharedBytes, limits: configuration.beefLimits)
+                generatedByteCount += outputBEEF.count
+                guard generatedByteCount <= limits.maximumLookupAnswerByteCount else {
+                    throw OverlayHTTPError.resourceLimit
+                }
+                atomicByTransactionID[item.transactionID] = outputBEEF
             }
-            guard UInt64(item.outputIndex) < UInt64(transaction.outputs.count) else {
-                throw OverlayHTTPError.malformedResponse
+            extractedByteCount += outputBEEF.count + (item.context?.count ?? 0)
+            guard extractedByteCount <= limits.maximumLookupAnswerByteCount else {
+                throw OverlayHTTPError.resourceLimit
             }
             do {
                 outputs.append(
                     try OutputListItem(
-                        beef: sharedBytes,
+                        beef: outputBEEF,
                         outputIndex: item.outputIndex,
+                        context: item.context,
+                        transactionID: item.transactionID,
                         limits: limits
                     )
                 )
@@ -248,6 +372,34 @@ enum OverlayHTTPCodec {
             return try LookupAnswer(outputList: outputs, limits: limits)
         } catch {
             throw OverlayHTTPError.resourceLimit
+        }
+    }
+
+    /// The Atomic BEEF for one output's transaction. Only an incomplete
+    /// ancestry falls back to the shared BEEF, which the output's
+    /// `transactionID` then indexes; any other failure fails the answer.
+    private static func atomicOutputBEEF(
+        _ beef: BEEF,
+        subject: TransactionID,
+        identifiers: [TransactionID],
+        shared: [UInt8],
+        limits: BEEFLimits
+    ) throws -> [UInt8] {
+        do {
+            return try beef.atomicBEEF(for: subject, identifiers: identifiers, limits: limits)
+                .serialized(limits: limits)
+        } catch BEEFError.missingAncestor {
+            return shared
+        } catch {
+            NetworkLog.error(
+                "OverlayHTTPCodec.lookupBinaryResponse: Atomic BEEF for \(subject.displayHex) "
+                    + "failed: \(type(of: error)): \(String(reflecting: error))")
+            switch error {
+            case BEEFError.envelopeTooLarge, BEEFError.serializedSizeOverflow:
+                throw OverlayHTTPError.resourceLimit
+            default:
+                throw OverlayHTTPError.malformedResponse
+            }
         }
     }
 
@@ -271,18 +423,46 @@ enum OverlayHTTPCodec {
             } catch {
                 throw OverlayHTTPError.malformedResponse
             }
-            guard let instructionObject = rawInstructions as? [String: Any],
-                Set(instructionObject.keys).isSubset(of: [
-                    "OutputsToAdmit", "CoinsToRetain", "CoinsRemoved", "AncillaryTxids",
-                ])
-            else { throw OverlayHTTPError.malformedResponse }
-            let outputs = try uint32Array(instructionObject["OutputsToAdmit"], limits: limits)
-            let retained = try uint32Array(instructionObject["CoinsToRetain"], limits: limits)
-            let removed = try uint32Array(instructionObject["CoinsRemoved"], limits: limits)
-            let ancillary = try transactionIDArray(
-                instructionObject["AncillaryTxids"],
-                limits: limits
-            )
+            guard let instructionObject = rawInstructions as? [String: Any] else {
+                throw OverlayHTTPError.malformedResponse
+            }
+            let keys = Set(instructionObject.keys)
+            let outputs: [UInt32]
+            let retained: [UInt32]
+            let removed: [UInt32]
+            let ancillary: [TransactionID]
+            // An empty object is neither shape: `validateSTEAK` in `@bsv/sdk`
+            // requires `outputsToAdmit` and `coinsToRetain`
+            // (`SHIPBroadcaster.ts:255-256`), and Go's encoder always writes
+            // every field. TS counts the host as failed, so this does too.
+            guard !keys.isEmpty else { throw OverlayHTTPError.malformedResponse }
+            if keys.isSubset(of: ["outputsToAdmit", "coinsToRetain", "coinsRemoved"]) {
+                // `validateSTEAK` in `@bsv/sdk` (`SHIPBroadcaster.ts:237-262`):
+                // `outputsToAdmit` and `coinsToRetain` are required arrays and
+                // `coinsRemoved` is an optional array.
+                guard instructionObject["outputsToAdmit"] is [Any],
+                    instructionObject["coinsToRetain"] is [Any],
+                    instructionObject["coinsRemoved"] == nil
+                        || instructionObject["coinsRemoved"] is [Any]
+                else { throw OverlayHTTPError.malformedResponse }
+                outputs = try uint32Array(instructionObject["outputsToAdmit"], limits: limits)
+                retained = try uint32Array(instructionObject["coinsToRetain"], limits: limits)
+                removed = try uint32Array(instructionObject["coinsRemoved"], limits: limits)
+                ancillary = []
+            } else if keys.isSubset(of: [
+                "OutputsToAdmit", "CoinsToRetain", "CoinsRemoved", "AncillaryTxids",
+            ]) {
+                // The Go overlay engine's untagged field names.
+                outputs = try uint32Array(instructionObject["OutputsToAdmit"], limits: limits)
+                retained = try uint32Array(instructionObject["CoinsToRetain"], limits: limits)
+                removed = try uint32Array(instructionObject["CoinsRemoved"], limits: limits)
+                ancillary = try transactionIDArray(
+                    instructionObject["AncillaryTxids"],
+                    limits: limits
+                )
+            } else {
+                throw OverlayHTTPError.malformedResponse
+            }
             do {
                 entries[topic] = try AdmittanceInstructions(
                     outputsToAdmit: outputs,

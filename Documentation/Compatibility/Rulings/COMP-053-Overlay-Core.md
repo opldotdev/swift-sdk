@@ -29,3 +29,16 @@ limit.
 This core packet added no wire codec. COMP-061 adds the bounded HTTP formats,
 deterministic resolver, and one-shot broadcaster without changing these core
 value rules.
+
+## @bsv/sdk 4.1.1 alignment
+
+Live overlay hosts run `@bsv/sdk` 4.1.1 (ts-stack `3b1abc569`). These core rules
+now follow it:
+
+- Topic and service names use the `@bsv/sdk` grammar (`overlay-tools/OverlayNames.ts`):
+  `tm_` or `ls_`, then lowercase ASCII letters and digits in segments joined by
+  single underscores, 256 bytes at most. The earlier rule allowed uppercase,
+  repeated or trailing underscores, and longer names that TS hosts reject.
+- A lookup output may carry the optional `context` bytes and `txid` that TS
+  hosts return. `OverlayLimits.maximumLookupContextByteCount` (1 MiB by default)
+  bounds each context, and the aggregate answer limit counts context bytes.

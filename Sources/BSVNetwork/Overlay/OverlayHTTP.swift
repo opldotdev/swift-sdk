@@ -11,16 +11,61 @@ public struct OverlayHTTPConfiguration: Sendable {
 
     public let overlayLimits: OverlayLimits
     public let beefLimits: BEEFLimits
-    public let maximumContextByteCount: Int
     public let requestTimeout: Duration
     public let resourceTimeout: Duration
+    private let contextByteLimit: Int
+
+    /// The largest `context` accepted for one lookup output.
+    @available(*, deprecated, message: "Use OverlayLimits.maximumLookupContextByteCount.")
+    public var maximumContextByteCount: Int { contextByteLimit }
+
+    /// The per-output context limit: `OverlayLimits.maximumLookupContextByteCount`,
+    /// or the deprecated `maximumContextByteCount` when that is smaller.
+    var lookupContextByteLimit: Int {
+        min(contextByteLimit, overlayLimits.maximumLookupContextByteCount)
+    }
 
     public init(
         overlayLimits: OverlayLimits = .standard,
         beefLimits: BEEFLimits,
-        maximumContextByteCount: Int = 64 * 1_024,
         requestTimeout: Duration = .seconds(30),
         resourceTimeout: Duration = .seconds(30)
+    ) throws {
+        try self.init(
+            overlayLimits: overlayLimits,
+            beefLimits: beefLimits,
+            contextByteLimit: Self.maximumAllowedContextByteCount,
+            requestTimeout: requestTimeout,
+            resourceTimeout: resourceTimeout
+        )
+    }
+
+    @available(
+        *, deprecated,
+        message: "Set OverlayLimits.maximumLookupContextByteCount instead of maximumContextByteCount."
+    )
+    public init(
+        overlayLimits: OverlayLimits = .standard,
+        beefLimits: BEEFLimits,
+        maximumContextByteCount: Int,
+        requestTimeout: Duration = .seconds(30),
+        resourceTimeout: Duration = .seconds(30)
+    ) throws {
+        try self.init(
+            overlayLimits: overlayLimits,
+            beefLimits: beefLimits,
+            contextByteLimit: maximumContextByteCount,
+            requestTimeout: requestTimeout,
+            resourceTimeout: resourceTimeout
+        )
+    }
+
+    private init(
+        overlayLimits: OverlayLimits,
+        beefLimits: BEEFLimits,
+        contextByteLimit: Int,
+        requestTimeout: Duration,
+        resourceTimeout: Duration
     ) throws {
         guard
             overlayLimits.maximumLookupQueryByteCount
@@ -29,7 +74,7 @@ public struct OverlayHTTPConfiguration: Sendable {
                 <= Self.maximumAllowedRequestByteCount,
             overlayLimits.maximumLookupAnswerByteCount
                 <= Self.maximumAllowedResponseByteCount,
-            (0...Self.maximumAllowedContextByteCount).contains(maximumContextByteCount),
+            (0...Self.maximumAllowedContextByteCount).contains(contextByteLimit),
             requestTimeout > .zero,
             resourceTimeout > .zero
         else {
@@ -37,7 +82,7 @@ public struct OverlayHTTPConfiguration: Sendable {
         }
         self.overlayLimits = overlayLimits
         self.beefLimits = beefLimits
-        self.maximumContextByteCount = maximumContextByteCount
+        self.contextByteLimit = contextByteLimit
         self.requestTimeout = requestTimeout
         self.resourceTimeout = resourceTimeout
     }
@@ -108,41 +153,31 @@ public struct HTTPSOverlayLookupFacilitator: LookupFacilitator, Sendable {
             throw CancellationError()
         } catch NetworkServiceError.cancelled {
             throw CancellationError()
-        } catch NetworkServiceError.responseBodyTooLarge {
-            throw OverlayHTTPError.resourceLimit
+        } catch let error as NetworkServiceError {
+            NetworkLog.failure("HTTPSOverlayLookupFacilitator.lookup", request: request, underlying: error)
+            if case .responseBodyTooLarge = error { throw OverlayHTTPError.resourceLimit }
+            throw OverlayHTTPError.transport
         } catch {
             NetworkLog.failure("HTTPSOverlayLookupFacilitator.lookup", request: request, underlying: error)
             throw OverlayHTTPError.transport
         }
         try Task.checkCancellation()
-        guard response.statusCode == 200 else {
+        // `@bsv/sdk` accepts any 2xx and reads every answer that is not
+        // `application/octet-stream` as JSON (`LookupResolver.ts:815-872`).
+        guard (200...299).contains(response.statusCode) else {
             throw overlayRejection("HTTPSOverlayLookupFacilitator.lookup", request: request, response: response)
         }
         let bytes = [UInt8](response.body)
-        switch mediaType(response.headerValue(for: "Content-Type")) {
-        case "application/json":
-            return try loggingUnreadable("HTTPSOverlayLookupFacilitator.lookup", request, response) {
-                try OverlayHTTPCodec.lookupJSONResponse(
-                    bytes,
-                    limits: configuration.overlayLimits
-                )
-            }
-        case "application/octet-stream":
+        if mediaType(response.headerValue(for: "Content-Type")) == "application/octet-stream" {
             return try loggingUnreadable("HTTPSOverlayLookupFacilitator.lookup", request, response) {
                 try OverlayHTTPCodec.lookupBinaryResponse(
                     bytes,
                     configuration: configuration
                 )
             }
-        default:
-            NetworkLog.failure(
-                "HTTPSOverlayLookupFacilitator.lookup",
-                request: request,
-                statusCode: response.statusCode,
-                body: response.body,
-                reason: "unsupported Content-Type \(response.headerValue(for: "Content-Type") ?? "none")"
-            )
-            throw OverlayHTTPError.unsupportedContentType
+        }
+        return try loggingUnreadable("HTTPSOverlayLookupFacilitator.lookup", request, response) {
+            try OverlayHTTPCodec.lookupJSONResponse(bytes, configuration: configuration)
         }
     }
 }
@@ -181,14 +216,18 @@ public struct HTTPSOverlayTopicFacilitator: TopicFacilitator, Sendable {
             taggedBEEF.topics,
             limits: configuration.overlayLimits
         )
+        var headers = [
+            "Content-Type": "application/octet-stream",
+            "X-Topics": topics,
+        ]
+        if !taggedBEEF.offChainValues.isEmpty {
+            headers["x-includes-off-chain-values"] = "true"
+        }
         let request = HTTPRequest(
             method: .post,
             url: url,
-            headers: [
-                "Content-Type": "application/octet-stream",
-                "X-Topics": topics,
-            ],
-            body: Data(taggedBEEF.beef)
+            headers: headers,
+            body: Data(try OverlayHTTPCodec.submitBody(taggedBEEF))
         )
         let response: HTTPResponse
         do {
@@ -202,31 +241,29 @@ public struct HTTPSOverlayTopicFacilitator: TopicFacilitator, Sendable {
             throw OverlayHTTPError.uncertainDelivery
         }
         guard !Task.isCancelled else { throw OverlayHTTPError.uncertainDelivery }
-        guard response.statusCode == 200 else {
+        // `@bsv/sdk` accepts any 2xx and reads the body as JSON whatever its
+        // content type (`SHIPBroadcaster.ts:370-371`).
+        guard (200...299).contains(response.statusCode) else {
             throw overlayRejection("HTTPSOverlayTopicFacilitator.submit", request: request, response: response)
         }
-        guard mediaType(response.headerValue(for: "Content-Type")) == "application/json" else {
-            NetworkLog.failure(
-                "HTTPSOverlayTopicFacilitator.submit",
-                request: request,
-                statusCode: response.statusCode,
-                body: response.body,
-                reason: "unsupported Content-Type \(response.headerValue(for: "Content-Type") ?? "none")"
-            )
-            throw OverlayHTTPError.unsupportedContentType
-        }
         return try loggingUnreadable("HTTPSOverlayTopicFacilitator.submit", request, response) {
-            try OverlayHTTPCodec.steakResponse(
+            let steak = try OverlayHTTPCodec.steakResponse(
                 [UInt8](response.body),
                 limits: configuration.overlayLimits
             )
+            // `validateSTEAK` rejects an acknowledgment for a topic that was not sent.
+            guard Set(steak.instructions.keys).isSubset(of: taggedBEEF.topics) else {
+                throw OverlayHTTPError.malformedResponse
+            }
+            return steak
         }
     }
 }
 
+/// The endpoint URL on an `https://` origin. As in `@bsv/sdk`
+/// (`canonicalOverlayEndpoint`), the host may end in one `/`.
 private func overlayURL(host: OverlayHost, path: String) throws -> URL {
     guard host.rawValue.utf8.count <= 2_048,
-        !host.rawValue.hasSuffix("/"),
         let base = URL(string: host.rawValue),
         let components = URLComponents(url: base, resolvingAgainstBaseURL: false),
         components.scheme?.lowercased() == "https",
@@ -235,7 +272,7 @@ private func overlayURL(host: OverlayHost, path: String) throws -> URL {
         components.password == nil,
         components.query == nil,
         components.fragment == nil,
-        components.path.isEmpty
+        components.path.isEmpty || components.path == "/"
     else {
         throw OverlayHTTPError.invalidHost
     }
@@ -252,7 +289,7 @@ private func mediaType(_ value: String?) -> String? {
         .lowercased()
 }
 
-/// A non-200 overlay answer: logged in full once, thrown with the overlay's short reason.
+/// A non-2xx overlay answer: logged in full once, thrown with the overlay's short reason.
 private func overlayRejection(
     _ operation: String,
     request: HTTPRequest,
