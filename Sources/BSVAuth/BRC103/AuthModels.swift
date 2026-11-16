@@ -200,6 +200,14 @@ public struct AuthMessage: Equatable, Sendable, CustomStringConvertible,
     }
 }
 
+/// Bounds on what a peer accepts.
+///
+/// `maximumPayloadBytes` bounds a general message's payload, which over HTTP is the whole BRC-104
+/// request or response: its body plus a few hundred bytes of framing. The default is 16 MiB, the
+/// TypeScript SDK's `MAX_AUTH_MESSAGE_BYTES` and `AuthFetch`'s request frame limit
+/// (`MAX_AUTH_HTTP_REQUEST_FRAME_BYTES`), so a reply a TypeScript client reads is one this one
+/// reads too. At 1 MiB, a wallet storage reply carrying a photo inscription's transaction was
+/// refused before it was read.
 public struct AuthLimits: Equatable, Sendable {
     public static let maximumAllowedJSONBytes = 64 << 20
     public static let maximumAllowedPayloadBytes = 16 << 20
@@ -227,7 +235,7 @@ public struct AuthLimits: Equatable, Sendable {
     public let certificateLimits: CertificateLimits
     public let handshakeTimeout: Duration
     public init(
-        maximumJSONBytes: Int = 8 << 20, maximumPayloadBytes: Int = 1 << 20,
+        maximumJSONBytes: Int = 8 << 20, maximumPayloadBytes: Int = 16 << 20,
         maximumSessions: Int = 1024, maximumSessionsPerIdentity: Int = 8,
         maximumPendingSessions: Int = 128, maximumMessages: Int = 4096,
         maximumCertificateCount: Int = 64, maximumCertificateCertifierCount: Int = 64,
@@ -271,7 +279,7 @@ public struct AuthLimits: Equatable, Sendable {
     }
     private init(standard: Void) {
         maximumJSONBytes = 8 << 20
-        maximumPayloadBytes = 1 << 20
+        maximumPayloadBytes = 16 << 20
         maximumSessions = 1024
         maximumSessionsPerIdentity = 8
         maximumPendingSessions = 128

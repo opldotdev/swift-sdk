@@ -15,14 +15,14 @@ import XCTest
 /// `[2, "uhrp advertisement"]`, key ID "1", counterparty anyone (lines 89-98).
 final class UHRPAdvertisementTests: XCTestCase {
     private let hostScalar: [UInt8] = Array(repeating: 0, count: 31) + [0x2a]
-    private let hash = [UInt8](repeating: 0xab, count: 32)
+    private let contentHash = [UInt8](repeating: 0xab, count: 32)
     private let url = "https://cdn.example/abc"
 
     func testDecodesHandBuiltTypeScriptAdvertisement() throws {
         let host = try PrivateKey(hostScalar)
         let expiry = CompactSize.encode(1_700_000_000)
         let size = CompactSize.encode(1_024)
-        let fields = [host.publicKey.compressedBytes, hash, Array(url.utf8), expiry, size]
+        let fields = [host.publicKey.compressedBytes, contentHash, Array(url.utf8), expiry, size]
         let lockingKey = try linkedPrivateKey(host)
         let signature = try lockingKey.sign(digest: BSVHashing.sha256(Array(fields.joined())))
 
@@ -40,7 +40,7 @@ final class UHRPAdvertisementTests: XCTestCase {
 
         let advertisement = try UHRPAdvertisement.decode(script)
         XCTAssertEqual(advertisement.hostIdentityKey, host.publicKey)
-        XCTAssertEqual(advertisement.hash.bytes, hash)
+        XCTAssertEqual(advertisement.hash.bytes, contentHash)
         XCTAssertEqual(advertisement.hostedFileLocation.absoluteString, url)
         XCTAssertEqual(advertisement.expiryTime, 1_700_000_000)
         XCTAssertEqual(advertisement.fileSize, 1_024)
@@ -69,7 +69,7 @@ final class UHRPAdvertisementTests: XCTestCase {
         // requires six fields, so this shape is refused.
         let host = try PrivateKey(hostScalar)
         let fields = [
-            hash,
+            contentHash,
             Array("XUT6PqWb3GP3LR7dmBMCJwZ3oo5g1iGCF3CrpzyuJCemkGu1WGoq".utf8),
             Array(url.utf8),
             CompactSize.encode(1_700_000_000),
@@ -88,7 +88,7 @@ final class UHRPAdvertisementTests: XCTestCase {
         let host = try PrivateKey(hostScalar)
         let lockingKey = try linkedPrivateKey(host)
         let fields = [
-            host.publicKey.compressedBytes, hash, Array(url.utf8),
+            host.publicKey.compressedBytes, contentHash, Array(url.utf8),
             CompactSize.encode(1_700_000_000), CompactSize.encode(1_024),
         ]
         let signature = try lockingKey.sign(digest: BSVHashing.sha256(Array(fields.joined())))
@@ -108,7 +108,7 @@ final class UHRPAdvertisementTests: XCTestCase {
         let host = try PrivateKey(hostScalar)
         let lockingKey = try linkedPrivateKey(host)
         let fields = [
-            host.publicKey.compressedBytes, hash, Array(url.utf8),
+            host.publicKey.compressedBytes, contentHash, Array(url.utf8),
             CompactSize.encode(1_700_000_000), CompactSize.encode(1_024),
         ]
         let digest = BSVHashing.sha256(Array(fields.joined()))
@@ -225,7 +225,7 @@ final class UHRPAdvertisementTests: XCTestCase {
     ) throws -> Script {
         let fields = [
             hostKeyField ?? host.publicKey.compressedBytes,
-            hash ?? self.hash,
+            hash ?? contentHash,
             Array((url ?? self.url).utf8),
             expiry,
             size,
